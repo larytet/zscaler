@@ -752,15 +752,15 @@ func TestCp007PolicyChangePropagates(t *testing.T) {
 	start := time.Now()
 	eventually(t, "the new policy to take effect", 10*time.Second, func() bool { return !s.reachable(a.socks(), "erp.ztx") })
 	t.Logf("CP-007 policy change took effect after %v (sync interval 300 ms)", time.Since(start).Round(100*time.Millisecond))
-	found := false
-	for _, d := range s.decisions() {
-		if d["policy_version"] == float64(2) && d["action"] == "deny" {
-			found = true
+	// the record is written as the denial happens, but the file is read from outside: wait for it
+	eventually(t, "the decision log to show the new policy version", 10*time.Second, func() bool {
+		for _, d := range s.decisions() {
+			if d["policy_version"] == float64(2) && d["action"] == "deny" {
+				return true
+			}
 		}
-	}
-	if !found {
-		t.Fatal("decision log does not show the new policy version")
-	}
+		return false
+	})
 }
 
 // CP-008: the control plane goes away; live sessions and new decisions continue from the EN's cache.

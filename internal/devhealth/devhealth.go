@@ -5,6 +5,7 @@ package devhealth
 
 import (
 	"fmt"
+	"github.com/larytet/zscaler/internal/pathprobe"
 	"os"
 	"sort"
 	"strconv"
@@ -22,6 +23,8 @@ type Snapshot struct {
 	// Measured by the agent from its own traffic (DEX-001), in milliseconds.
 	ENConnectMs *int           `json:"en_connect_ms,omitempty"` // time to connect to the enforcement node
 	AppOpenMs   map[string]int `json:"app_open_ms,omitempty"`   // median time to open a session, per app
+	// Path stages (DEX-002, basic): Wi-Fi signal, router, name resolution and an optional anchor.
+	pathprobe.Result
 }
 
 func pct(n int) *int {
@@ -228,6 +231,7 @@ func Score(e Entry) Experience {
 		}
 	}
 	known := e.CPULoadPct != nil || e.MemUsedPct != nil || e.ENConnectMs != nil || len(e.AppOpenMs) > 0
+	netCause, netExplain := networkStage(e)
 	x := Experience{Score: 100 - dev - net - app, Cause: "none", Known: known}
 	if x.Score < 0 {
 		x.Score = 0
@@ -240,9 +244,32 @@ func Score(e Entry) Experience {
 	case dev >= net && dev >= app:
 		x.Cause, x.Explain = "device", fmt.Sprintf("%s's device is the likely cause: it is overloaded or short of memory or disk.", e.User)
 	case net >= app:
-		x.Cause, x.Explain = "network", fmt.Sprintf("%s's connection to the enforcement node is slow (%d ms): look at their Wi-Fi or internet.", e.User, *e.ENConnectMs)
+		x.Cause, x.Explain = netCause, netExplain
 	default:
 		x.Cause, x.Explain = "app", fmt.Sprintf("Opening %s takes %d ms while the connection and device look fine: the app or its connector is the likely cause.", appName, e.AppOpenMs[appName])
 	}
 	return x
+}
+
+// networkStage says which stage of the path to the enforcement node is most likely slow, using
+// the stage measurements when the agent sent them. Without them it can only say "network".
+// Stages are tested from the device outwards, so the first one that looks bad is named.
+func networkStage(e Entry) (cause, explain string) {
+	slowBy := ""
+	if e.ENConnectMs != nil {
+		slowBy = fmt.Sprintf(" (%d ms to the enforcement node)", *e.ENConnectMs)
+	}
+	switch {
+	case e.WifiSignalPct != nil && *e.WifiSignalPct < 40:
+		return "wifi", fmt.Sprintf("%s's Wi-Fi signal is weak (%d%%)%s: move closer to the access point or use a cable.", e.User, *e.WifiSignalPct, slowBy)
+	case e.GatewayMs != nil && *e.GatewayMs > 100:
+		return "local-network", fmt.Sprintf("%s's own router is slow to answer (%d ms)%s: the office network is congested or the router is struggling.", e.User, *e.GatewayMs, slowBy)
+	case e.DNSMs != nil && *e.DNSMs > 500:
+		return "dns", fmt.Sprintf("Looking up the enforcement node's name takes %d ms for %s%s: the DNS resolver is slow.", *e.DNSMs, e.User, slowBy)
+	case e.AnchorMs != nil && *e.AnchorMs > 150:
+		return "isp", fmt.Sprintf("%s's internet is slow to a neutral site as well (%d ms)%s: the internet provider is the likely cause.", e.User, *e.AnchorMs, slowBy)
+	case e.AnchorMs != nil:
+		return "cloud", fmt.Sprintf("%s's internet is fast to a neutral site (%d ms) but slow to the enforcement node%s: the path to the node, or the node, is the likely cause.", e.User, *e.AnchorMs, slowBy)
+	}
+	return "network", fmt.Sprintf("%s's connection to the enforcement node is slow%s: look at their Wi-Fi or internet. (No stage measurements: set an anchor for the agent to tell the internet provider from the node.)", e.User, slowBy)
 }

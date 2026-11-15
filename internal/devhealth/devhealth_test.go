@@ -1,6 +1,7 @@
 package devhealth
 
 import (
+	"github.com/larytet/zscaler/internal/pathprobe"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +126,38 @@ func TestListCarriesTheExperience(t *testing.T) {
 	got := s.List("a", time.Now())
 	if len(got) != 1 || got[0].Experience.Cause != "network" {
 		t.Fatalf("%+v", got)
+	}
+}
+
+func TestPathStagesNameTheSlowHop(t *testing.T) { // AGT-018 (DEX-002)
+	ip := func(n int) *int { return &n }
+	slow := func(mod func(*Entry)) Experience {
+		e := Entry{User: "alice", Snapshot: Snapshot{ENConnectMs: ip(400)}}
+		mod(&e)
+		return Score(e)
+	}
+	cases := []struct {
+		name  string
+		mod   func(*Entry)
+		cause string
+	}{
+		{"no stage data", func(e *Entry) {}, "network"},
+		{"weak wifi", func(e *Entry) { e.WifiSignalPct = ip(20) }, "wifi"},
+		{"slow router", func(e *Entry) { e.GatewayMs = ip(250) }, "local-network"},
+		{"slow dns", func(e *Entry) { e.DNSMs = ip(900) }, "dns"},
+		{"anchor slow too: the provider", func(e *Entry) { e.AnchorMs = ip(300) }, "isp"},
+		{"anchor fast: the node side", func(e *Entry) { e.AnchorMs = ip(20) }, "cloud"},
+		{"wifi first when several are bad", func(e *Entry) { e.WifiSignalPct = ip(10); e.GatewayMs = ip(300); e.AnchorMs = ip(300) }, "wifi"},
+		{"good wifi and router do not hide the provider", func(e *Entry) { e.WifiSignalPct = ip(90); e.GatewayMs = ip(5); e.AnchorMs = ip(300) }, "isp"},
+	}
+	for _, c := range cases {
+		x := slow(c.mod)
+		if x.Cause != c.cause || x.Explain == "" || x.Score >= 100 {
+			t.Errorf("%s: got %q (%s), want %q", c.name, x.Cause, x.Explain, c.cause)
+		}
+	}
+	// stage data never makes a fast connection look slow
+	if x := Score(Entry{User: "a", Snapshot: Snapshot{ENConnectMs: ip(20), Result: pathprobe.Result{WifiSignalPct: ip(10), GatewayMs: ip(300)}}}); x.Cause != "none" {
+		t.Fatalf("%+v", x)
 	}
 }

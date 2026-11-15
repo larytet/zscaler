@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/larytet/zscaler/internal/pathprobe"
 	"io"
 	"net"
 	"net/http"
@@ -49,6 +50,11 @@ type Config struct {
 	EnrolCAPEM string `json:"enrol_ca_pem,omitempty"`
 	// PostureEverySeconds is how often posture is re-sent (default 300).
 	PostureEverySeconds int `json:"posture_every_seconds,omitempty"`
+	// PathAnchor is a host:port the agent may connect to, to tell a slow internet provider from a
+	// slow enforcement node (DEX-002). Empty: nothing outside the organisation is contacted.
+	PathAnchor string `json:"path_anchor,omitempty"`
+	// DisablePathProbes stops the Wi-Fi, router and name-resolution measurements.
+	DisablePathProbes bool `json:"disable_path_probes,omitempty"`
 }
 
 type Agent struct {
@@ -472,6 +478,9 @@ func (a *Agent) SendPosture(c *broker.Conn) error {
 	rep := Collect(DefaultProbes())
 	h := devhealth.Collect()
 	a.addMeasurements(&h)
+	if !a.Cfg.DisablePathProbes {
+		h.Result = pathprobe.Run(context.Background(), pathprobe.Options{ResolveName: a.Cfg.ENName, Anchor: a.Cfg.PathAnchor, Timeout: time.Second})
+	}
 	rep.Health = &h
 	rep.DeviceID, rep.TS, rep.Nonce, rep.AgentVersion = id, time.Now().UTC(), posture.NewNonce(), Version
 	tok, err := posture.Sign(k, rep)
