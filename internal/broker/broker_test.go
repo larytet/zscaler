@@ -901,7 +901,11 @@ func TestHealthRidesInTheSignedPostureReport(t *testing.T) { // DEX-003
 	if err := conn.SendPosture(tok); err != nil {
 		t.Fatal(err)
 	}
-	rec := r.logs.find(func(x Record) bool { return x.Kind == "health" && x.Device == "d1" })
+	var rec *Record
+	for deadline := time.Now().Add(3 * time.Second); rec == nil && time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
+		// the EN acknowledges first and logs just after, so the record may land a moment later
+		rec = r.logs.find(func(x Record) bool { return x.Kind == "health" && x.Device == "d1" })
+	}
 	if rec == nil || rec.Health == nil || *rec.Health.DiskUsedPct != 93 || *rec.Health.MemUsedPct != 40 || rec.Health.CPULoadPct != nil {
 		t.Fatalf("%+v", rec)
 	}
@@ -917,6 +921,7 @@ func TestHealthRidesInTheSignedPostureReport(t *testing.T) { // DEX-003
 	rep2 := posture.Report{DeviceID: "d1", TS: time.Now().UTC(), Nonce: posture.NewNonce(), OS: "linux"}
 	tok2, _ := posture.Sign(cr.key, rep2)
 	conn.SendPosture(tok2)
+	time.Sleep(300 * time.Millisecond) // long enough for a (wrongly) emitted record to appear
 	after := 0
 	r.logs.mu.Lock()
 	for _, x := range r.logs.r {

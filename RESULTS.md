@@ -66,3 +66,7 @@ Not done or only partly done, stated plainly:
 | SEC-019 | 30 s per fuzz target, not 30 minutes |
 | `/v1/decisions` search | Built in I8a (in-memory, bounded, lost on restart) |
 | Policy signing, `/v1/decisions`, admin console | Built in I9a, I8a and I9b. The console was checked by hand in Chrome in I11 (see STATUS.md for what that did and did not cover) |
+
+## Flaky test found and fixed (I16 regression)
+
+`TestHealthRidesInTheSignedPostureReport` failed once in a full run (passed 15 of 15 alone). Cause: the enforcement node acknowledged a posture report and only then logged the posture and health events, so a reader that acted on the acknowledgement could look too early. Fixed in the product, not only the test: events are now recorded before the acknowledgement (the same record-first principle used for denials), and the test also waits for the record.

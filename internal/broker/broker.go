@@ -374,8 +374,7 @@ func (e *EN) onPosture(id pki.Identity, cert *x509.Certificate, ds *deviceState,
 	ds.mu.Lock()
 	ds.posture = r.ToPolicy()
 	ds.mu.Unlock()
-	st.Accept()
-	st.Close()
+	// record first, acknowledge after: when the agent hears "accepted" the events already exist
 	ok, failing := posture.Baseline(r)
 	rec := Record{Tenant: id.Tenant, Kind: "posture", User: id.Subject, Device: id.Device, Action: "pass"}
 	if !ok {
@@ -385,6 +384,8 @@ func (e *EN) onPosture(id pki.Identity, cert *x509.Certificate, ds *deviceState,
 	if r.Health != nil {
 		e.logRec(Record{Tenant: id.Tenant, Kind: "health", User: id.Subject, Device: id.Device, Action: "info", Health: r.Health})
 	}
+	st.Accept()
+	st.Close()
 }
 
 func (e *EN) logRec(r Record) {
