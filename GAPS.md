@@ -54,6 +54,20 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G17 | NFR-030 | Data subject access and erasure: export what is held about a person, and delete it | **done (S38)** for the technical part; the legal part (a DPA, a public sub-processor list, a lawful basis) is not software and is not done |
 | G18 | ADM-001 | Console simple mode (users, apps, alerts) | done: S39 |
 
+## Third queue: gaps found when the requirements were reviewed again (v0.9, section 20)
+
+These are written as proposals in REQUIREMENTS.md section 20. None is built. They need the product owner's yes on priority before design.
+
+| # | Requirement | What is missing | State |
+|---|---|---|---|
+| G19 | GAP-REQ-01 | Backup and restore of the control plane with a restore test | proposed |
+| G20 | GAP-REQ-02 | Secrets and private keys encrypted at rest | proposed |
+| G21 | GAP-REQ-03 | Break-glass recovery when the last owner token is lost | proposed |
+| G22 | GAP-REQ-04 | Rate limits and lockout on admin, enrolment and sign-in | proposed |
+| G23 | GAP-REQ-05 | Key and certificate rotation and a compromise procedure | proposed |
+| G24 | GAP-REQ-07 | "Person left" in one action with a checklist | proposed |
+| G25 | GAP-REQ-06, 08, 09, 10, 11 | Clock accuracy, upgrades and version skew, console accessibility, IPv6, breach notification (should-level) | proposed |
+
 ## Not feasible without a new subsystem or an outside party (stays a gap)
 
 - **Network and threat engines:** FW-001..003, FW-006 (IPS, Snort rules), FW-007 and ZIA-022a (DNS service), ZIA-020 (antivirus), ZIA-021, ZIA-023 (sandbox), ZIA-005 and ZIA-010 (cloud firewall and layered order), FW-011.
