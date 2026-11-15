@@ -44,6 +44,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	signer, err := pki.LoadOrCreateSigner(*data)
+	if err != nil {
+		log.Fatal(err)
+	}
 	st, err := store.Open(filepath.Join(*data, "store.json"))
 	if err != nil {
 		log.Fatal(err)
@@ -82,7 +86,7 @@ func main() {
 		}
 	}()
 	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New()}
-	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent}
+	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent, PolicyKey: signer}
 
 	if notifier != nil {
 		go weeklyDigest(api, st, notifier)

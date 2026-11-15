@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/larytet/zscaler/internal/signed"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -146,7 +147,8 @@ func TestPollerAndENEnrolment(t *testing.T) {
 	defer al.Close()
 	api := &cp.API{Store: st, Audit: al, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: "boot"}
 	ca, _ := pki.NewCA("ca", nil)
-	e := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil)}
+	signer, _ := pki.LoadOrCreateSigner(t.TempDir())
+	e := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), PolicyKey: signer}
 	srv := httptest.NewUnstartedServer(e.Handler())
 	srv.TLS = &tls.Config{ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: ca.Pool()}
 	srv.StartTLS()
@@ -220,21 +222,22 @@ func TestPollerAndENEnrolment(t *testing.T) {
 	// polling with the EN certificate works; without it, or with a device certificate, it does not
 	state := NewSyncState()
 	cfg := &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: k}}}
-	p := &Poller{URL: srv.URL, TLS: cfg, State: state}
+	p := &Poller{URL: srv.URL, TLS: cfg, State: state, PolicyPub: &signer.PublicKey}
 	if err := p.Once(); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := state.Segment("t1", "erp"); !ok || state.Stale() {
 		t.Fatal("state not populated by poll")
 	}
-	noCert := &Poller{URL: srv.URL, TLS: &tls.Config{InsecureSkipVerify: true}, State: NewSyncState()}
+	noCert := &Poller{URL: srv.URL, TLS: &tls.Config{InsecureSkipVerify: true}, State: NewSyncState(), PolicyPub: &signer.PublicKey}
 	if err := noCert.Once(); err == nil {
 		t.Fatal("sync allowed without a certificate")
 	}
 	dk, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	dder, _ := ca.Sign(&dk.PublicKey, pki.Identity{Tenant: "t1", Subject: "alice", Device: "d1", Role: pki.RoleDevice}, time.Hour)
 	devPoller := &Poller{URL: srv.URL, State: NewSyncState(),
-		TLS: &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{{Certificate: [][]byte{dder}, PrivateKey: dk}}}}
+		PolicyPub: &signer.PublicKey,
+		TLS:       &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{{Certificate: [][]byte{dder}, PrivateKey: dk}}}}
 	if err := devPoller.Once(); err == nil {
 		t.Fatal("a device certificate may not read the whole state")
 	}
@@ -257,5 +260,60 @@ func TestRefusesPolicyRollback(t *testing.T) { // SEC-007 (partial: replay prote
 	}
 	if v := s.Policy("t1", policy.Private).Version; v != 2 {
 		t.Fatalf("policy rolled back to version %d", v)
+	}
+}
+
+func TestPollerRefusesUnsignedAndTamperedState(t *testing.T) { // SEC-007
+	st := seed(t)
+	signer, _ := pki.LoadOrCreateSigner(t.TempDir())
+	attacker, _ := pki.LoadOrCreateSigner(t.TempDir())
+	var mode string
+	var last []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, _ := json.Marshal(st.Snapshot())
+		switch mode {
+		case "good":
+			env, _ := signed.Sign(signer, time.Now().UnixNano(), time.Now(), payload)
+			last, _ = json.Marshal(env)
+			w.Write(last)
+		case "replay":
+			w.Write(last)
+		case "forged":
+			env, _ := signed.Sign(attacker, time.Now().UnixNano(), time.Now(), payload)
+			json.NewEncoder(w).Encode(env)
+		case "tampered":
+			env, _ := signed.Sign(signer, time.Now().UnixNano(), time.Now(), payload)
+			env.Payload = bytes.Replace(env.Payload, []byte(`"Disabled":false`), []byte(`"Disabled":true`), -1)
+			json.NewEncoder(w).Encode(env)
+		case "unsigned":
+			w.Write(payload)
+		}
+	}))
+	defer srv.Close()
+	state := NewSyncState()
+	p := &Poller{URL: srv.URL, State: state, PolicyPub: &signer.PublicKey}
+	mode = "good"
+	if err := p.Once(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state.Segment("t1", "erp"); !ok {
+		t.Fatal("good state not applied")
+	}
+	for _, m := range []string{"replay", "forged", "tampered", "unsigned"} {
+		fresh := NewSyncState()
+		q := &Poller{URL: srv.URL, State: fresh, PolicyPub: &signer.PublicKey, lastSeq: p.lastSeq}
+		mode = m
+		if err := q.Once(); err == nil {
+			t.Errorf("%s state was accepted", m)
+		}
+		if _, ok := fresh.Segment("t1", "erp"); ok {
+			t.Errorf("%s state was applied", m)
+		}
+	}
+	// a poller with no pinned key applies nothing at all
+	mode = "good"
+	none := &Poller{URL: srv.URL, State: NewSyncState()}
+	if err := none.Once(); err == nil || none.State.Stale() == false {
+		t.Fatal("a poller without a pinned key must refuse state")
 	}
 }

@@ -1,6 +1,7 @@
 package cp
 
 import (
+	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -10,12 +11,14 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/idp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/signed"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -29,6 +32,9 @@ type Enrol struct {
 	HTTP *http.Client // for IdP calls (tests)
 	// MinAgentVersion is announced to agents with every certificate; older agents refuse to start sessions.
 	MinAgentVersion string
+	// PolicyKey signs every state snapshot served to enforcement nodes.
+	PolicyKey *ecdsa.PrivateKey
+	seq       atomic.Int64
 
 	mu        sync.Mutex
 	verifiers map[string]*idp.Verifier
@@ -81,6 +87,8 @@ type certOut struct {
 	CA       string    `json:"ca"`   // PEM
 	Expires  time.Time `json:"expires"`
 	MinAgent string    `json:"min_agent_version,omitempty"`
+	// PolicyPub is the control plane's signing key (PEM), pinned by enforcement nodes at enrolment.
+	PolicyPub string `json:"policy_pub,omitempty"`
 }
 
 func (e *Enrol) caPEM() string {
@@ -309,6 +317,10 @@ func (e *Enrol) enrolEN(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	names := strings.Split(strings.TrimPrefix(group, ENTokenPrefix), ",")
+	var pubPEM string
+	if e.PolicyKey != nil {
+		pubPEM = string(pki.PublicPEM(&e.PolicyKey.PublicKey))
+	}
 	if in.Name == "" {
 		in.Name = names[0]
 	}
@@ -317,6 +329,7 @@ func (e *Enrol) enrolEN(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	out.PolicyPub = pubPEM
 	writeJSON(w, 200, out)
 }
 
@@ -328,7 +341,33 @@ func (e *Enrol) syncState(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(401, "unauthenticated", "an enforcement-node certificate is required"))
 		return
 	}
-	writeJSON(w, 200, e.API.Store.Snapshot())
+	if e.PolicyKey == nil {
+		writeErr(w, fail(500, "no_signing_key", "the control plane has no policy-signing key"))
+		return
+	}
+	payload, err := json.Marshal(e.API.Store.Snapshot())
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	// strictly increasing even across restarts: time-based, bumped past the previous value
+	now := time.Now()
+	seq := now.UnixNano()
+	for {
+		old := e.seq.Load()
+		if seq <= old {
+			seq = old + 1
+		}
+		if e.seq.CompareAndSwap(old, seq) {
+			break
+		}
+	}
+	env, err := signed.Sign(e.PolicyKey, seq, now, payload)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, env)
 }
 
 // ingest receives batches of decision and event records from an enforcement node.

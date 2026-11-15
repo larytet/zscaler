@@ -59,7 +59,7 @@ Not done or only partly done, stated plainly:
 | Item | State |
 |---|---|
 | USE-001, USE-002, USE-003 | **Not done.** They need people who did not write the product (two for USE-001). The 30-minute target is unproven. The scripted day-one flow takes about 2 s, but that excludes every manual step |
-| SEC-007 policy tampering | **Partly.** An EN refuses to roll a policy back to a lower version. The CP-signed policy stream in DESIGN D5.5 is **not built**: ENs trust whatever an authenticated control plane serves |
+| SEC-007 policy tampering | Met in I9a: state is signed by the control plane and verified by a pinned key; unsigned, forged, tampered, replayed and stale state are refused. The signing key is a file (no KMS or HSM) |
 | SEC-014 disk full | The sink-health mechanism is tested with a fake sink. A real full disk was not simulated |
 | RES-002 packet loss, RES-004 | Not simulated (see the resilience table) |
 | RES-007 | 3 minutes, not 24 hours |

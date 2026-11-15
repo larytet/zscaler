@@ -85,7 +85,10 @@ func main() {
 		node.ReevalNow()
 	}
 
-	poller := &en.Poller{URL: *cpURL, TLS: id.TLS(cli.HostOf(*cpURL)), State: state}
+	if id.PolicyPub == nil {
+		log.Fatal("this enforcement node has no pinned policy-signing key; enrol it again with a new token")
+	}
+	poller := &en.Poller{URL: *cpURL, TLS: id.TLS(cli.HostOf(*cpURL)), State: state, PolicyPub: id.PolicyPub}
 	if err := poller.Once(); err != nil {
 		log.Printf("initial sync failed (will keep trying, sessions are denied until it succeeds): %v", err)
 	}

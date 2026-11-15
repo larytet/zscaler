@@ -2,6 +2,7 @@
 package en
 
 import (
+	"crypto/ecdsa"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/signed"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -186,6 +188,12 @@ type Poller struct {
 	TLS   *tls.Config
 	State *SyncState
 	HTTP  *http.Client
+	// PolicyPub is the pinned control-plane signing key. A Poller without it
+	// refuses to apply any state: unsigned state is never trusted.
+	PolicyPub *ecdsa.PublicKey
+	MaxAge    time.Duration // how old a signature may be (default 15 minutes)
+
+	lastSeq int64
 }
 
 func (p *Poller) client() *http.Client {
@@ -204,10 +212,25 @@ func (p *Poller) Once() error {
 	if resp.StatusCode != 200 {
 		return errors.New("sync: control plane returned " + resp.Status)
 	}
-	var snap store.Snapshot
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&snap); err != nil {
+	if p.PolicyPub == nil {
+		return errors.New("sync: no pinned policy-signing key; refusing unsigned state")
+	}
+	var env signed.Envelope
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&env); err != nil {
 		return err
 	}
+	max := p.MaxAge
+	if max == 0 {
+		max = 15 * time.Minute
+	}
+	if err := env.Verify(p.PolicyPub, p.lastSeq, time.Now(), max); err != nil {
+		return err
+	}
+	var snap store.Snapshot
+	if err := json.Unmarshal(env.Payload, &snap); err != nil {
+		return err
+	}
+	p.lastSeq = env.Seq
 	p.State.Apply(&snap)
 	return nil
 }

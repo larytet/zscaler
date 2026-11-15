@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/larytet/zscaler/internal/pki"
 )
 
 // Secret reads a secret from a file (preferred) or an environment variable.
@@ -45,6 +47,8 @@ type Identity struct {
 	Leaf *x509.Certificate
 	CAs  *x509.CertPool
 	PEM  []byte
+	// PolicyPub is the pinned control-plane signing key (ENs only; nil otherwise).
+	PolicyPub *ecdsa.PublicKey
 }
 
 func (i *Identity) TLS(serverName string) *tls.Config {
@@ -84,7 +88,13 @@ func load(dir string) (*Identity, error) {
 	if time.Now().After(leaf.NotAfter) {
 		return nil, errors.New("stored certificate expired; enrol again with a new token")
 	}
-	return &Identity{Cert: tls.Certificate{Certificate: [][]byte{cblk.Bytes}, PrivateKey: key}, Leaf: leaf, CAs: pool, PEM: pb}, nil
+	id := &Identity{Cert: tls.Certificate{Certificate: [][]byte{cblk.Bytes}, PrivateKey: key}, Leaf: leaf, CAs: pool, PEM: pb}
+	if b, err := os.ReadFile(filepath.Join(dir, "policy.pub")); err == nil {
+		if id.PolicyPub, err = pki.ParsePublicPEM(b); err != nil {
+			return nil, fmt.Errorf("stored policy key is unreadable: %w", err)
+		}
+	}
+	return id, nil
 }
 
 // LoadOrEnrol returns the identity stored in dir, or enrols with the one-time
@@ -117,7 +127,10 @@ func LoadOrEnrol(dir, cpURL string, cpCA []byte, endpoint, token, name string) (
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("enrolment failed (%d): %s", resp.StatusCode, bytes.TrimSpace(rb))
 	}
-	var out struct{ Cert, CA string }
+	var out struct {
+		Cert, CA  string
+		PolicyPub string `json:"policy_pub"`
+	}
 	if err := json.Unmarshal(rb, &out); err != nil {
 		return nil, err
 	}
@@ -130,6 +143,9 @@ func LoadOrEnrol(dir, cpURL string, cpCA []byte, endpoint, token, name string) (
 		"key.pem":  pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder}),
 		"cert.pem": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		"ca.pem":   []byte(out.CA),
+	}
+	if out.PolicyPub != "" {
+		files["policy.pub"] = []byte(out.PolicyPub)
 	}
 	for n, b := range files {
 		if err := os.WriteFile(filepath.Join(dir, n), b, 0o600); err != nil {

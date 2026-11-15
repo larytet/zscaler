@@ -23,7 +23,8 @@ func TestPerf006PolicyPropagation(t *testing.T) {
 	defer al.Close()
 	api := &cp.API{Store: st, Audit: al, Tokens: pki.NewTokens(nil, time.Hour)}
 	ca, _ := pki.NewCA("ca", nil)
-	srv := httptest.NewUnstartedServer((&cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil)}).Handler())
+	signer, _ := pki.LoadOrCreateSigner(t.TempDir())
+	srv := httptest.NewUnstartedServer((&cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), PolicyKey: signer}).Handler())
 	srv.TLS = &tls.Config{ClientAuth: tls.VerifyClientCertIfGiven, ClientCAs: ca.Pool()}
 	srv.StartTLS()
 	defer srv.Close()
@@ -38,7 +39,7 @@ func TestPerf006PolicyPropagation(t *testing.T) {
 	defer close(stop)
 	for i := range states {
 		states[i] = NewSyncState()
-		p := &Poller{URL: srv.URL, TLS: cfg, State: states[i]}
+		p := &Poller{URL: srv.URL, TLS: cfg, State: states[i], PolicyPub: &signer.PublicKey}
 		go func(i int) { // spread the starts across one interval, as real nodes would be
 			time.Sleep(time.Duration(i) * every / n)
 			p.Run(every, stop, nil)

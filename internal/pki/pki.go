@@ -342,3 +342,48 @@ func VerifierFromPEM(pemBytes []byte, now Clock) (*CA, error) {
 	pool.AddCert(cert)
 	return &CA{Cert: cert, now: now, pool: pool}, nil
 }
+
+// LoadOrCreateSigner keeps the policy-signing key in dir (policy.key, mode 0600).
+// Enforcement nodes pin the matching public key at enrolment.
+func LoadOrCreateSigner(dir string) (*ecdsa.PrivateKey, error) {
+	p := filepath.Join(dir, "policy.key")
+	if b, err := os.ReadFile(p); err == nil {
+		blk, _ := pem.Decode(b)
+		if blk == nil {
+			return nil, errors.New("pki: policy.key is unreadable")
+		}
+		return x509.ParseECPrivateKey(blk.Bytes)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	der, _ := x509.MarshalECPrivateKey(k)
+	return k, os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0o600)
+}
+
+// PublicPEM encodes an ECDSA public key for distribution.
+func PublicPEM(k *ecdsa.PublicKey) []byte {
+	der, _ := x509.MarshalPKIXPublicKey(k)
+	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})
+}
+
+// ParsePublicPEM decodes a key written by PublicPEM.
+func ParsePublicPEM(b []byte) (*ecdsa.PublicKey, error) {
+	blk, _ := pem.Decode(b)
+	if blk == nil {
+		return nil, errors.New("pki: no public key in PEM")
+	}
+	k, err := x509.ParsePKIXPublicKey(blk.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	pk, ok := k.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("pki: not an ECDSA key")
+	}
+	return pk, nil
+}
