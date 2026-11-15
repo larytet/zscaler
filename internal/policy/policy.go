@@ -1,0 +1,372 @@
+// Package policy implements the SMB-ZTX rule model and evaluator (DESIGN.md D2).
+package policy
+
+import (
+	"encoding/json"
+	"fmt"
+	"net/netip"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type Kind string
+
+const (
+	Private Kind = "private"
+	Web     Kind = "web"
+)
+
+type Action string
+
+const (
+	Allow Action = "allow"
+	Deny  Action = "deny"
+	Warn  Action = "warn"
+)
+
+// Posture is a device posture report that has already been signature-verified.
+// Tri-state values are pointers: nil means unknown and is treated as false.
+type Posture struct {
+	OS            string    `json:"os"`
+	OSVersion     string    `json:"os_version"`
+	DiskEncrypted *bool     `json:"disk_encrypted"`
+	FirewallOn    *bool     `json:"firewall_on"`
+	ScreenLock    *bool     `json:"screen_lock"`
+	ReportedAt    time.Time `json:"ts"`
+}
+
+type User struct {
+	Subject  string
+	Email    string
+	Groups   []string
+	Disabled bool
+}
+
+type Device struct {
+	ID      string
+	Revoked bool
+	Posture *Posture // nil: no report
+}
+
+type Request struct {
+	Kind       Kind
+	User       User
+	Device     Device
+	App        string   // segment ID (private)
+	Host       string   // web
+	Categories []string // web, from classification
+	SrcIP      netip.Addr
+	Now        time.Time
+}
+
+type Decision struct {
+	Action Action
+	RuleID string // "" means default
+	Reason string
+}
+
+type PostureMatch struct {
+	MinOS         map[string]string `json:"min_os,omitempty"`
+	DiskEncrypted *bool             `json:"disk_encrypted,omitempty"`
+	FirewallOn    *bool             `json:"firewall_on,omitempty"`
+	ScreenLock    *bool             `json:"screen_lock,omitempty"`
+	MaxAgeSeconds int               `json:"max_age_seconds,omitempty"`
+}
+
+type TimeMatch struct {
+	Days []string `json:"days,omitempty"`
+	From string   `json:"from,omitempty"` // HH:MM inclusive
+	To   string   `json:"to,omitempty"`   // HH:MM exclusive
+	TZ   string   `json:"tz,omitempty"`
+}
+
+type NetworkMatch struct {
+	SrcCIDRs []string `json:"src_cidrs,omitempty"`
+}
+
+type Match struct {
+	Users      []string      `json:"users,omitempty"`
+	Groups     []string      `json:"groups,omitempty"`
+	Apps       []string      `json:"apps,omitempty"`
+	Domains    []string      `json:"domains,omitempty"`
+	Categories []string      `json:"categories,omitempty"`
+	Posture    *PostureMatch `json:"posture,omitempty"`
+	Time       *TimeMatch    `json:"time,omitempty"`
+	Network    *NetworkMatch `json:"network,omitempty"`
+}
+
+type Rule struct {
+	ID       string `json:"id"`
+	Priority int    `json:"priority"`
+	Action   Action `json:"action"`
+	Match    Match  `json:"match"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type Policy struct {
+	Kind          Kind   `json:"kind"`
+	Version       int    `json:"version"`
+	DefaultAction Action `json:"default_action"`
+	Rules         []Rule `json:"rules"`
+
+	compiled []compiledRule
+}
+
+type compiledRule struct {
+	Rule
+	users, groups, apps, cats map[string]bool
+	domains                   []string
+	cidrs                     []netip.Prefix
+	loc                       *time.Location
+	from, to                  int // minutes, -1 if unset
+	days                      map[time.Weekday]bool
+}
+
+// Parse decodes and compiles a policy; it validates first.
+func Parse(data []byte) (*Policy, error) {
+	var p Policy
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("policy json: %w", err)
+	}
+	return &p, p.Compile(nil)
+}
+
+// Compile validates and prepares the policy. known is the set of valid
+// segment IDs; nil skips the reference check.
+func (p *Policy) Compile(known map[string]bool) error {
+	if errs := Validate(p, known); len(errs) > 0 {
+		msgs := make([]string, len(errs))
+		for i, e := range errs {
+			msgs[i] = e.Error()
+		}
+		return fmt.Errorf("invalid policy: %s", strings.Join(msgs, "; "))
+	}
+	rules := append([]Rule(nil), p.Rules...)
+	sort.SliceStable(rules, func(i, j int) bool { return rules[i].Priority < rules[j].Priority })
+	p.compiled = p.compiled[:0]
+	for _, r := range rules {
+		c := compiledRule{Rule: r, from: -1, to: -1}
+		c.users, c.groups = set(r.Match.Users), set(r.Match.Groups)
+		c.apps, c.cats = set(r.Match.Apps), set(r.Match.Categories)
+		for _, d := range r.Match.Domains {
+			c.domains = append(c.domains, normHost(d))
+		}
+		if n := r.Match.Network; n != nil {
+			for _, s := range n.SrcCIDRs {
+				pf, _ := netip.ParsePrefix(s)
+				c.cidrs = append(c.cidrs, pf)
+			}
+		}
+		if t := r.Match.Time; t != nil {
+			c.loc = time.UTC
+			if t.TZ != "" {
+				c.loc, _ = time.LoadLocation(t.TZ)
+			}
+			if t.From != "" {
+				c.from, _ = parseHM(t.From)
+				c.to, _ = parseHM(t.To)
+			}
+			if len(t.Days) > 0 {
+				c.days = map[time.Weekday]bool{}
+				for _, d := range t.Days {
+					c.days[dayNames[strings.ToLower(d)]] = true
+				}
+			}
+		}
+		p.compiled = append(p.compiled, c)
+	}
+	return nil
+}
+
+// Evaluate is pure and total: it never panics and always returns a decision.
+func (p *Policy) Evaluate(r Request) (d Decision) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			d = Decision{Action: Deny, Reason: "evaluation-error"}
+		}
+	}()
+	if p == nil || p.compiled == nil && len(p.Rules) > 0 {
+		return Decision{Action: Deny, Reason: "evaluation-error"}
+	}
+	if r.User.Disabled {
+		return Decision{Action: Deny, Reason: "user-disabled"}
+	}
+	if r.Device.Revoked {
+		return Decision{Action: Deny, Reason: "device-revoked"}
+	}
+	r.User.Email = strings.ToLower(r.User.Email) // once, not per rule
+	for i := range p.compiled {
+		c := &p.compiled[i]
+		if c.matches(p.Kind, r) {
+			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
+		}
+	}
+	def := p.DefaultAction
+	if p.Kind == Private || def == "" {
+		def = Deny
+	}
+	return Decision{Action: def, Reason: "default"}
+}
+
+func (c *compiledRule) matches(kind Kind, r Request) bool {
+	m := c.Match
+	if len(c.users)+len(c.groups) > 0 {
+		ok := c.users[r.User.Email] || c.users[r.User.Subject]
+		for _, g := range r.User.Groups {
+			if c.groups[g] {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if kind == Private {
+		if len(c.apps) > 0 && !c.apps[r.App] {
+			return false
+		}
+	} else {
+		if len(c.domains) > 0 && !hostMatches(c.domains, r.Host) {
+			return false
+		}
+		if len(c.cats) > 0 {
+			ok := false
+			for _, cat := range r.Categories {
+				if c.cats[cat] {
+					ok = true
+				}
+			}
+			if !ok {
+				return false
+			}
+		}
+	}
+	if len(c.cidrs) > 0 {
+		ok := false
+		for _, pf := range c.cidrs {
+			if r.SrcIP.IsValid() && pf.Contains(r.SrcIP.Unmap()) {
+				ok = true
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if m.Time != nil && !c.timeOK(r.Now) {
+		return false
+	}
+	if m.Posture != nil && !postureOK(m.Posture, r.Device.Posture, r.Now) {
+		return false
+	}
+	return true
+}
+
+func (c *compiledRule) timeOK(now time.Time) bool {
+	t := now.In(c.loc)
+	if c.days != nil && !c.days[t.Weekday()] {
+		return false
+	}
+	if c.from >= 0 {
+		mins := t.Hour()*60 + t.Minute()
+		if c.from <= c.to {
+			return mins >= c.from && mins < c.to
+		}
+		return mins >= c.from || mins < c.to // overnight window
+	}
+	return true
+}
+
+func postureOK(req *PostureMatch, got *Posture, now time.Time) bool {
+	if got == nil {
+		return false // fail closed
+	}
+	if req.MaxAgeSeconds > 0 {
+		age := now.Sub(got.ReportedAt)
+		if age < 0 || age > time.Duration(req.MaxAgeSeconds)*time.Second {
+			return false
+		}
+	}
+	for _, c := range []struct{ want, have *bool }{
+		{req.DiskEncrypted, got.DiskEncrypted},
+		{req.FirewallOn, got.FirewallOn},
+		{req.ScreenLock, got.ScreenLock},
+	} {
+		if c.want != nil && (c.have == nil || *c.have != *c.want) {
+			return false
+		}
+	}
+	if len(req.MinOS) > 0 {
+		min, ok := req.MinOS[strings.ToLower(got.OS)]
+		if !ok || CompareVersions(got.OSVersion, min) < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// CompareVersions compares dotted numeric versions. Non-numeric parts count as 0.
+func CompareVersions(a, b string) int {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		var x, y int
+		if i < len(as) {
+			x, _ = strconv.Atoi(as[i])
+		}
+		if i < len(bs) {
+			y, _ = strconv.Atoi(bs[i])
+		}
+		if x != y {
+			if x < y {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+func normHost(h string) string {
+	h = strings.ToLower(strings.TrimSpace(h))
+	h = strings.TrimSuffix(h, ".")
+	if i := strings.LastIndexByte(h, ':'); i > 0 && !strings.Contains(h[i:], "]") && strings.Count(h, ":") == 1 {
+		h = h[:i]
+	}
+	return h
+}
+
+// NormalizeHost is exported for the web proxy and classifier.
+func NormalizeHost(h string) string { return normHost(h) }
+
+func hostMatches(domains []string, host string) bool {
+	host = normHost(host)
+	for _, d := range domains {
+		if host == d || strings.HasSuffix(host, "."+d) {
+			return true
+		}
+	}
+	return false
+}
+
+func set(xs []string) map[string]bool {
+	m := make(map[string]bool, len(xs))
+	for _, x := range xs {
+		m[x] = true
+		m[strings.ToLower(x)] = true
+	}
+	return m
+}
+
+var dayNames = map[string]time.Weekday{
+	"sun": time.Sunday, "mon": time.Monday, "tue": time.Tuesday, "wed": time.Wednesday,
+	"thu": time.Thursday, "fri": time.Friday, "sat": time.Saturday,
+}
+
+func parseHM(s string) (int, error) {
+	t, err := time.Parse("15:04", s)
+	if err != nil {
+		return 0, err
+	}
+	return t.Hour()*60 + t.Minute(), nil
+}
