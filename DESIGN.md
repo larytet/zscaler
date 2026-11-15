@@ -533,7 +533,7 @@ The test plan carries the full matrix. Summary of which design part covers which
 1. Replace the own mux with an existing multiplexer or QUIC once the patent review in REQUIREMENTS.md section 15 is done.
 2. Whether the transparent-tunnel agent is built natively per OS or on top of an existing open-source tunnel (licence review needed).
 3. Whether ENs run on a partner cloud's edge. This affects the "no payload at rest" claim and the PKI.
-4. Whether to decrypt web traffic by default (ZIA-040 and the privacy trade-off) or keep host-only policy for the SMB tier.
+4. ~~Whether to decrypt web traffic by default.~~ Closed by requirements v0.5: ZIA-040 is Must, so TLS inspection is on by default. The design still has to cover the per-tenant CA (ARCH-021), exemption lists and the inspection path. D3.5 describes RB1 only, which does not decrypt.
 
 ---
 

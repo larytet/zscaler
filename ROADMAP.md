@@ -1,5 +1,7 @@
 # Deferred features (not in RB1)
 
+**Update (requirements v0.5):** the 34 items in REQUIREMENTS.md 17.1 are now **Must**. They stay outside RB1, so the "Priority in spec" column below now reads M for those rows. Deferral is a sequencing decision, not a statement that they are optional.
+
 RB1 proves the core loop: identity and posture, then policy, then a brokered private connection or a filtered web request. Everything below is left out on purpose. Requirement IDs refer to REQUIREMENTS.md.
 
 | Area | Deferred item | Priority in spec | Why deferred | Suggested phase |

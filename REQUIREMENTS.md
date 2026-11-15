@@ -2,7 +2,7 @@
 
 **Working name:** SMB-ZTX (placeholder)
 **Goal:** Feature parity with the Zscaler Zero Trust Exchange (ZIA, ZPA, ZDX, data security) for organisations of roughly 5–250 people with no dedicated security team.
-**Status:** Draft v0.4, 2026-11-15
+**Status:** Draft v0.5, 2026-11-15
 **Audience:** Product, architecture, engineering
 
 ---
@@ -91,7 +91,7 @@ Parity source: NIST white paper `[V]`, ZPA product page `[V]`, patents US 11,750
 - **ARCH-004 (M):** Direct integrations with IdP (SAML/OIDC, SCIM), SIEM, and endpoint-compliance sources.
 - **ARCH-005 (M):** Policy follows the user, not the network location `[V]`.
 - **ARCH-006 (M):** Criteria-based trust evaluation (identity, device posture, location, risk score) per request `[V: "criteria-based trust algorithms"]`.
-- **ARCH-007 (S):** Dynamic risk scoring and "active defense" feeding policy decisions `[V: named in NIST white paper; mechanics not described]`.
+- **ARCH-007 (M):** Dynamic risk scoring and "active defense" feeding policy decisions `[V: named in NIST white paper; mechanics not described]`.
 - **ARCH-008 (M):** The system must be designed against the NIST-named risks: subversion of the decision process, denial of service, insider threat, loss of network visibility, storage of metadata and policies `[V]`.
 
 ### 3.2 NIST deployment models to support
@@ -132,7 +132,7 @@ Parity source: ZPA/ZIA pages, NIST paper, patents `[V]` unless marked.
 - **AGT-009 (S):** Deployment `[V: DS-ZCC]`: MDM/UEM (Intune, Workspace ONE, Jamf, MaaS360, SCCM), Active Directory GPO, manual download, cloud-managed release updates **with rollback**, and **automatic distribution of the trusted root CA** for TLS inspection. Add a one-click "invite user by email" flow for P1.
 - **AGT-012 (S), new in 0.3:** User provisioning `[V: DS-ZCC]`: SCIM, just-in-time SAML provisioning, emergency-user JIT, device auto-provisioning by machine key or token, AD/LDAP sync, manual and bulk user upload to a hosted user DB. Authentication options: SAML 2.0, OIDC, Kerberos, certificates and smart cards, MFA, **FIDO2 hardware tokens**, step-up authentication, browser-based authentication. SSO: Windows seamless, Kerberos, Microsoft Enterprise SSO plug-in, Apple Enterprise SSO, Okta SSO extension. SMB-ZTX v1: SAML, OIDC, MFA, FIDO2, SCIM, JIT; Kerberos and smart cards **C**.
 - **AGT-013 (S), new in 0.3:** End-user notifications on desktop and OS for acceptable-use, service status, updates, re-authentication, inline data-security events, endpoint DLP workflows, access-policy events, threat protection, firewall/IPS/DNS blocks `[V: DS-ZCC]`. Built-in troubleshooting: automated encrypted log fetch, manual log export, automated and manual packet capture `[V]`.
-- **AGT-014 (S), new in 0.3:** **Endpoint DLP** via the agent: removable storage, network shares, personal cloud-storage sync and printing `[V: DS-ZCC]`. Refines DATA-005.
+- **AGT-014 (M), new in 0.3:** **Endpoint DLP** via the agent: removable storage, network shares, personal cloud-storage sync and printing `[V: DS-ZCC]`. Refines DATA-005.
 - **AGT-015 (C), new in 0.3:** **Deception** on the endpoint: realistic decoy bookmarks, cookies, sessions and passwords that raise a high-fidelity alert when touched `[V: DS-ZCC]`.
 - **AGT-010 (S):** Agent-embedded digital experience probes (see 9).
 - **AGT-011 (M):** Agent performance budget: under 3% sustained CPU and under 200 MB RSS on a reference laptop `[I: engineering target, not a Zscaler figure]`.
@@ -166,8 +166,8 @@ Parity source: ZPA product page, About Access Policy help page, US 11,652,797, l
 - **ZPA-024 (M):** Top-down, first-match evaluation using the most specific application segment, with explicit rule order `[V]`.
 - **ZPA-025 (M):** Boolean operators between criteria, with behaviour documented unambiguously. (Zscaler's own pages differ on OR/AND defaults for posture sets, so SMB-ZTX must pick one and test it.)
 - **ZPA-026 (M):** Rule copy, usage view and per-rule hit counts `[V: copy and "policy usage details" exist]`.
-- **ZPA-027 (S):** Time-based access and just-in-time access with an approval workflow, via Slack/Teams/email approver `[V: "Require Approval" exists; the workflow is `[I]`]`.
-- **ZPA-028 (S):** Policy simulation: show who would lose access before a change is applied `[I]`.
+- **ZPA-027 (M):** Time-based access and just-in-time access with an approval workflow, via Slack/Teams/email approver `[V: "Require Approval" exists; the workflow is `[I]`]`.
+- **ZPA-028 (M):** Policy simulation: show who would lose access before a change is applied `[I]`.
 - **ZPA-029 (M):** Additional policy types beyond access: timeout, client forwarding, and inspection policies `[I: names from general product knowledge]`.
 
 ### 5.4 Connection stitching
@@ -187,13 +187,13 @@ Parity source: ZPA product page, About Access Policy help page, US 11,652,797, l
 - **ZPA-052 (M), new in 0.2:** **User portal**: one web portal where users reach authorised apps and privileged consoles `[V: DS-ZPA]`.
 - **ZPA-053 (M), new in 0.2:** **Continuous health monitoring** of all apps, and **log streaming** to SIEM, in the base tier `[V: DS-ZPA]`.
 - **ZPA-054 (S), new in 0.2:** **Source IP anchoring**: selectively forward app traffic from a known IP to destination servers `[V: DS-ZPA]`.
-- **ZPA-055 (S), new in 0.2:** Browser access for unmanaged devices backed by **cloud browser isolation** (pixels only), with isolation policy over copy/paste, print and upload/download, and a Chrome Enterprise Browser posture integration `[V: DS-ZPA]`.
+- **ZPA-055 (M), new in 0.2:** Browser access for unmanaged devices backed by **cloud browser isolation** (pixels only), with isolation policy over copy/paste, print and upload/download, and a Chrome Enterprise Browser posture integration `[V: DS-ZPA]`.
 - **ZPA-056 (M), new in 0.2:** Connector and edge **platform support**: App Connector on AWS, GCP, Azure, Nutanix, VMware, OpenShift, Docker, Red Hat. Private service edge on the same minus OpenShift. Private cloud controller on AWS, Azure, VMware, Red Hat `[V: DS-ZPA]`. SMB subset for v1: AWS, Azure, GCP, VMware, Docker.
 - **ZPA-057 (M), new in 0.2:** **Autonomous user-to-app segmentation**: discover apps by domain name and IP subnet, ML recommendations trained on access patterns, and live insights `[V: DS-ZPA]`. Strengthens ZPA-021.
 - **ZPA-058 (M), new in 0.2:** **Risk-based policy engine** that continuously revalidates access on user, device, content and application risk `[V: DS-ZPA]`.
 - **ZPA-042 (M):** **Privileged remote access**: clientless RDP, SSH, VNC to production systems for staff and third parties, with session recording `[V: capability named; recording is `[I]`]`.
-- **ZPA-043 (S):** **Private service edge**: on-premises broker so in-office users reach local apps without a cloud hairpin `[V]`. Detail from DS-PSE and RA-PSE (new in 0.3): single-tenant, customer-hosted but vendor-managed, delivered as a lightweight VM or RPM, on-premises or in a public cloud. It registers with the cloud, downloads policy and **caches path-selection decisions**. It **caches access policies for weeks** so access survives an internet outage. Reference sizing: **4 CPU cores, 16 GB disk, 1 NIC, 500 Mbps maximum throughput per instance**, scaling by adding instances. It also serves remote users in countries with no public PoP, and customers whose regulation forbids cloud-hosted brokering. Admins can use the private edge and the cloud edge together, with automatic best-path choice `[V]`. Policy semantics move from source-IP-to-destination-IP to **user-to-hostname**, which is the main SMB selling point for removing internal firewalls.
-- **ZPA-044 (S):** **Business continuity**: policy-enforced access during outages of the broker, via a local cached mode `[V: capability named]`.
+- **ZPA-043 (M):** **Private service edge**: on-premises broker so in-office users reach local apps without a cloud hairpin `[V]`. Detail from DS-PSE and RA-PSE (new in 0.3): single-tenant, customer-hosted but vendor-managed, delivered as a lightweight VM or RPM, on-premises or in a public cloud. It registers with the cloud, downloads policy and **caches path-selection decisions**. It **caches access policies for weeks** so access survives an internet outage. Reference sizing: **4 CPU cores, 16 GB disk, 1 NIC, 500 Mbps maximum throughput per instance**, scaling by adding instances. It also serves remote users in countries with no public PoP, and customers whose regulation forbids cloud-hosted brokering. Admins can use the private edge and the cloud edge together, with automatic best-path choice `[V]`. Policy semantics move from source-IP-to-destination-IP to **user-to-hostname**, which is the main SMB selling point for removing internal firewalls.
+- **ZPA-044 (M):** **Business continuity**: policy-enforced access during outages of the broker, via a local cached mode `[V: capability named]`.
 - **ZPA-045 (S):** **Extranet/partner app access** to apps in a partner's network without network merging `[V]`.
 - **ZPA-046 (M):** **B2B federation:** a guest partner admin creates rules for shared access to the host tenant's applications `[V: help page]`.
 - **ZPA-047 (C):** Workload-to-workload segmentation across clouds `[V]`.
@@ -272,13 +272,13 @@ Evaluation order from Zscaler's ZIA policy leading practices `[V: search summary
 - **ZIA-021 (M):** Advanced threat protection: malware, ransomware, supply-chain attacks and phishing, with policies set against the organisation's risk tolerance `[V: DS-ZIA]`. Botnet/C2 and cryptomining specifics remain `[I]`.
 - **ZIA-022 (M):** Cloud IPS across all ports and protocols, working across firewall, sandbox, DLP and CASB, with **custom IPS signatures** for targeted attacks `[V: DS-ZIA]`.
 - **ZIA-022a (M), new in 0.2:** **DNS security**: route suspicious C2 connections to deep inspection, and block DNS requests to known-bad destinations, on all ports and protocols `[V: DS-ZIA]`.
-- **ZIA-022b (S), new in 0.2:** **Traffic capture**: capture decrypted traffic by policy criteria for forensics, with no extra appliance `[V: DS-ZIA]`.
-- **ZIA-022c (S), new in 0.2:** **Correlated threat insights**: alerts correlated with threat score, affected asset and severity `[V: DS-ZIA]`.
-- **ZIA-022d (S), new in 0.2:** **Application isolation** for agentless unmanaged-device access to SaaS, cloud and private apps, with copy/paste, upload/download and print control `[V: DS-ZIA]`.
+- **ZIA-022b (M), new in 0.2:** **Traffic capture**: capture decrypted traffic by policy criteria for forensics, with no extra appliance `[V: DS-ZIA]`.
+- **ZIA-022c (M), new in 0.2:** **Correlated threat insights**: alerts correlated with threat score, affected asset and severity `[V: DS-ZIA]`.
+- **ZIA-022d (M), new in 0.2:** **Application isolation** for agentless unmanaged-device access to SaaS, cloud and private apps, with copy/paste, upload/download and print control `[V: DS-ZIA]`.
 - **ZIA-022e (C), new in 0.2:** **IoT device visibility**: automatic discovery and ML classification of IoT devices, servers and unmanaged devices `[V: DS-ZIA]`.
 - **ZIA-022f (S), new in 0.2:** **Post-quantum cryptography visibility**: inspect and report on classical and PQC traffic, including "harvest now, decrypt later" exposure `[V: DS-ZIA; claim is Zscaler's]`.
 - **ZIA-023 (M):** Cloud sandbox for unknown files with AI-driven instant verdicts, and large-file sandboxing `[V: product page mentions "sandboxing code and unknown or large files with instant AI-verdicts"]`.
-- **ZIA-024 (S):** Browser isolation for risky or uncategorised sites `[V: search result mentions a file isolated on a remote browser]`.
+- **ZIA-024 (M):** Browser isolation for risky or uncategorised sites `[V: search result mentions a file isolated on a remote browser]`.
 - **ZIA-025 (S):** Threat intelligence feed updates pushed to enforcement nodes in near real time `[V: central authority distributes threat updates]`.
 
 ### 6.4 TLS inspection design
@@ -286,10 +286,10 @@ Evaluation order from Zscaler's ZIA policy leading practices `[V: search summary
 Parity source: US 11,750,405 `[V]`.
 
 - **ZIA-030 (M):** Man-in-the-middle interception proxy that terminates and re-establishes TLS, using a per-tenant CA `[V]`.
-- **ZIA-031 (S):** Alternative **handshake-snooping** mode for apps with certificate pinning, which derives keys from the observed handshake and inspects traffic without breaking the tunnel `[V: patent description]`. **Patent risk: high. Needs counsel.**
+- **ZIA-031 (M):** Alternative **handshake-snooping** mode for apps with certificate pinning, which derives keys from the observed handshake and inspects traffic without breaking the tunnel `[V: patent description]`. **Patent risk: high. Needs counsel.**
 - **ZIA-032 (M):** Automatic exemption lists for pinned apps, banking and health categories, with admin override `[I]`.
 - **ZIA-033 (M):** Automated trust of the tenant CA on managed devices (MDM profile, agent-installed) `[I]`.
-- **ZIA-034 (S):** Automated inspection coverage for 30+ developer tools (git, package managers, container registries, CLIs), which otherwise break on custom CAs `[V: product page mentions 30+ dev tools]`.
+- **ZIA-034 (M):** Automated inspection coverage for 30+ developer tools (git, package managers, container registries, CLIs), which otherwise break on custom CAs `[V: product page mentions 30+ dev tools]`.
 
 ### 6.5 Data protection
 
@@ -298,8 +298,8 @@ Parity source: US 11,750,405 `[V]`.
 - **DATA-002a (M), new in 0.2:** **Tenancy restriction** (allow only the corporate tenant of a SaaS app) and **Shadow IT report** `[V: DS-ZIA Data Protection Standard]`.
 - **DATA-003 (S):** Cloud (IaaS) posture checks `[I]`.
 - **DATA-004 (M):** Generative AI controls: block or allow AI apps by category, real-time inspection of prompts (Zscaler cites Microsoft Copilot inspection) `[V]`.
-- **DATA-005 (S):** Endpoint DLP and USB/removable media control through the agent `[I]`.
-- **DATA-006 (S):** Email DLP and exact data match / index document match `[I]`.
+- **DATA-005 (M):** Endpoint DLP and USB/removable media control through the agent `[I]`.
+- **DATA-006 (M):** Email DLP and exact data match / index document match `[I]`.
 - **DATA-SOV (S):** Data and content sovereignty: egress NAT, geolocalised content, in-country logging `[V: three features named on product page]`.
 
 ---
@@ -308,9 +308,9 @@ Parity source: US 11,750,405 `[V]`.
 
 Zscaler is positioning for the AI era (ZIA mentions Copilot prompt inspection and dev-tool inspection) `[V]`. For P2 customers the following are strongly recommended:
 
-- **AI-001 (S):** Per-tool allow lists for AI coding assistants and agents, identity-bound to the human operator.
-- **AI-002 (S):** Agent-to-resource access through the same broker as human access: scoped, short-lived, logged `[I]`.
-- **AI-003 (S):** Prompt and response DLP for sanctioned AI tools.
+- **AI-001 (M):** Per-tool allow lists for AI coding assistants and agents, identity-bound to the human operator.
+- **AI-002 (M):** Agent-to-resource access through the same broker as human access: scoped, short-lived, logged `[I]`.
+- **AI-003 (M):** Prompt and response DLP for sanctioned AI tools.
 - **AI-004 (C):** Per-agent audit trail linking prompts, tool calls, and network access.
 
 ---
@@ -328,9 +328,9 @@ Zscaler is positioning for the AI era (ZIA mentions Copilot prompt inspection an
 
 Parity source: product page lists "Digital Experience Monitoring" `[V]`. Details `[I]`.
 
-- **DEX-001 (S):** Per-user and per-app experience score from agent probes (web, network path, device health).
-- **DEX-002 (S):** Hop-by-hop path analysis from device to app, separating device, Wi-Fi, ISP, cloud and app causes.
-- **DEX-003 (S):** Device health: CPU, memory, disk, Wi-Fi signal.
+- **DEX-001 (M):** Per-user and per-app experience score from agent probes (web, network path, device health).
+- **DEX-002 (M):** Hop-by-hop path analysis from device to app, separating device, Wi-Fi, ISP, cloud and app causes.
+- **DEX-003 (M):** Device health: CPU, memory, disk, Wi-Fi signal.
 - **DEX-004 (C):** Synthetic probes of SaaS and private apps from connectors.
 - **DEX-005 (C):** AI-assisted root-cause summary suitable for a non-expert admin.
 
@@ -360,7 +360,7 @@ Parity source: product page lists "Digital Experience Monitoring" `[V]`. Details
 - **ADM-006b (M), new in 0.2:** Logs are **never written to disk** in the inspection path, with granular control over where logging happens, read-only roles, and **username anonymisation/obfuscation** `[V: DS-ZIA]`. Refines NFR-033.
 - **ADM-007 (M):** "Forensically complete" logging of every transaction `[V: product page claim]`, with a documented field list.
 - **ADM-008 (S):** Scheduled reports (executive, compliance) as PDF/email.
-- **ADM-009 (S):** Weekly "security digest" for P1 users in plain language.
+- **ADM-009 (M):** Weekly "security digest" for P1 users in plain language.
 - **ADM-010 (M):** **MSP console:** multi-tenant parent/child hierarchy, policy templates, cross-tenant dashboards, delegated admin, white-label branding, usage-based billing export `[I]`.
 
 ---
@@ -448,7 +448,7 @@ Implication: Zscaler's enterprise packaging has **many 500-user minimums**, plus
 - **SMB-001 (M):** Setup wizard that connects an IdP, installs the agent through MDM or an email link, and enables a safe default policy.
 - **SMB-002 (M):** "Safe defaults" policy pack: block known-bad categories, enable TLS inspection with sensible exemptions, block unsanctioned file-sharing uploads, require posture for sensitive apps.
 - **SMB-003 (M):** Plain-language alerts with a single recommended action each.
-- **SMB-004 (S):** Cyber-insurance questionnaire evidence export (MFA, EDR, segmentation, logging).
+- **SMB-004 (M):** Cyber-insurance questionnaire evidence export (MFA, EDR, segmentation, logging).
 - **SMB-005 (S):** Free internet exposure scan to seed onboarding (Zscaler offers an "Internet Threat Exposure Analysis" `[V]`).
 
 ---
@@ -530,6 +530,26 @@ Known from search result summaries only (pages not opened in full):
 - **0.2** Read the ZIA and ZPA data sheets. Corrected: ZPA inspection design (ZPA-031a), availability (NFR-010, 99.99% to 99.999%), log retention (ADM-006, 30 days to 6 months). Added: ZPA-050 to ZPA-058, ZIA-017 to ZIA-019, ZIA-022 to ZIA-022f, DATA-002a, ADM-006a/b, NFR-000, and section 13.1 (packaging and seat minimums).
 - **0.3** Read the firewall, bandwidth control, Client Connector and Private Service Edge sheets. Corrected minimum client OS versions (AGT-001). Added: AGT-001a to AGT-001d, AGT-012 to AGT-015, sections 6.1a, 6.1b and 6.1c, expanded ZPA-043, SMB-006 and SMB-007.
 - **0.4** Added `COMPETITIVE-ANALYSIS.md` (Cato Networks, Palo Alto Networks) and section 18 below. PDFs now live in the git-ignored `.doc/` folder.
+- **0.5** Product decision: 34 requirements promoted from **S** to **M** (see 17.1). Parity-matrix rows for isolation, DEX and risk-based policy follow. No requirement was demoted.
+
+### 17.1 Promoted to Must in 0.5
+
+| Group | IDs |
+|---|---|
+| Inspection on top of the proxy | ZIA-022b, ZIA-022c, ZIA-022d, ZIA-031, ZIA-034, ZIA-040 |
+| Data protection | DATA-005, DATA-006, AGT-014 |
+| Private access extras | ZPA-027, ZPA-043, ZPA-044, ZPA-055, ZPA-074 |
+| Browser isolation and unmanaged devices | ZIA-024, BYOD-001, BYOD-002, BYOD-003, BYOD-004 |
+| Risk and adaptive policy | ARCH-007, ZPA-072, ZPA-073 |
+| Digital experience | DEX-001, DEX-002, DEX-003 |
+| AI controls | AI-001, AI-002, AI-003 |
+| SMB operations | ADM-009, ADM-020, OPS-004, OPS-005, SMB-004, ZPA-028 |
+
+Consequences to carry into the other documents:
+
+- **ZIA-040 (TLS inspection by default) is now Must**, so DESIGN open question 4 is closed in favour of decryption. The privacy and per-tenant CA work (ARCH-021) moves from "deferred" to "required before first customer".
+- Several of these are the hardest items in the spec (single-pass inspection, DLP, risk scoring). Making them Must raises cost and time substantially. The roadmap phasing, not the priority, now carries the sequencing.
+- RB1 scope does **not** change. It remains a proof of the core loop, and it now explicitly leaves out Must items. Every Must item outside RB1 is tracked in ROADMAP.md.
 
 ---
 
@@ -556,20 +576,20 @@ Detail, sources and research limits are in `COMPETITIVE-ANALYSIS.md`. These are 
 
 - **ZPA-070 (M) continuous trust assessment.** Re-score a session when device posture, location or network changes (for example public Wi-Fi, or a session resumed from a new device) `[V: Palo Alto blog]`. Zscaler's equivalent is ZPA-058.
 - **ZPA-071 (M) risk-based MFA step-up.** Ask for a stronger factor when the user opens a more sensitive app or the risk score rises, not only at sign-in `[V: Palo Alto blog]`.
-- **ZPA-072 (S) fast group reaction.** Policy reacts to risk before the identity provider's group membership changes (for example drop a user into a "restricted" group in the product) `[V: Palo Alto blog, "dynamic user group monitoring"]`.
-- **ZPA-073 (S) enforce at the first packet** to prevent lateral movement before a connection opens `[V: Palo Alto blog]`.
-- **ZPA-074 (S) sub-application control.** Rules on the application and on parts of it (for example allow reading an admin console, block its upload function) using app identification `[V: Palo Alto "app and sub-app"; marketing claim, mechanics not read]`.
-- **ZIA-040 (S) credential-theft prevention.** Detect a corporate password being typed into an untrusted site and block it, by comparing entered credentials with corporate ones `[V: Palo Alto blog]`. High value for phishing, which is the top SMB risk.
-- **ADM-020 (S) change modelling.** Before saving a policy change, show who would gain or lose access and which flows would break `[V: Palo Alto AIOps "change-management modelling and policy analysis"]`. Refines ZPA-028.
+- **ZPA-072 (M) fast group reaction.** Policy reacts to risk before the identity provider's group membership changes (for example drop a user into a "restricted" group in the product) `[V: Palo Alto blog, "dynamic user group monitoring"]`.
+- **ZPA-073 (M) enforce at the first packet** to prevent lateral movement before a connection opens `[V: Palo Alto blog]`.
+- **ZPA-074 (M) sub-application control.** Rules on the application and on parts of it (for example allow reading an admin console, block its upload function) using app identification `[V: Palo Alto "app and sub-app"; marketing claim, mechanics not read]`.
+- **ZIA-040 (M) credential-theft prevention.** Detect a corporate password being typed into an untrusted site and block it, by comparing entered credentials with corporate ones `[V: Palo Alto blog]`. High value for phishing, which is the top SMB risk.
+- **ADM-020 (M) change modelling.** Before saving a policy change, show who would gain or lose access and which flows would break `[V: Palo Alto AIOps "change-management modelling and policy analysis"]`. Refines ZPA-028.
 
 ### 18.4 Unmanaged devices: a secure workspace browser
 
 The most distinctive idea for a business with contractors and personal laptops and **no mobile device management**.
 
-- **BYOD-001 (S).** A managed browser (or browser profile) that gives an isolated corporate workspace on an unmanaged device, installable in minutes, with no agent and no MDM `[V: Palo Alto Prisma Access Browser white paper]`.
-- **BYOD-002 (S).** Last-mile data controls: block screenshots, camera and microphone, mask sensitive fields, watermark, encrypt downloaded files `[V: same]`.
-- **BYOD-003 (S).** Last-mile access controls: login restrictions, MFA, admin approval for sensitive actions `[V: same]`.
-- **BYOD-004 (S).** Re-check device posture about every 90 seconds and defend against malicious extensions `[V: same; the 90-second figure is Palo Alto's]`.
+- **BYOD-001 (M).** A managed browser (or browser profile) that gives an isolated corporate workspace on an unmanaged device, installable in minutes, with no agent and no MDM `[V: Palo Alto Prisma Access Browser white paper]`.
+- **BYOD-002 (M).** Last-mile data controls: block screenshots, camera and microphone, mask sensitive fields, watermark, encrypt downloaded files `[V: same]`.
+- **BYOD-003 (M).** Last-mile access controls: login restrictions, MFA, admin approval for sensitive actions `[V: same]`.
+- **BYOD-004 (M).** Re-check device posture about every 90 seconds and defend against malicious extensions `[V: same; the 90-second figure is Palo Alto's]`.
 - **BYOD-005 (C).** Inspect browser traffic that proxies miss (QUIC, ECH, large files) because inspection happens inside the browser `[V: same]`.
 
 This overlaps ZPA-055 (isolated browser access) and ZIA-022d (application isolation). The difference is that the browser runs on the user's device, not as streamed pixels. Both models should be evaluated. A secure browser is cheaper to run (no remote rendering farm) but needs a native app per OS.
@@ -579,8 +599,8 @@ This overlaps ZPA-055 (isolated browser access) and ZIA-022d (application isolat
 - **OPS-001 (M) three management models:** self-service, co-managed (customer delegates changes or troubleshooting to the vendor or partner), and fully managed by a partner `[V: Cato solution brief]`. Maps to personas P1 and P3.
 - **OPS-002 (M) managed detection and response** offered by the vendor or MSP, with a monthly plain-language report of threats, risk levels and affected users `[V: Cato "Managed XDR" and monthly report]`.
 - **OPS-003 (S) named customer success contact** for the first 90 days `[V: Cato "Customer Success Engineer"]`.
-- **OPS-004 (S) AI-written incident stories** that correlate flow, device and identity signals into a short, ordered investigation with guided remediation, using playbooks `[V: Cato XDR; Gen-AI claim is marketing]`. For SMB the first version can be rule-based.
-- **OPS-005 (S) intent-driven policy UI** and **autonomous policy** suggestions: the product proposes rules from observed traffic and the admin accepts or rejects `[V: Cato "autonomous policies, automated posture management, intent-driven UI"; mechanics unread]`. Complements ZPA-057.
+- **OPS-004 (M) AI-written incident stories** that correlate flow, device and identity signals into a short, ordered investigation with guided remediation, using playbooks `[V: Cato XDR; Gen-AI claim is marketing]`. For SMB the first version can be rule-based.
+- **OPS-005 (M) intent-driven policy UI** and **autonomous policy** suggestions: the product proposes rules from observed traffic and the admin accepts or rejects `[V: Cato "autonomous policies, automated posture management, intent-driven UI"; mechanics unread]`. Complements ZPA-057.
 - **OPS-006 (S) SaaS security posture management:** continuous check of Microsoft 365, Google Workspace and similar settings against a known framework, with one-click fixes `[V: Palo Alto SSPM]`. Refines DATA-003.
 - **OPS-007 (S) explicit-proxy mode** so a customer can move from an existing proxy or PAC setup with no network change `[V: Palo Alto]`. Matches AGT-007.
 
