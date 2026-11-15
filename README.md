@@ -213,6 +213,21 @@ Risk: `GET /v1/risk` lists users with a 0 to 100 score and the reasons. A rule c
 
 Console: open `https://localhost:8443/` (the admin listener) and sign in with the admin token. It opens in a simple mode with three screens (alerts, users, apps, with who can reach each app in words); "Show all screens" adds access decisions, incidents, approvals, inspection, a policy simulator, reports and an investigation page. Each role sees only the screens it may use. It was walked through by hand in Chrome against sample data, but not on phones, other browsers or with assistive technology: report anything odd. To look at it without deploying anything, run `go run ./cmd/ztx-demo` (lab only: plain HTTP, loopback only, sample data in memory; it prints a token).
 
+Screenshots of the console in its dark theme (it follows the browser's light or dark setting). They were taken from the lab demo (`ztx-demo`), so the names, alerts and numbers are sample data, not a real organisation.
+
+**Simple mode** (what a small business sees first: alerts, users, apps)
+
+![Alerts: open alerts in plain language with one action each, and the weekly summary](docs/screenshots/01-alerts.png)
+![Users: people, devices, state, risk and health](docs/screenshots/02-users.png)
+![Apps: who can reach each app, in words](docs/screenshots/03-apps.png)
+
+**Advanced mode** ("Show all screens")
+
+![Access decisions with search](docs/screenshots/04-access-advanced.png)
+![Incidents: several signals about one person put together](docs/screenshots/05-incidents-advanced.png)
+![Policy: edit a draft and simulate it against the last 7 days](docs/screenshots/06-policy-advanced.png)
+
+
 Alert emails: start `ztx-cp` with `--smtp-addr host:port --smtp-from alerts@yourdomain` (password in `ZTX_SMTP_PASSWORD`), then `PUT /v1/alert-settings` with `{"emails":["owner@yourdomain"]}`.
 
 Weekly digest: `GET /v1/digest?days=7&format=text` returns the plain-language summary; with SMTP configured it is emailed to the same recipients every Monday 08:00 UTC. Search recent access decisions with `GET /v1/decisions?user=&app=&action=&since=`.
