@@ -145,6 +145,8 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "PUT /v1/privacy", sensitive, a.putPrivacy)
 	a.route(m, "GET /v1/privacy", read, a.getPrivacy)
 	a.route(m, "GET /v1/privacy/reveal", admins, a.revealUser)
+	a.route(m, "GET /v1/privacy/subject", admins, a.exportSubject)
+	a.route(m, "DELETE /v1/privacy/subject", admins, a.eraseSubject)
 	a.route(m, "GET /v1/cloud-apps", read, a.listCloudApps)
 	a.route(m, "PUT /v1/cloud-apps/{id}", write, a.putCloudApp)
 	a.route(m, "DELETE /v1/cloud-apps/{id}", write, a.deleteCloudApp)

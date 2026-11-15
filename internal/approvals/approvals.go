@@ -6,6 +6,7 @@ package approvals
 import (
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -105,4 +106,22 @@ func (s *Store) Decide(tenant string, id int, st State, by string, until, now ti
 		}
 	}
 	return Request{}, ErrNotFound
+}
+
+// Erase replaces a person's name in the tenant's requests with repl and returns how many it changed.
+func (s *Store) Erase(tenant string, ids []string, repl string) int {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[strings.ToLower(id)] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for _, r := range s.byT[tenant] {
+		if set[strings.ToLower(r.User)] {
+			r.User = repl
+			n++
+		}
+	}
+	return n
 }

@@ -5,6 +5,7 @@ package alerts
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,4 +198,38 @@ func (e *Engine) List(tenant string, openOnly bool) []Alert {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	return out
+}
+
+// EraseUser removes the alerts about a person, and the counts of their refusals, and returns how many
+// alerts it removed. Alerts name the person in their text, so they are removed, not rewritten.
+func (e *Engine) EraseUser(tenant string, ids []string) int {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[strings.ToLower(id)] = true
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	n := 0
+	kept := e.alerts[:0]
+	for _, a := range e.alerts {
+		if a.Tenant == tenant && a.User != "" && set[strings.ToLower(a.User)] {
+			n++
+			continue
+		}
+		kept = append(kept, a)
+	}
+	e.alerts = kept
+	for k, a := range e.open {
+		if a.Tenant == tenant && a.User != "" && set[strings.ToLower(a.User)] {
+			delete(e.open, k)
+		}
+	}
+	for k := range e.denies {
+		for id := range set {
+			if strings.HasPrefix(strings.ToLower(k), tenant+"|"+id+"|") {
+				delete(e.denies, k)
+			}
+		}
+	}
+	return n
 }

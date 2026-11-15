@@ -342,3 +342,58 @@ func contains(l []string, s string) bool {
 	}
 	return false
 }
+
+// Redact replaces a person's name with repl in every archived record of the tenant, rewriting only the
+// day files that hold them (each through a temporary file that replaces the old one), and returns the
+// number of records and files changed.
+func (a *Archive) Redact(tenant string, ids []string, repl string) (records, files int, err error) {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[strings.ToLower(id)] = true
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	dir := filepath.Join(a.Dir, tenantDir(tenant))
+	for _, name := range a.days(tenant) {
+		path := filepath.Join(dir, name)
+		b, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return records, files, rerr
+		}
+		var out []byte
+		changed := 0
+		for _, line := range strings.SplitAfter(string(b), "\n") {
+			if line == "" {
+				continue
+			}
+			var r broker.Record
+			if strings.HasSuffix(line, "\n") && json.Unmarshal([]byte(line), &r) == nil && r.Tenant == tenant && set[strings.ToLower(r.User)] {
+				r.User = repl
+				nb, merr := json.Marshal(r)
+				if merr != nil {
+					return records, files, merr
+				}
+				line = string(nb) + "\n"
+				changed++
+			}
+			out = append(out, line...)
+		}
+		if changed == 0 {
+			continue
+		}
+		if f := a.files[path]; f != nil { // the open handle points at the old file
+			f.Close()
+			delete(a.files, path)
+		}
+		tmp := path + ".tmp"
+		if werr := os.WriteFile(tmp, out, 0o600); werr != nil {
+			return records, files, werr
+		}
+		if rerr := os.Rename(tmp, path); rerr != nil {
+			return records, files, rerr
+		}
+		records += changed
+		files++
+	}
+	return records, files, nil
+}

@@ -271,3 +271,21 @@ func networkStage(e Entry) (cause, explain string) {
 	}
 	return "network", fmt.Sprintf("%s's connection to the enforcement node is slow%s: look at their Wi-Fi or internet. (No stage measurements: set an anchor for the agent to tell the internet provider from the node.)", e.User, slowBy)
 }
+
+// Erase removes the health reports of a person's devices and returns how many it removed.
+func (s *Store) Erase(tenant string, ids []string) int {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[strings.ToLower(id)] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for k, e := range s.m {
+		if e.Tenant == tenant && set[strings.ToLower(e.User)] {
+			delete(s.m, k)
+			n++
+		}
+	}
+	return n
+}

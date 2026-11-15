@@ -2638,6 +2638,62 @@
         ]
       }
     },
+    "/v1/privacy/subject": {
+      "delete": {
+        "operationId": "eraseSubject",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Erase subject",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      },
+      "get": {
+        "operationId": "exportSubject",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Export subject",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
     "/v1/risk": {
       "get": {
         "operationId": "getRisk",

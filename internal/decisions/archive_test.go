@@ -261,3 +261,48 @@ func TestArchiveConcurrentUse(t *testing.T) { // AGT-026
 		t.Fatalf("%d + %d records", len(r0.Records), len(r1.Records))
 	}
 }
+
+func TestRedactRewritesOnlyWhatMentionsThePersonAndKeepsAppending(t *testing.T) { // AGT-037 (NFR-030)
+	a := newArchive(t, day(20))
+	a.Append(arec("t1", "alice", "allow", day(1)))
+	a.Append(arec("t1", "bob", "allow", day(1)))
+	a.Append(arec("t1", "Alice@Example.com", "deny", day(2)))
+	a.Append(arec("t1", "bob", "allow", day(3))) // a day without alice
+	a.Append(arec("t2", "alice", "allow", day(1)))
+	untouched := string(mustRead(t, a.dayFile("t1", day(3))))
+	recs, files, err := a.Redact("t1", []string{"alice", "alice@example.com"}, "erased-1")
+	if err != nil || recs != 2 || files != 2 {
+		t.Fatalf("%d records in %d files, %v", recs, files, err)
+	}
+	r, _ := a.Query("t1", Query{Limit: 100})
+	users := map[string]int{}
+	for _, x := range r.Records {
+		users[x.User]++
+	}
+	if users["erased-1"] != 2 || users["bob"] != 2 || users["alice"] != 0 || users["Alice@Example.com"] != 0 {
+		t.Fatalf("%v", users)
+	}
+	for _, d := range []int{1, 2} {
+		if strings.Contains(strings.ToLower(string(mustRead(t, a.dayFile("t1", day(d))))), "alice") {
+			t.Fatalf("a name is still on disk in day %d", d)
+		}
+	}
+	if string(mustRead(t, a.dayFile("t1", day(3)))) != untouched {
+		t.Fatal("a file that did not mention the person must not be rewritten")
+	}
+	// another tenant's person of the same name is untouched
+	if r2, _ := a.Query("t2", Query{Limit: 10}); len(r2.Records) != 1 || r2.Records[0].User != "alice" {
+		t.Fatalf("%+v", r2.Records)
+	}
+	// the archive goes on working: an append after the rewrite lands in the new file
+	a.Append(arec("t1", "carol", "allow", day(1)))
+	if r3, _ := a.Query("t1", Query{Limit: 100, User: "carol"}); len(r3.Records) != 1 {
+		t.Fatal("an append after a redaction was lost")
+	}
+	if entries, _ := os.ReadDir(filepath.Dir(a.dayFile("t1", day(1)))); len(entries) != 3 {
+		t.Fatalf("a temporary file was left behind: %v", entries)
+	}
+	if recs, files, _ := a.Redact("t1", []string{"nobody"}, "x"); recs != 0 || files != 0 {
+		t.Fatal("redacting a person who is not there must change nothing")
+	}
+}

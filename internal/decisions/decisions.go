@@ -4,6 +4,7 @@
 package decisions
 
 import (
+	"strings"
 	"sync"
 	"time"
 
@@ -125,4 +126,23 @@ func (s *Store) Since(tenant string, t time.Time) []Entry {
 		}
 	}
 	return out
+}
+
+// Erase replaces a person's name in the live view with repl and returns how many records it changed.
+func (s *Store) Erase(tenant string, ids []string, repl string) int {
+	set := map[string]bool{}
+	for _, id := range ids {
+		set[strings.ToLower(id)] = true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	l := s.data[tenant]
+	for i := range l {
+		if set[strings.ToLower(l[i].User)] {
+			l[i].User = repl
+			n++
+		}
+	}
+	return n
 }
