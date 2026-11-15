@@ -111,8 +111,21 @@ func (p *Proxy) Server(cert tls.Certificate) *http.Server {
 }
 
 // blocked reports addresses the proxy must never connect to.
+// addrOf is the client's address of a request that reached this proxy.
+func addrOf(r *http.Request) net.Addr {
+	if ap, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+		return net.TCPAddrFromAddrPort(ap)
+	}
+	return nil
+}
+
 func blocked(a netip.Addr) bool {
 	a = a.Unmap()
+	if a.Is6() { // an IPv4 address carried inside an IPv6 one (NAT64, 6to4) is judged as that IPv4 address
+		if v4, ok := embeddedV4(a); ok && blocked(v4) {
+			return true
+		}
+	}
 	return a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() ||
 		a.IsUnspecified() || a.IsMulticast() || a == netip.MustParseAddr("169.254.169.254") ||
 		netip.MustParsePrefix("100.64.0.0/10").Contains(a) || netip.MustParsePrefix("fc00::/7").Contains(a)
@@ -202,7 +215,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ref := refID()
 	ws := id.Role == pki.RoleWorkspace
 	rec := broker.Record{Workspace: ws, TS: time.Now().UTC(), Tenant: id.Tenant, Kind: "web", User: id.Subject, Device: id.Device,
-		Target: net.JoinHostPort(host, strconv.Itoa(port)), EN: p.Name, Event: "open"}
+		Target: net.JoinHostPort(host, strconv.Itoa(port)), EN: p.Name, Event: "open", Src: broker.SourceOf(addrOf(r))}
 	if refuse, note := broker.FailureGate(p.State, id.Tenant, p.SinkHealthy); refuse != "" {
 		rec.Action, rec.Reason, rec.Ref = "deny", refuse, ref
 		p.Log(rec)
@@ -220,7 +233,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		d = policy.Decision{Action: policy.Deny, Reason: "no-policy"}
 	} else {
 		cat := p.catalog(id.Tenant)
-		req := policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(), Workspace: ws,
+		req := policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(), Workspace: ws, SrcIP: rec.Src,
 			Device: policy.Device{ID: id.Device}, CloudApps: cat.AppsFor(host)}
 		if r.Method != http.MethodConnect && r.URL != nil { // a plain request: its method and path are in the clear
 			req.CloudActions = cat.ActionsFor(host, r.Method, r.URL.Path)
@@ -538,4 +551,21 @@ func copyBody(w http.ResponseWriter, r io.Reader) {
 			return
 		}
 	}
+}
+
+var (
+	nat64 = netip.MustParsePrefix("64:ff9b::/96")
+	sixto = netip.MustParsePrefix("2002::/16")
+)
+
+// embeddedV4 finds the IPv4 address inside a NAT64 (64:ff9b::/96) or 6to4 (2002::/16) IPv6 address.
+func embeddedV4(a netip.Addr) (netip.Addr, bool) {
+	b := a.As16()
+	switch {
+	case nat64.Contains(a):
+		return netip.AddrFrom4([4]byte{b[12], b[13], b[14], b[15]}), true
+	case sixto.Contains(a):
+		return netip.AddrFrom4([4]byte{b[2], b[3], b[4], b[5]}), true
+	}
+	return netip.Addr{}, false
 }

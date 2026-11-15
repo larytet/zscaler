@@ -13,6 +13,7 @@ import (
 	"github.com/larytet/zscaler/internal/policydiff"
 	"io"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -420,6 +421,8 @@ type dryRunIn struct {
 	Categories []string        `json:"categories"`
 	Posture    *policy.Posture `json:"posture"`
 	Now        *time.Time      `json:"now"`
+	// SrcIP is the address the user would connect from, for rules with a network condition (IPv4 or IPv6).
+	SrcIP string `json:"src_ip"`
 }
 
 func (a *API) dryRun(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
@@ -444,7 +447,15 @@ func (a *API) dryRun(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, er
 	if in.Now != nil {
 		now = *in.Now
 	}
-	d := p.Evaluate(policy.Request{Kind: k, App: in.App, Host: in.Host, Categories: in.Categories, Now: now,
+	var src netip.Addr
+	if in.SrcIP != "" {
+		var perr error
+		if src, perr = netip.ParseAddr(in.SrcIP); perr != nil {
+			return nil, fail(400, "invalid", "src_ip is not an IPv4 or IPv6 address")
+		}
+		src = src.Unmap()
+	}
+	d := p.Evaluate(policy.Request{Kind: k, App: in.App, Host: in.Host, Categories: in.Categories, Now: now, SrcIP: src,
 		User:   policy.User{Email: in.Email, Groups: in.Groups},
 		Device: policy.Device{Posture: in.Posture}})
 	return d, nil // nothing is stored

@@ -66,7 +66,7 @@ These are written as proposals in REQUIREMENTS.md section 20. None is built. The
 | G22 | GAP-REQ-04 | Rate limits and lockout on admin, enrolment and sign-in | done: S45 |
 | G23 | GAP-REQ-05 | Key and certificate rotation and a compromise procedure | partly done: S43 (admin tokens, inspection CA, master key, key status page, a written procedure); rotating the root CA and the policy signing key with an overlap is **not built** |
 | G24 | GAP-REQ-07 | "Person left" in one action with a checklist | done: S40 (first, in the order the product owner chose: 07, 01, 02, 05, then the rest) |
-| G25 | GAP-REQ-06, 08, 09, 10, 11 | Clock accuracy, upgrades and version skew, console accessibility, IPv6, breach notification (should-level) | 06 done: S46; 08 done: S47; 09 done in part: S48; 10, 11 still proposed |
+| G25 | GAP-REQ-06, 08, 09, 10, 11 | Clock accuracy, upgrades and version skew, console accessibility, IPv6, breach notification (should-level) | 06 done: S46; 08 done: S47; 09 done in part: S48; 10 done: S49 (and a bug found: network conditions never matched); 11 still proposed |
 
 ## Not feasible without a new subsystem or an outside party (stays a gap)
 

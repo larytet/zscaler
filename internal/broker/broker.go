@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -174,6 +175,9 @@ type Record struct {
 	Health *devhealth.Snapshot `json:"health,omitempty"`
 	// Capture is set on records of Kind "capture": a kept exchange (ZIA-022b). Never persisted to the node's log file.
 	Capture *Capture `json:"capture,omitempty"`
+	// Src is the address the client connected from, as this node saw it (after any NAT). It is used to
+	// evaluate a rule's network condition and is deliberately not written to the log: an address is personal data.
+	Src netip.Addr `json:"-"`
 	// Inputs to the decision, so that a draft policy can be replayed against history.
 	Groups  []string     `json:"groups,omitempty"`
 	Posture *PostureSnap `json:"posture,omitempty"`
@@ -364,7 +368,7 @@ func (e *EN) handle(raw net.Conn) {
 	case pki.RoleConnector:
 		e.serveConnector(id, sess)
 	case pki.RoleDevice, pki.RoleWorkspace:
-		e.serveDevice(id, certs[0], sess)
+		e.serveDevice(id, certs[0], sess, SourceOf(raw.RemoteAddr()))
 	default:
 		e.Logger.Info("unexpected role", "role", id.Role)
 	}
@@ -412,6 +416,7 @@ func (e *EN) pick(tenant, group string, skip map[*connector]bool) *connector {
 type deviceState struct {
 	mu      sync.Mutex
 	posture *policy.Posture
+	src     netip.Addr // where the device connected from, for network conditions (zero when unknown)
 }
 
 func (d *deviceState) get() *policy.Posture {
@@ -420,8 +425,8 @@ func (d *deviceState) get() *policy.Posture {
 	return d.posture
 }
 
-func (e *EN) serveDevice(id pki.Identity, cert *x509.Certificate, sess *mux.Session) {
-	ds := &deviceState{}
+func (e *EN) serveDevice(id pki.Identity, cert *x509.Certificate, sess *mux.Session, src netip.Addr) {
+	ds := &deviceState{src: src}
 	replay := posture.NewReplay()
 	for {
 		st, meta, err := sess.Accept()
@@ -533,7 +538,7 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		if !ok {
 			u = policy.User{Disabled: true}
 		}
-		return policy.Request{Kind: policy.Private, User: u, App: rq.App, Now: time.Now(), Workspace: id.Role == pki.RoleWorkspace,
+		return policy.Request{Kind: policy.Private, User: u, App: rq.App, Now: time.Now(), Workspace: id.Role == pki.RoleWorkspace, SrcIP: ds.src,
 			Device: policy.Device{ID: id.Device, Revoked: Revoked(e.State, e.Rev, id), Posture: ds.get()}}
 	}
 	d := resolve(e.State, id.Tenant, id.Subject, rq.App, pol.Evaluate(mk()), time.Now())
@@ -705,3 +710,17 @@ func (e *EN) ConnectorCount(tenant, group string) int {
 var ErrNoConn = errors.New("broker: not connected")
 
 func itoa(n int) string { return strconv.Itoa(n) }
+
+// SourceOf turns a connection's remote address into an address a rule can be matched against. IPv6, and
+// IPv4 seen through a dual-stack socket (::ffff:a.b.c.d), come out the same way as plain IPv4. An address
+// that cannot be read gives the zero Addr, which matches no network condition.
+func SourceOf(a net.Addr) netip.Addr {
+	if a == nil {
+		return netip.Addr{}
+	}
+	ap, err := netip.ParseAddrPort(a.String())
+	if err != nil {
+		return netip.Addr{}
+	}
+	return ap.Addr().Unmap().WithZone("")
+}

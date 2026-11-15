@@ -232,3 +232,36 @@ func TestDigestShowsOwnerResetFromTheServer(t *testing.T) { // AGT-043
 		t.Errorf("another tenant's reset leaked into this digest:\n%s", txt)
 	}
 }
+
+// The policy simulator takes the address a user would connect from, IPv4 or IPv6, and refuses a bad one (GAP-REQ-10).
+func TestDryRunWithASourceAddress(t *testing.T) { // AGT-048
+	e := newEnv(t)
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	draft := map[string]any{"default_action": "deny", "rules": []map[string]any{{"id": "office", "priority": 1, "action": "allow",
+		"match": map[string]any{"groups": []string{"fin"}, "apps": []string{"erp"}, "network": map[string]any{"src_cidrs": []string{"203.0.113.0/24", "2001:db8:1::/48"}}}}}}
+	try := func(src string) (int, string) {
+		c, b, _ := e.call("POST", "/v1/policies/private/dry-run", e.adminA, map[string]any{"policy": draft, "groups": []string{"fin"}, "app": "erp", "src_ip": src})
+		var d struct {
+			Action string `json:"Action"`
+			RuleID string `json:"RuleID"`
+		}
+		json.Unmarshal(b, &d)
+		if c != 200 {
+			return c, string(b)
+		}
+		return c, d.Action + "/" + d.RuleID
+	}
+	for src, want := range map[string]string{
+		"203.0.113.77": "allow/office", "2001:db8:1::99": "allow/office", "::ffff:203.0.113.5": "allow/office",
+		"198.51.100.1": "deny/", "2001:db8:2::1": "deny/", "": "deny/", "::1": "deny/",
+	} {
+		if c, got := try(src); c != 200 || got != want {
+			t.Errorf("src %q: %d %s, want %s", src, c, got, want)
+		}
+	}
+	for _, bad := range []string{"not-an-ip", "203.0.113.0/24", "203.0.113.999", "[::1]"} {
+		if c, _ := try(bad); c != 400 {
+			t.Errorf("src %q should be refused: %d", bad, c)
+		}
+	}
+}

@@ -166,7 +166,7 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 			}
 		}
 		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits, UploadFiles: files,
+			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, SrcIP: rec.Src, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits, UploadFiles: files,
 			CloudApps: cat.AppsFor(host), CloudActions: cat.ActionsFor(host, q.Method, q.URL.Path)})
 		rec.Version = pol.Version
 		rec.DLP = hits
@@ -445,7 +445,7 @@ func (p *Proxy) scanResponse(w http.ResponseWriter, resp *http.Response, pol *po
 		return false
 	}
 	d := pol.EvaluateResponse(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-		Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, ResponseDLPHits: hits})
+		Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, SrcIP: base.Src, Inspected: true, ResponseDLPHits: hits})
 	if d.Action != policy.Deny {
 		return false
 	}
@@ -515,7 +515,7 @@ func (p *Proxy) checkDownload(w http.ResponseWriter, resp *http.Response, pol *p
 		return false
 	}
 	d := pol.EvaluateResponse(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-		Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, DownloadFiles: files})
+		Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, SrcIP: base.Src, Inspected: true, DownloadFiles: files})
 	if d.Action != policy.Deny {
 		return false
 	}

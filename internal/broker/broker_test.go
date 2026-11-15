@@ -12,6 +12,7 @@ import (
 	"github.com/larytet/zscaler/test/faults"
 	"io"
 	"net"
+	"net/netip"
 	"runtime"
 	"strings"
 	"sync"
@@ -55,13 +56,14 @@ func (f *fakeState) setUser(tenant string, u policy.User) {
 }
 
 type rig struct {
-	t      *testing.T
-	ca     *pki.CA
-	en     *EN
-	enAddr string
-	st     *fakeState
-	logs   *recLog
-	app    *echoApp
+	t       *testing.T
+	ca      *pki.CA
+	en      *EN
+	enAddr  string
+	st      *fakeState
+	logs    *recLog
+	app     *echoApp
+	appHost string
 }
 
 type recLog struct {
@@ -86,8 +88,8 @@ type echoApp struct {
 	conns atomic.Int64
 }
 
-func newEcho(t *testing.T) *echoApp {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+func newEchoAt(t *testing.T, addr string) *echoApp {
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,15 +112,19 @@ func (a *echoApp) port() int { return a.ln.Addr().(*net.TCPAddr).Port }
 
 func bp(b bool) *bool { return &b }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T) *rig { return newRigAt(t, "127.0.0.1:0", "127.0.0.1", nil) }
+
+// newRigAt builds the rig with the enforcement node listening on enListen and the private app on appHost
+// (an IPv4 or IPv6 literal), and lets a test change the policy before it is compiled.
+func newRigAt(t *testing.T, enListen, appHost string, mutate func(*policy.Policy)) *rig {
 	t.Helper()
 	ca, err := pki.NewCA("test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := newEcho(t)
+	app := newEchoAt(t, net.JoinHostPort(appHost, "0"))
 	st := &fakeState{
-		segs: map[string]Segment{"t1/seg-db": {ID: "seg-db", Group: "site1", Targets: []Target{{Host: "127.0.0.1", Ports: []int{app.port()}}}}},
+		segs: map[string]Segment{"t1/seg-db": {ID: "seg-db", Group: "site1", Targets: []Target{{Host: appHost, Ports: []int{app.port()}}}}},
 		users: map[string]policy.User{
 			"t1/alice": {Subject: "alice", Email: "alice@example.com", Groups: []string{"finance"}},
 			"t1/bob":   {Subject: "bob", Email: "bob@example.com", Groups: []string{"hr"}},
@@ -128,6 +134,9 @@ func newRig(t *testing.T) *rig {
 		ID: "r-fin", Priority: 10, Action: policy.Allow, Reason: "finance reaches db",
 		Match: policy.Match{Groups: []string{"finance"}, Apps: []string{"seg-db"},
 			Posture: &policy.PostureMatch{DiskEncrypted: bp(true), MaxAgeSeconds: 3600}}}}}
+	if mutate != nil {
+		mutate(pol)
+	}
 	if err := pol.Compile(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -138,13 +147,13 @@ func newRig(t *testing.T) *rig {
 	logs := &recLog{}
 	en := &EN{Name: "en1", CA: ca, Rev: pki.NewRevocations(nil), State: st, Log: logs.add,
 		Cert: tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, ReevalEvery: time.Hour}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", enListen)
 	if err != nil {
 		t.Fatal(err)
 	}
 	go en.Serve(ln)
 	t.Cleanup(func() { en.Close(); ln.Close() })
-	return &rig{t: t, ca: ca, en: en, enAddr: ln.Addr().String(), st: st, logs: logs, app: app}
+	return &rig{t: t, ca: ca, en: en, enAddr: ln.Addr().String(), st: st, logs: logs, app: app, appHost: appHost}
 }
 
 type creds struct {
@@ -178,7 +187,7 @@ func (r *rig) startConnector(name string, allow func(string, int) bool) context.
 	return cancel
 }
 
-func (r *rig) allowApp(h string, p int) bool { return h == "127.0.0.1" && p == r.app.port() }
+func (r *rig) allowApp(h string, p int) bool { return h == r.appHost && p == r.app.port() }
 
 func (r *rig) agent(user, device string, goodPosture bool) (*Conn, creds) {
 	cr := r.creds(r.ca, pki.RoleDevice, user, device)
@@ -1151,5 +1160,76 @@ func TestPrivateSessionsGoOnWhenTheTenantChoseToAndSayWhy(t *testing.T) { // AGT
 	ms.onStale, ms.onLog = FailDeny, FailDeny
 	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil || !strings.Contains(err.Error(), "unavailable") {
 		t.Fatalf("with deny the session must be refused: %v", err)
+	}
+}
+
+// A rule's network condition is judged on the address the client connected from, for IPv4, for IPv6 and for
+// IPv4 seen through a dual-stack socket, and a rule that names the wrong network does not match (GAP-REQ-10).
+func TestNetworkConditionUsesTheClientsAddress(t *testing.T) { // AGT-048
+	srcRule := func(cidrs ...string) func(*policy.Policy) {
+		return func(p *policy.Policy) { p.Rules[0].Match.Network = &policy.NetworkMatch{SrcCIDRs: cidrs} }
+	}
+	cases := []struct {
+		name, enListen, appHost string
+		cidrs                   []string
+		allowed                 bool
+		dialHost                string // when the client must reach the node through another address than the one it listens on
+	}{
+		{"ipv4 client in the network", "127.0.0.1:0", "127.0.0.1", []string{"127.0.0.0/8"}, true, ""},
+		{"ipv4 client outside the network", "127.0.0.1:0", "127.0.0.1", []string{"10.0.0.0/8"}, false, ""},
+		{"ipv6 client in the network", "[::1]:0", "::1", []string{"::1/128"}, true, ""},
+		{"ipv6 client outside the network", "[::1]:0", "::1", []string{"2001:db8::/32"}, false, ""},
+		{"ipv6 client against an ipv4 range", "[::1]:0", "::1", []string{"127.0.0.0/8"}, false, ""},
+		{"ipv4 client against an ipv6 range", "127.0.0.1:0", "127.0.0.1", []string{"::1/128"}, false, ""},
+		{"either family listed", "[::1]:0", "::1", []string{"10.0.0.0/8", "::1/128"}, true, ""},
+		{"ipv4 client on a dual-stack socket (::ffff:a.b.c.d) matches its ipv4 range", "[::]:0", "127.0.0.1", []string{"127.0.0.0/8"}, true, "127.0.0.1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRigAt(t, c.enListen, c.appHost, srcRule(c.cidrs...))
+			if c.dialHost != "" {
+				_, port, _ := net.SplitHostPort(r.enAddr)
+				r.enAddr = net.JoinHostPort(c.dialHost, port)
+			}
+			r.startConnector("c1", r.allowApp)
+			conn, _ := r.agent("alice", "d1", true)
+			s, err := conn.OpenApp("seg-db", "", r.app.port())
+			if c.allowed {
+				if err != nil {
+					t.Fatalf("refused: %v", err)
+				}
+				roundTrip(t, s, []byte("hello over "+c.appHost))
+				s.Close()
+				return
+			}
+			if err == nil {
+				s.Close()
+				t.Fatal("allowed although the client's address is outside the rule's network")
+			}
+		})
+	}
+	// the address is never written to a decision record, a log file or a log stream: it is personal data
+	for _, ip := range []string{"203.0.113.9", "2001:db8::7"} {
+		b, _ := json.Marshal(Record{Tenant: "t1", Kind: "private", Action: "allow", Src: netip.MustParseAddr(ip)})
+		if strings.Contains(string(b), ip) || strings.Contains(string(b), "Src") {
+			t.Errorf("the source address %s was serialised: %s", ip, b)
+		}
+	}
+}
+
+func TestSourceOfReadsEveryAddressForm(t *testing.T) { // AGT-048
+	for in, want := range map[string]string{
+		"203.0.113.9:4000": "203.0.113.9", "[2001:db8::7]:4000": "2001:db8::7", "[::ffff:198.51.100.4]:80": "198.51.100.4", "[fe80::1%eth0]:9": "fe80::1", "[::1]:1": "::1",
+	} {
+		ap, _ := net.ResolveTCPAddr("tcp", in)
+		if ap == nil {
+			t.Fatalf("test address %q", in)
+		}
+		if got := SourceOf(ap).String(); got != want {
+			t.Errorf("%s: %s, want %s", in, got, want)
+		}
+	}
+	if SourceOf(nil).IsValid() || SourceOf(&net.UnixAddr{Name: "/x", Net: "unix"}).IsValid() {
+		t.Error("an address that is not an IP must give no address, which matches no network rule")
 	}
 }

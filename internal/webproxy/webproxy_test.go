@@ -132,7 +132,10 @@ type rig struct {
 
 func (r *rig) exemptAdd(hp string) { r.emu.Lock(); r.exempt[hp] = true; r.emu.Unlock() }
 
-func newRig(t *testing.T) *rig {
+func newRig(t *testing.T) *rig { return newRigOn(t, "127.0.0.1:0") }
+
+// newRigOn builds the rig with the proxy listening on the given address (an IPv4 or IPv6 literal).
+func newRigOn(t *testing.T, listen string) *rig {
 	ca, _ := pki.NewCA("t", nil)
 	r := &rig{t: t, ca: ca}
 	r.origin = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
@@ -167,7 +170,10 @@ func newRig(t *testing.T) *rig {
 	der, _ := ca.Sign(&key.PublicKey, pki.Identity{Tenant: "t1", Subject: "en", Device: "en1", Role: pki.RoleEN}, time.Hour, "en.local")
 	r.proxy = p
 	srv := p.Server(tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key})
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	ln, lerr := net.Listen("tcp", listen)
+	if lerr != nil {
+		t.Fatal(lerr)
+	}
 	go srv.Serve(tls.NewListener(ln, srv.TLSConfig))
 	t.Cleanup(func() { srv.Close() })
 	r.addr = ln.Addr().String()
@@ -428,7 +434,10 @@ func TestClassifier(t *testing.T) {
 
 func TestBlockedRanges(t *testing.T) {
 	for ip, want := range map[string]bool{"127.0.0.1": true, "::1": true, "10.1.2.3": true, "172.16.0.1": true, "192.168.0.1": true,
-		"169.254.169.254": true, "::ffff:10.0.0.1": true, "fd00::1": true, "8.8.8.8": false, "2606:4700::1111": false} {
+		"169.254.169.254": true, "::ffff:10.0.0.1": true, "fd00::1": true, "8.8.8.8": false, "2606:4700::1111": false,
+		// an IPv4 address inside an IPv6 one is judged as that IPv4 address (NAT64, 6to4): no way round the rule through IPv6
+		"64:ff9b::a00:1": true, "64:ff9b::7f00:1": true, "64:ff9b::a9fe:a9fe": true, "64:ff9b::c0a8:1": true, "64:ff9b::808:808": false,
+		"2002:a00:1::1": true, "2002:7f00:1::": true, "2002:808:808::1": false, "fe80::1": true, "ff02::1": true, "::": true} {
 		if blocked(netip.MustParseAddr(ip)) != want {
 			t.Errorf("%s want %v", ip, want)
 		}
@@ -538,3 +547,48 @@ func TestOldTLSRefusedByProxy(t *testing.T) { // SEC-011
 }
 
 type broker_Record = broker.Record
+
+// A rule's network condition decides on the address the client connected from, in either family, and a
+// deny rule for a network really denies (GAP-REQ-10: before, the address was never given to the rule, so a
+// deny rule with a network condition never matched).
+func TestWebNetworkConditionUsesTheClientsAddress(t *testing.T) { // AGT-048
+	for _, c := range []struct {
+		name, listen string
+		cidrs        []string
+		denied       bool
+	}{
+		{"ipv4 client in the network", "127.0.0.1:0", []string{"127.0.0.0/8"}, true},
+		{"ipv4 client outside the network", "127.0.0.1:0", []string{"10.0.0.0/8"}, false},
+		{"ipv6 client in the network", "[::1]:0", []string{"::1/128"}, true},
+		{"ipv6 client outside the network", "[::1]:0", []string{"2001:db8::/32"}, false},
+		{"ipv6 client against an ipv4 range", "[::1]:0", []string{"127.0.0.0/8"}, false},
+		{"ipv4 client on a dual-stack socket", "[::]:0", []string{"127.0.0.0/8"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newRigOn(t, c.listen)
+			pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 4, Rules: []policy.Rule{
+				{ID: "from-here", Priority: 5, Action: policy.Deny, Match: policy.Match{Network: &policy.NetworkMatch{SrcCIDRs: c.cidrs}}},
+			}}
+			if err := pol.Compile(nil); err != nil {
+				t.Fatal(err)
+			}
+			r.st.pol = pol
+			if strings.HasPrefix(c.listen, "[::]") { // the client reaches a dual-stack node over IPv4
+				_, port, _ := net.SplitHostPort(r.addr)
+				r.addr = net.JoinHostPort("127.0.0.1", port)
+			}
+			resp, _ := r.get(r.origin.URL + "/x")
+			if c.denied && resp.StatusCode != 403 {
+				t.Fatalf("a deny rule for the client's network did not deny: %d", resp.StatusCode)
+			}
+			if !c.denied && resp.StatusCode != 200 {
+				t.Fatalf("a deny rule for another network denied: %d", resp.StatusCode)
+			}
+			if c.denied {
+				if rec := r.find(func(x broker.Record) bool { return x.Rule == "from-here" }); rec == nil {
+					t.Error("the denial does not name the rule")
+				}
+			}
+		})
+	}
+}
