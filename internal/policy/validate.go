@@ -40,6 +40,17 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: duplicate priority %d", w, r.Priority)
 		}
 		prios[r.Priority] = true
+		if r.Inject != "" {
+			if p.Kind != Web {
+				add("%s: inject is only valid in web policies", w)
+			}
+			if r.Action != Allow {
+				add("%s: inject only makes sense on an allow rule", w)
+			}
+			if len(r.Match.Domains) == 0 {
+				add("%s: an inject rule must name the domains it applies to, so a credential cannot be sent to an unintended site", w)
+			}
+		}
 		if r.Capture && p.Kind != Web {
 			add("%s: capture is only valid in web policies", w)
 		}

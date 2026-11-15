@@ -87,7 +87,8 @@ type Decision struct {
 	Action  Action
 	RuleID  string // "" means default
 	Reason  string
-	Capture bool // the deciding rule asks for the exchange to be captured
+	Capture bool   // the deciding rule asks for the exchange to be captured
+	Inject  string // the deciding rule asks for this secret to be added to the request
 }
 
 type PostureMatch struct {
@@ -146,6 +147,9 @@ type Rule struct {
 	// Capture keeps the decrypted exchange of every request this rule decides, for forensics
 	// (ZIA-022b). Web rules only, and only on inspected traffic. It is an explicit, audited choice.
 	Capture bool `json:"capture,omitempty"`
+	// Inject names a stored secret that the proxy adds to the request, after this rule allows it,
+	// so the caller (an AI agent) never holds the credential (AGS-001). Web allow rules only.
+	Inject string `json:"inject,omitempty"`
 }
 
 type Policy struct {
@@ -281,7 +285,7 @@ func (p *Policy) Evaluate(r Request) (d Decision) {
 				}
 				return Decision{Action: Deny, RuleID: c.ID, Reason: "workspace-required"}
 			}
-			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason, Capture: c.Capture}
+			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason, Capture: c.Capture, Inject: c.Inject}
 		}
 	}
 	def := p.DefaultAction

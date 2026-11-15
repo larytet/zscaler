@@ -2005,3 +2005,99 @@ func TestScn018TrafficCapture(t *testing.T) {
 		t.Fatal("captured content reached the node's log file")
 	}
 }
+
+// SCN-019 (AGS-001): an AI agent calls an API through the platform and never holds the key. The
+// platform adds it on the decrypted request; the origin receives it; the agent, the admin API, the
+// capture and the node's log never contain it.
+func TestScn019CredentialInjection(t *testing.T) {
+	const key = "sk-live-E2E-TOPSECRET"
+	var got atomic.Value
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		got.Store(q.Header.Get("Authorization"))
+		fmt.Fprintf(w, "you sent: %s", q.Header.Get("Authorization"))
+	}))
+	defer origin.Close()
+	hp := strings.TrimPrefix(origin.URL, "https://")
+	host := strings.Split(hp, ":")[0]
+	pemFile := filepath.Join(t.TempDir(), "origin.pem")
+	os.WriteFile(pemFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: origin.Certificate().Raw}), 0o600)
+
+	s := newStack(t, "--lab-allow-dial", hp, "--lab-upstream-ca", pemFile)
+	s.must("PUT", "/v1/secrets/api", map[string]any{"host": host, "header": "Authorization", "value": "Bearer " + key}, s.token)
+	s.ifMatch = "1"
+	// a rule naming a secret bound to a different host is refused at write time
+	if code, _ := s.api("PUT", "/v1/policies/web", map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "bad", "priority": 10, "action": "allow", "inject": "api", "match": map[string]any{"domains": []string{"other.example.net"}}}}}, s.token); code < 400 {
+		t.Fatal("a rule that injects a secret on a host it is not bound to was accepted")
+	}
+	s.must("PUT", "/v1/policies/web", map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "agent-api", "priority": 10, "action": "allow", "inject": "api", "capture": true,
+		"match": map[string]any{"domains": []string{host}}}}}, s.token)
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
+
+	// no API returns the value
+	for _, p := range []string{"/v1/secrets", "/v1/snapshot", "/v1/audit"} {
+		if _, b := s.api("GET", p, nil, s.token); strings.Contains(string(b), key) {
+			t.Fatalf("%s returned the secret", p)
+		}
+	}
+	req, _ := http.NewRequest("GET", s.adminU+"/v1/inspection/ca.pem", nil)
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.admin.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	waitPort(t, a.ports["http"])
+	proxy := fmt.Sprintf("127.0.0.1:%d", a.ports["http"])
+	var body string
+	eventually(t, "the agent's request to reach the API with the key added", 25*time.Second, func() bool {
+		c, err := net.Dial("tcp", proxy)
+		if err != nil {
+			return false
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hp, hp)
+		br := bufio.NewReader(c)
+		r, err := http.ReadResponse(br, nil)
+		if err != nil || r.StatusCode != 200 {
+			return false
+		}
+		inner := tls.Client(&bufferedConn{Conn: c, r: br}, &tls.Config{RootCAs: pool, ServerName: host})
+		inner.SetDeadline(time.Now().Add(5 * time.Second))
+		if inner.Handshake() != nil {
+			return false
+		}
+		fmt.Fprintf(inner, "GET /v1/things HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer agent-guess\r\nConnection: close\r\n\r\n", hp)
+		rr, err := http.ReadResponse(bufio.NewReader(inner), nil)
+		if err != nil || rr.StatusCode != 200 {
+			return false
+		}
+		b, _ := io.ReadAll(rr.Body)
+		body = string(b)
+		return true
+	})
+	if v, _ := got.Load().(string); v != "Bearer "+key {
+		t.Fatalf("the origin received %q, not the stored credential", v)
+	}
+	if strings.Contains(body, key) || strings.Contains(body, "agent-guess") {
+		t.Fatalf("the agent saw a credential: %q", body)
+	}
+	time.Sleep(500 * time.Millisecond)
+	raw, _ := os.ReadFile(filepath.Join(s.dir, "en", "decisions.jsonl"))
+	if strings.Contains(string(raw), key) {
+		t.Fatal("the credential reached the node's decision log")
+	}
+	if code, b := s.api("GET", "/v1/captures", nil, s.token); code == 200 && strings.Contains(string(b), key) {
+		t.Fatal("the credential reached a capture")
+	}
+	if code, _ := s.api("DELETE", "/v1/secrets/api", nil, s.token); code != 409 {
+		t.Fatalf("deleting a secret a rule still injects must be refused, got %d", code)
+	}
+}

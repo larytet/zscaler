@@ -197,6 +197,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.Rule, rec.Reason = d.RuleID, d.Reason
 	connect := r.Method == http.MethodConnect
+	if d.Inject != "" && d.Action == policy.Allow && (!connect || p.interceptCA(id.Tenant, host) == nil) {
+		// a credential is only added to traffic the proxy decrypts; anything else (plain HTTP, an
+		// exempt domain, inspection off) is refused rather than sent without it or tunnelled untouched
+		d = policy.Decision{Action: policy.Deny, RuleID: d.RuleID, Reason: "inspection-required"}
+		rec.Reason = d.Reason
+	}
 
 	switch d.Action {
 	case policy.Deny:

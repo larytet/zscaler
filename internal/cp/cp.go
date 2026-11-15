@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -93,6 +94,9 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
+	m.HandleFunc("PUT /v1/secrets/{name}", a.wrap(write, a.putSecret))
+	m.HandleFunc("GET /v1/secrets", a.wrap(write, a.listSecrets))
+	m.HandleFunc("DELETE /v1/secrets/{name}", a.wrap(write, a.deleteSecret))
 	m.HandleFunc("GET /v1/captures", a.wrap(write, a.listCaptures))
 	m.HandleFunc("GET /v1/captures/{id}", a.wrap(write, a.getCapture))
 	m.HandleFunc("DELETE /v1/captures", a.wrap(write, a.purgeCaptures))
@@ -1012,4 +1016,71 @@ func (a *API) purgeCaptures(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 	n := a.Captures.Purge(c.tenant)
 	a.log(c, "capture.purge", "all", nil, map[string]int{"count": n})
 	return map[string]int{"purged": n}, nil
+}
+
+var secretName = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,39}$`)
+var headerToken = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$")
+
+// headers a secret may not be placed in: they change how the request is framed or routed.
+var forbiddenSecretHeaders = map[string]bool{"host": true, "content-length": true, "transfer-encoding": true, "connection": true,
+	"upgrade": true, "te": true, "trailer": true, "proxy-authorization": true, "proxy-connection": true, "keep-alive": true}
+
+// putSecret stores a credential for the proxy to inject (AGS-001). The value is write-only: no
+// endpoint returns it, and it is not written to the audit log.
+func (a *API) putSecret(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	name := r.PathValue("name")
+	var in struct {
+		Host   string `json:"host"`
+		Header string `json:"header"`
+		Value  string `json:"value"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	in.Host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(in.Host), "."))
+	switch {
+	case !secretName.MatchString(name):
+		return nil, fail(400, "invalid", "secret name: 1 to 40 characters, lower-case letters, digits, dash and underscore")
+	case in.Host == "" || strings.ContainsAny(in.Host, "/:@ *\r\n") || strings.HasPrefix(in.Host, "."):
+		return nil, fail(400, "invalid", "host must be a plain domain or address such as api.example.com (subdomains are covered)")
+	case !headerToken.MatchString(in.Header) || forbiddenSecretHeaders[strings.ToLower(in.Header)]:
+		return nil, fail(400, "invalid", "header must be a plain header name such as Authorization or X-Api-Key, not one that changes how the request is sent")
+	case in.Value == "" || len(in.Value) > 4096 || strings.ContainsAny(in.Value, "\r\n\x00"):
+		return nil, fail(400, "invalid", "value must be 1 to 4096 characters on one line")
+	}
+	if old, _ := a.Store.Secrets(c.tenant); len(old) >= 50 {
+		for _, o := range old {
+			if o.Name == name {
+				old = nil
+			}
+		}
+		if old != nil {
+			return nil, fail(400, "invalid", "at most 50 secrets")
+		}
+	}
+	if err := a.Store.PutSecret(c.tenant, store.Secret{Name: name, Host: in.Host, Header: in.Header, Value: in.Value}); err != nil {
+		return nil, err
+	}
+	a.log(c, "secret.put", name, nil, map[string]string{"host": in.Host, "header": in.Header}) // never the value
+	return map[string]string{"name": name, "host": in.Host, "header": in.Header}, nil
+}
+
+func (a *API) listSecrets(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	out, err := a.Store.Secrets(c.tenant)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil // Value is blank in this list
+}
+
+func (a *API) deleteSecret(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	name := r.PathValue("name")
+	if err := a.Store.DeleteSecret(c.tenant, name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fail(404, "not_found", "not found")
+		}
+		return nil, fail(409, "in_use", err.Error())
+	}
+	a.log(c, "secret.delete", name, nil, nil)
+	return map[string]string{"deleted": name}, nil
 }

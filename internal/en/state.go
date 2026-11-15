@@ -37,6 +37,7 @@ type tenantView struct {
 	exempt  []string
 	ca      *pki.CA
 	leafKey *ecdsa.PrivateKey
+	secrets map[string]store.Secret
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -74,7 +75,7 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 	nv := &view{tenants: map[string]*tenantView{}}
 	for id, t := range snap.Tenants {
 		tv := &tenantView{segs: map[string]broker.Segment{}, users: map[string]policy.User{},
-			pols: map[policy.Kind]*policy.Policy{}, revoked: map[string]bool{}, grants: map[string]time.Time{}}
+			pols: map[policy.Kind]*policy.Policy{}, revoked: map[string]bool{}, grants: map[string]time.Time{}, secrets: map[string]store.Secret{}}
 		for _, g := range t.Segments {
 			tv.segs[g.ID] = g
 		}
@@ -86,6 +87,9 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		}
 		for _, g := range t.Grants {
 			tv.grants[g.User+"|"+g.App] = g.Expires
+		}
+		for _, sc := range t.Secrets {
+			tv.secrets[sc.Name] = sc
 		}
 		if t.Inspect != nil && t.Inspect.Enabled {
 			if ca, err := pki.CAFromPEM([]byte(t.Inspect.CACert), []byte(t.Inspect.CAKey), nil); err == nil {
@@ -173,6 +177,15 @@ func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
 		return true, t.exempt, t.ca
 	}
 	return false, nil, nil
+}
+
+// Secret returns a stored credential for injection (AGS-001).
+func (s *SyncState) Secret(tenant, name string) (store.Secret, bool) {
+	if t := s.t(tenant); t != nil {
+		sc, ok := t.secrets[name]
+		return sc, ok
+	}
+	return store.Secret{}, false
 }
 
 // InterceptKey is the tenant's stable key for inspection certificates (nil if none was shipped).

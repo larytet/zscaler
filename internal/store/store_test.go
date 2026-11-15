@@ -289,3 +289,35 @@ func TestInterceptSPKIIsStableAndPerTenant(t *testing.T) { // WB-003 groundwork
 		t.Fatal("Inspection() leaked the leaf key")
 	}
 }
+
+func TestSecretsAreWriteOnlyAndGuardedByPolicy(t *testing.T) { // AGT-006
+	s, _, _ := twoTenants(t)
+	if err := s.PutSecret("a", Secret{Name: "api", Host: "api.example.com", Header: "Authorization", Value: "VALUE1"}); err != nil {
+		t.Fatal(err)
+	}
+	list, _ := s.Secrets("a")
+	if len(list) != 1 || list[0].Value != "" || list[0].Host != "api.example.com" {
+		t.Fatalf("listing must not carry the value: %+v", list)
+	}
+	if other, _ := s.Secrets("b"); len(other) != 0 {
+		t.Fatal("another tenant sees the secret")
+	}
+	web := func(domain string) *policy.Policy {
+		return &policy.Policy{Kind: policy.Web, DefaultAction: policy.Deny, Rules: []policy.Rule{
+			{ID: "r", Priority: 1, Action: policy.Allow, Inject: "api", Match: policy.Match{Domains: []string{domain}}}}}
+	}
+	if _, err := s.PutPolicy("a", policy.Web, web("evil.example.net"), 0); err == nil {
+		t.Fatal("a rule may only inject a secret on the host it is bound to")
+	}
+	missing := web("api.example.com")
+	missing.Rules[0].Inject = "nope"
+	if _, err := s.PutPolicy("a", policy.Web, missing, 0); err == nil {
+		t.Fatal("a rule naming a secret that does not exist must be refused")
+	}
+	if _, err := s.PutPolicy("a", policy.Web, web("api.example.com"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteSecret("a", "api"); err == nil || !strings.Contains(err.Error(), "in use") && !strings.Contains(err.Error(), "used") && !strings.Contains(err.Error(), "inject") {
+		t.Fatalf("deleting a secret a rule still uses must be refused: %v", err)
+	}
+}

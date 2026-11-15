@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,6 +68,7 @@ type Tenant struct {
 	risk        map[string]int             `json:"-"`                    // computed, in memory only
 	Grants      []Grant                    `json:"grants,omitempty"`
 	Inspect     InspectCfg                 `json:"inspect,omitempty"`
+	Secrets     map[string]Secret          `json:"secrets,omitempty"`
 	Devices     map[string]Device          `json:"devices"`
 }
 
@@ -302,6 +304,9 @@ func (s *Store) PutPolicy(tenant string, k policy.Kind, p *policy.Policy, ifMatc
 	if err := p.Compile(known); err != nil {
 		return cur, err
 	}
+	if err := t.checkInjects(p); err != nil {
+		return cur, err
+	}
 	t.Policies[k] = &PolicyDoc{Version: p.Version, Policy: p}
 	return p.Version, s.save()
 }
@@ -473,6 +478,7 @@ type TenantSnap struct {
 	RevokedDevices []string
 	Grants         []Grant // only unexpired ones
 	Inspect        *InspectSnap
+	Secrets        []Secret
 }
 
 // Grant is an admin-approved, time-limited access (just-in-time).
@@ -481,6 +487,16 @@ type Grant struct {
 	App     string    `json:"app"`
 	Expires time.Time `json:"expires"`
 	By      string    `json:"by"`
+}
+
+// Secret is a credential the platform holds so that an AI agent does not have to (AGS-001).
+// The value is returned by no API. It is stored in clear in the store file and sent to
+// enforcement nodes in the signed snapshot, like the inspection CA key.
+type Secret struct {
+	Name   string `json:"name"`
+	Host   string `json:"host"`   // the only host it may be sent to (a domain also covers its subdomains)
+	Header string `json:"header"` // the request header it is placed in
+	Value  string `json:"value"`
 }
 
 // InspectCfg is a tenant's TLS inspection setting. The intercept CA is per tenant
@@ -529,6 +545,9 @@ func (s *Store) Snapshot() *Snapshot {
 		}
 		if t.Inspect.Enabled && t.Inspect.CAKey != "" {
 			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey, LeafKey: t.Inspect.LeafKey}
+		}
+		for _, sc := range t.Secrets {
+			ts.Secrets = append(ts.Secrets, sc)
 		}
 		now := time.Now()
 		for _, g := range t.Grants {
@@ -714,4 +733,94 @@ func (s *Store) InterceptSPKI(tenant string) (string, bool) {
 	der, _ := x509.MarshalPKIXPublicKey(&k.PublicKey)
 	h := sha256.Sum256(der)
 	return base64.StdEncoding.EncodeToString(h[:]), true
+}
+
+// PutSecret stores or replaces a secret. Callers validate the fields.
+func (s *Store) PutSecret(tenant string, sc Secret) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if t.Secrets == nil {
+		t.Secrets = map[string]Secret{}
+	}
+	t.Secrets[sc.Name] = sc
+	return s.save()
+}
+
+// Secrets lists names, hosts and headers. The values are never returned.
+func (s *Store) Secrets(tenant string) ([]Secret, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Secret, 0, len(t.Secrets))
+	for _, sc := range t.Secrets {
+		sc.Value = ""
+		out = append(out, sc)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (s *Store) DeleteSecret(tenant, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if _, ok := t.Secrets[name]; !ok {
+		return ErrNotFound
+	}
+	// a policy that still injects this secret would silently stop working: refuse
+	for k, d := range t.Policies {
+		for _, r := range d.Policy.Rules {
+			if r.Inject == name {
+				return fmt.Errorf("secret %q is still used by rule %q of the %s policy", name, r.ID, k)
+			}
+		}
+	}
+	delete(t.Secrets, name)
+	return s.save()
+}
+
+// secretsCover checks that every inject rule names an existing secret and covers its host.
+func (t *Tenant) checkInjects(p *policy.Policy) error {
+	for _, r := range p.Rules {
+		if r.Inject == "" {
+			continue
+		}
+		sc, ok := t.Secrets[r.Inject]
+		if !ok {
+			return fmt.Errorf("rule %q injects the unknown secret %q", r.ID, r.Inject)
+		}
+		covered := false
+		for _, d := range r.Match.Domains {
+			d = strings.ToLower(d)
+			if sc.Host == d || strings.HasSuffix(sc.Host, "."+d) {
+				covered = true
+			}
+		}
+		if !covered {
+			return fmt.Errorf("rule %q injects secret %q, which is bound to %s, but the rule does not name that host or a parent domain", r.ID, r.Inject, sc.Host)
+		}
+	}
+	return nil
+}
+
+// Secret implements the proxy's lookup for the in-process store (tests); nodes use the snapshot.
+func (s *Store) Secret(tenant, name string) (Secret, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return Secret{}, false
+	}
+	sc, ok := t.Secrets[name]
+	return sc, ok
 }

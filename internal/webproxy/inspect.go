@@ -19,6 +19,7 @@ import (
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/store"
 )
 
 // Inspector is an optional State extension: whether a tenant's web traffic is
@@ -26,6 +27,11 @@ import (
 // certificates shown to its devices (ZIA-040, ARCH-021).
 type Inspector interface {
 	Inspection(tenant string) (enabled bool, exempt []string, ca *pki.CA)
+}
+
+// SecretSource is an optional State extension: stored credentials to inject (AGS-001).
+type SecretSource interface {
+	Secret(tenant, name string) (store.Secret, bool)
 }
 
 // interceptCA returns the CA to use for this connection, or nil to tunnel it untouched.
@@ -189,6 +195,31 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	for _, hh := range hopHeaders {
 		out.Header.Del(hh)
 	}
+	var injected string // the secret value, kept only to scrub it from anything recorded or returned
+	if d.Inject != "" {
+		ss, _ := p.State.(SecretSource)
+		var sc store.Secret
+		ok := false
+		if ss != nil {
+			sc, ok = ss.Secret(id.Tenant, d.Inject)
+		}
+		h := strings.ToLower(host)
+		sh := strings.ToLower(sc.Host)
+		if !ok || !(h == sh || strings.HasSuffix(h, "."+sh)) {
+			// missing secret or a host it is not bound to: refuse rather than send the request without it
+			fail := rec
+			fail.Action, fail.Reason = "deny", "secret-unavailable"
+			p.Log(fail)
+			http.Error(w, "credential unavailable", http.StatusBadGateway)
+			return
+		}
+		out.Header.Set(sc.Header, sc.Value) // replaces whatever the agent sent
+		out.Header.Del("Accept-Encoding")   // the transport then decompresses, so the response can be scrubbed
+		injected = sc.Value
+		note := rec
+		note.Action, note.Reason = "info", "injected:"+d.Inject
+		p.Log(note)
+	}
 	scanResp := pol != nil && pol.UsesResponseDLP()
 	if scanResp {
 		out.Header.Del("Accept-Encoding") // lets the transport ask for gzip itself and decompress, so the scan sees plain text
@@ -204,6 +235,13 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 			if d.Capture {
 				p.Log(captureRecord(rec, d.RuleID, "deny", q, reqBody, http.StatusForbidden, nil, nil, reqTrunc))
 			}
+			return
+		}
+	}
+	if injected != "" {
+		// an API that echoes its request headers would hand the credential back to the agent: scrub it
+		if !scrubInjected(resp, injected) {
+			http.Error(w, "response too large to check for the injected credential", http.StatusBadGateway)
 			return
 		}
 	}
@@ -358,4 +396,32 @@ func responseBlockPage(w http.ResponseWriter, host string, types []string, ref s
 <p>What %s sent back appears to contain sensitive data (%s) and your organisation does not allow that to reach you.</p>
 <p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
 		html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
+}
+
+// MaxInjectedResponse bounds a response that must be scrubbed of an injected credential.
+const MaxInjectedResponse = 8 << 20
+
+// scrubInjected replaces the secret in the response headers and body. It reports false when the
+// body is too large to check, in which case nothing may be forwarded.
+func scrubInjected(resp *http.Response, secret string) bool {
+	const mask = "[redacted]"
+	for k, vs := range resp.Header {
+		for i, v := range vs {
+			if strings.Contains(v, secret) {
+				vs[i] = strings.ReplaceAll(v, secret, mask)
+			}
+		}
+		resp.Header[k] = vs
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, MaxInjectedResponse+1))
+	resp.Body.Close()
+	if err != nil || len(b) > MaxInjectedResponse {
+		return false
+	}
+	b = bytes.ReplaceAll(b, []byte(secret), []byte(mask))
+	resp.Body = io.NopCloser(bytes.NewReader(b))
+	resp.ContentLength = int64(len(b))
+	resp.Header.Del("Content-Length")
+	resp.Header.Del("Content-Encoding") // Transport only decompresses what it asked for; an encoded body cannot be scanned
+	return true
 }

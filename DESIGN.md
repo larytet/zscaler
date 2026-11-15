@@ -716,7 +716,7 @@ Section 19 collects ideas for small businesses that let AI agents reach their sy
 
 | Slice | Content | Why this order |
 |---|---|---|
-| A1 | AGS-001 credential injection | Marked "recommended first" in the requirements; removes the largest risk (an agent holding a key) |
+| A1 | AGS-001 credential injection | Marked "recommended first" in the requirements; removes the largest risk (an agent holding a key) | **Built (S7).**
 | A2 | AGS-002 and AGS-003 read-only agent pack with egress allow-list | Recommended first; mostly policy templates over existing features |
 | A3 | AGS-004 operator cap | Small, deterministic, closes "agent more powerful than its owner" |
 | A4 | AGS-016 shadow-AI report and AGS-017 rule-of-two lint | Read-only analysis over data we already hold |

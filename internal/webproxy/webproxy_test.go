@@ -25,6 +25,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/store"
 )
 
 type state struct {
@@ -33,6 +34,14 @@ type state struct {
 	enabled bool
 	exempt  []string
 	ca      *pki.CA
+	secrets map[string]store.Secret
+}
+
+func (s *state) Secret(_, name string) (store.Secret, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sc, ok := s.secrets[name]
+	return sc, ok
 }
 
 func (s *state) Policy(string, policy.Kind) *policy.Policy {
