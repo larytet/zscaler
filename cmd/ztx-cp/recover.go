@@ -1,15 +1,18 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/larytet/zscaler/internal/audit"
+	"github.com/larytet/zscaler/internal/incident"
 	"github.com/larytet/zscaler/internal/seal"
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -83,6 +86,10 @@ func listAccess(dir string, key *seal.Key) error {
 }
 
 func runRecoverCommand(args []string) bool {
+	if len(args) > 0 && args[0] == "incident-report" {
+		runIncidentReport(args[1:])
+		return true
+	}
 	if len(args) == 0 || args[0] != "reset-owner" {
 		return false
 	}
@@ -114,4 +121,48 @@ func runRecoverCommand(args []string) bool {
 	fmt.Printf("owner %q of tenant %q now has this token (shown once):\n%s\n", *name, *tenant, tok)
 	fmt.Println("The act is in the audit log and in the next weekly summary. Other administrators' tokens were not touched: if you think they leaked too, replace them (POST /v1/admins/{name}/rotate).")
 	return true
+}
+
+// runIncidentReport prints which tenants are in scope after a loss of data, what is held about each, who to tell
+// and by when (GAP-REQ-11). It reads the data directory and changes nothing, so it is safe while the control
+// plane runs.
+func runIncidentReport(args []string) {
+	fs := flag.NewFlagSet("incident-report", flag.ExitOnError)
+	data := fs.String("data", "cp-data", "control plane data directory")
+	keyFile := fs.String("master-key-file", "", "file holding the master key if the data is encrypted (or ZTX_MASTER_KEY)")
+	scen := fs.String("scenario", "control-plane", "what was lost: control-plane (the server, its disk or a backup), node:<name> (an enforcement node) or admin-token:<tenant>")
+	fromS := fs.String("from", "", "start of the window, RFC 3339 (default: 30 days ago)")
+	toS := fs.String("to", "", "end of the window, RFC 3339 (default: now)")
+	awareS := fs.String("aware", "", "when you became aware of the incident, RFC 3339: prints the 72-hour reminder")
+	asJSON := fs.Bool("json", false, "print JSON instead of text")
+	fs.Parse(args)
+	key, err := masterKey(*keyFile)
+	check(err)
+	st, err := store.OpenWithKey(filepath.Join(*data, "store.json"), key)
+	check(err)
+	now := time.Now()
+	parse := func(name, v string, def time.Time) time.Time {
+		if v == "" {
+			return def
+		}
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			check(fmt.Errorf("-%s: %q is not an RFC 3339 time such as 2026-11-15T09:30:00Z", name, v))
+		}
+		return t
+	}
+	sc := incident.Scenario{Kind: *scen}
+	if n, ok := strings.CutPrefix(*scen, "node:"); ok {
+		sc = incident.Scenario{Kind: "node", Node: n}
+	} else if t, ok := strings.CutPrefix(*scen, "admin-token:"); ok {
+		sc = incident.Scenario{Kind: "admin-token", Tenant: t}
+	}
+	rep, err := incident.Build(st, *data, key, sc, parse("from", *fromS, now.AddDate(0, 0, -30)), parse("to", *toS, now), parse("aware", *awareS, time.Time{}), now)
+	check(err)
+	if *asJSON {
+		b, _ := json.MarshalIndent(rep, "", " ")
+		fmt.Println(string(b))
+		return
+	}
+	fmt.Print(rep.Text())
 }

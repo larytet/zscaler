@@ -3146,6 +3146,76 @@
         ]
       }
     },
+    "/v1/security-contact": {
+      "get": {
+        "operationId": "getSecurityContact",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get security contact",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putSecurityContact",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put security contact",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
     "/v1/segments": {
       "get": {
         "operationId": "listSegments",

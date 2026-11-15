@@ -78,3 +78,26 @@ func (s *Store) RotateInspection(tenant string) (oldFP, newFP string, err error)
 	t.Inspect.Rotated = s.now().UTC()
 	return oldFP, Fingerprint(t.Inspect.CACert), s.save()
 }
+
+// SetSecurityContact records who is told first if the platform loses this tenant's data (GAP-REQ-11).
+func (s *Store) SetSecurityContact(tenant, name, email string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	t.SecurityContactName, t.SecurityContact = name, email
+	return s.save()
+}
+
+// SecurityContact returns the contact and the tenant's display name.
+func (s *Store) SecurityContact(tenant string) (name, email, tenantName string) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return "", "", ""
+	}
+	return t.SecurityContactName, t.SecurityContact, t.Name
+}

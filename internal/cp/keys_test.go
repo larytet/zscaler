@@ -265,3 +265,51 @@ func TestDryRunWithASourceAddress(t *testing.T) { // AGT-048
 		}
 	}
 }
+
+// The tenant states who is told first if the platform loses its data (GAP-REQ-11).
+func TestSecurityContactIsPerTenantAndValidated(t *testing.T) { // AGT-049
+	e := newEnv(t)
+	c, b, _ := e.call("GET", "/v1/security-contact", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), "No security contact is set") {
+		t.Fatalf("%d %s", c, b)
+	}
+	if c, _, _ := e.call("PUT", "/v1/security-contact", e.adminA, map[string]string{"name": "Dana Owner", "email": "dana@acme.example"}); c != 200 {
+		t.Fatalf("set: %d", c)
+	}
+	_, b, _ = e.call("GET", "/v1/security-contact", e.adminA, nil)
+	var got map[string]string
+	json.Unmarshal(b, &got)
+	if got["email"] != "dana@acme.example" || got["name"] != "Dana Owner" || got["note"] != "" {
+		t.Errorf("%v", got)
+	}
+	// another tenant has its own
+	_, b, _ = e.call("GET", "/v1/security-contact", e.adminB, nil)
+	if strings.Contains(string(b), "dana@") {
+		t.Errorf("tenant b sees tenant a's contact: %s", b)
+	}
+	// bad input is refused, and only the people who manage administrators may change it; anyone who reads may look
+	for _, in := range []map[string]string{{"email": "not-an-address"}, {"email": "a b@c.d"}, {"email": "@x.example"}, {"email": "x@"}, {"email": "a@b.example,c@d.example"}, {"name": strings.Repeat("n", 101), "email": "a@b.example"}, {"name": "x\r\ny", "email": "a@b.example"}} {
+		if c, _, _ := e.call("PUT", "/v1/security-contact", e.adminA, in); c != 400 {
+			t.Errorf("%v accepted: %d", in, c)
+		}
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	admin, _ := e.api.Store.AddAdmin("a", "ada", store.Admin)
+	if c, _, _ := e.call("PUT", "/v1/security-contact", viewer, map[string]string{"email": "v@x.example"}); c != 403 {
+		t.Errorf("viewer: %d", c)
+	}
+	if c, _, _ := e.call("PUT", "/v1/security-contact", admin, map[string]string{"email": "v@x.example"}); c != 403 {
+		t.Errorf("admin (not owner): %d", c)
+	}
+	if c, _, _ := e.call("GET", "/v1/security-contact", viewer, nil); c != 200 {
+		t.Errorf("viewer read: %d", c)
+	}
+	// clearing it is allowed, and every change is in the audit log with the old and new value
+	if c, _, _ := e.call("PUT", "/v1/security-contact", e.adminA, map[string]string{"name": "", "email": ""}); c != 200 {
+		t.Errorf("clear: %d", c)
+	}
+	_, ab, _ := e.call("GET", "/v1/audit", e.adminA, nil)
+	if strings.Count(string(ab), "security-contact.update") != 2 || !strings.Contains(string(ab), "dana@acme.example") {
+		t.Errorf("audit: %s", ab)
+	}
+}

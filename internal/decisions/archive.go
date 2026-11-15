@@ -59,6 +59,9 @@ func tenantDir(tenant string) string {
 	return hex.EncodeToString(h[:16])
 }
 
+// TenantDir is the name of a tenant's directory inside the archive (a hash, so a directory listing does not name tenants).
+func TenantDir(tenant string) string { return tenantDir(tenant) }
+
 func (a *Archive) dayFile(tenant string, day time.Time) string {
 	return filepath.Join(a.Dir, tenantDir(tenant), day.UTC().Format("2006-01-02")+".jsonl")
 }

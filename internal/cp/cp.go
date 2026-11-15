@@ -156,6 +156,8 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "GET /v1/evidence", audit, a.getEvidence)
 	a.route(m, "PUT /v1/alert-settings", write, a.putAlertSettings)
 	a.route(m, "GET /v1/alert-settings", read, a.getAlertSettings)
+	a.route(m, "PUT /v1/security-contact", admins, a.putSecurityContact)
+	a.route(m, "GET /v1/security-contact", read, a.getSecurityContact)
 	a.route(m, "GET /v1/openapi.json", read, a.openAPI)
 	a.mountSCIM(m)
 	a.route(m, "GET /v1/scim", admins, a.getSCIM)

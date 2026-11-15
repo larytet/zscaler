@@ -167,31 +167,34 @@ func (s *Store) AgentTimes(tenant string) map[string]AgentTimes {
 }
 
 type Tenant struct {
-	ID          string                          `json:"id"`
-	Name        string                          `json:"name"`
-	IDP         IDP                             `json:"idp"`
-	AlertEmails []string                        `json:"alert_emails,omitempty"`
-	Segments    map[string]broker.Segment       `json:"segments"`
-	Policies    map[policy.Kind]*PolicyDoc      `json:"policies"`
-	Users       map[string]policy.User          `json:"users"`
-	Restricted  map[string]string               `json:"restricted,omitempty"` // subject -> reason
-	risk        map[string]int                  `json:"-"`                    // computed, in memory only
-	Grants      []Grant                         `json:"grants,omitempty"`
-	PolicyHist  map[policy.Kind][]PolicyVersion `json:"policy_history,omitempty"` // saved versions, newest last (ADM-004)
-	AgentTimes  map[string]AgentTimes           `json:"agent_times,omitempty"`    // AI agent registry: created and last used
-	Inspect     InspectCfg                      `json:"inspect,omitempty"`
-	Secrets     map[string]Secret               `json:"secrets,omitempty"`
-	EDM         map[string]EDMSet               `json:"edm,omitempty"`
-	SIEM        *siem.Config                    `json:"siem,omitempty"`         // where this tenant\'s logs are streamed (INT-004)
-	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"`      // tenancy restriction on SaaS sign-in (DATA-002a)
-	Privacy     *privacy.Config                 `json:"privacy,omitempty"`      // log privacy mode (NFR-033)
-	Failure     *FailureMode                    `json:"failure_mode,omitempty"` // fail-open or fail-closed choices (NFR-012)
-	CloudApps   map[string]cloudapps.App        `json:"cloud_apps,omitempty"`   // this tenant\'s own apps for cloud app control (ZIA-011)
-	SCIM        *SCIMConfig                     `json:"scim,omitempty"`         // provisioning from the identity provider (INT-002)
-	SCIMUsers   map[string]SCIMUser             `json:"scim_users,omitempty"`
-	SCIMGroups  map[string]SCIMGroup            `json:"scim_groups,omitempty"`
-	SCIMGone    map[string]bool                 `json:"scim_gone,omitempty"` // people whose SCIM user was removed: no access until provisioned again
-	Devices     map[string]Device               `json:"devices"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	IDP         IDP      `json:"idp"`
+	AlertEmails []string `json:"alert_emails,omitempty"`
+	// SecurityContact is who is told first if the platform loses this tenant's data (GAP-REQ-11).
+	SecurityContact     string                          `json:"security_contact,omitempty"`
+	SecurityContactName string                          `json:"security_contact_name,omitempty"`
+	Segments            map[string]broker.Segment       `json:"segments"`
+	Policies            map[policy.Kind]*PolicyDoc      `json:"policies"`
+	Users               map[string]policy.User          `json:"users"`
+	Restricted          map[string]string               `json:"restricted,omitempty"` // subject -> reason
+	risk                map[string]int                  `json:"-"`                    // computed, in memory only
+	Grants              []Grant                         `json:"grants,omitempty"`
+	PolicyHist          map[policy.Kind][]PolicyVersion `json:"policy_history,omitempty"` // saved versions, newest last (ADM-004)
+	AgentTimes          map[string]AgentTimes           `json:"agent_times,omitempty"`    // AI agent registry: created and last used
+	Inspect             InspectCfg                      `json:"inspect,omitempty"`
+	Secrets             map[string]Secret               `json:"secrets,omitempty"`
+	EDM                 map[string]EDMSet               `json:"edm,omitempty"`
+	SIEM                *siem.Config                    `json:"siem,omitempty"`         // where this tenant\'s logs are streamed (INT-004)
+	Tenancy             *tenancy.Config                 `json:"tenancy,omitempty"`      // tenancy restriction on SaaS sign-in (DATA-002a)
+	Privacy             *privacy.Config                 `json:"privacy,omitempty"`      // log privacy mode (NFR-033)
+	Failure             *FailureMode                    `json:"failure_mode,omitempty"` // fail-open or fail-closed choices (NFR-012)
+	CloudApps           map[string]cloudapps.App        `json:"cloud_apps,omitempty"`   // this tenant\'s own apps for cloud app control (ZIA-011)
+	SCIM                *SCIMConfig                     `json:"scim,omitempty"`         // provisioning from the identity provider (INT-002)
+	SCIMUsers           map[string]SCIMUser             `json:"scim_users,omitempty"`
+	SCIMGroups          map[string]SCIMGroup            `json:"scim_groups,omitempty"`
+	SCIMGone            map[string]bool                 `json:"scim_gone,omitempty"` // people whose SCIM user was removed: no access until provisioned again
+	Devices             map[string]Device               `json:"devices"`
 }
 
 type adminRec struct {

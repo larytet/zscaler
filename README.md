@@ -8,6 +8,7 @@ A small-business zero-trust platform, aimed at functional parity with the Zscale
 
 | File | What it is |
 |---|---|
+| [BREACH-RESPONSE.md](BREACH-RESPONSE.md) | What to do in the first 72 hours if the platform loses someone's data (not legal advice) |
 | [USABILITY-RUNBOOK.md](USABILITY-RUNBOOK.md) | Script for the checks that need people (first-user time, alert clarity, workspace browser by hand) |
 | [STATUS.md](STATUS.md) | Current progress, known gaps, open decisions. Updated after every subtask |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | The requirements (v0.5). Tagged `[V]` verified against a public source or `[I]` inferred |
@@ -376,6 +377,8 @@ API description: `GET /v1/openapi.json` (or the committed `API.openapi.json`) is
 Encryption at rest: make a key with `ztx-cp gen-master-key`, keep it **somewhere other than the server's disk** (a password manager or secrets manager, plus a second copy: without it the data cannot be read), and start with `ztx-cp -master-key-file /run/secrets/ztx-master-key ...` (or the `ZTX_MASTER_KEY` variable). The CA key, the signing key and the store (tenant secrets, inspection keys) are then encrypted on disk, and a plain installation is encrypted at its first start. A backup of encrypted data is encrypted, and `ztx-cp restore` needs `-master-key-file`. This protects a stolen disk or backup; it does not protect against someone who is root on the running server, it does not wipe copies of the old clear files (rotate secrets that were in clear), and the audit log and decision records are not encrypted.
 
 IPv6 and network rules: a rule can name where the user connects from (`"network": {"src_cidrs": ["203.0.113.0/24", "2001:db8:1::/48"]}`), with IPv4 and IPv6 prefixes in one list; the node judges the address **it sees**, so use it for a fixed office address, not for people (behind a NAT every user shares one address and home IPv6 addresses change). Before this version such a rule never matched, so check any rule that has one. Nodes can listen on IPv6 (`-listen [::]:9443`) and a connector can reach an app at an IPv6 address; apps are always addressed by name, so users never type one. The simulator takes `src_ip`. Not tested: an IPv6-only network (NAT64/DNS64) and the real programs end to end over IPv6.
+
+If the platform loses someone's data: [BREACH-RESPONSE.md](BREACH-RESPONSE.md) is the procedure (not legal advice, not rehearsed: have counsel read it). Each tenant should set a security contact (`PUT /v1/security-contact`), and `ztx-cp incident-report` tells the operator which tenants are in scope, what is held about each, whom to tell and the 72-hour deadline. Nothing records whether data was *read*, so the report assumes exposure.
 
 Accessibility: the console and the pages shown when someone is stopped have been checked with an automated tool (axe-core) in the light and the dark setting, by keyboard and at a phone width, and the contrast of every colour is tested. **This is not a claim of WCAG 2.1 AA conformance**: it has not been tried with a screen reader or by a person who uses assistive tools (`USABILITY-RUNBOOK.md`, A11Y-001), only Chrome was used, and **everything is in English** (no translation yet). The browser checks are in `test/a11y`.
 
