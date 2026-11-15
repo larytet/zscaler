@@ -1,6 +1,6 @@
 # Software Design: SMB-ZTX
 
-**Status:** Draft v0.4, 2026-11-15
+**Status:** Draft v1.0 (complete for RB1), 2026-11-15
 **Input:** [REQUIREMENTS.md](REQUIREMENTS.md) v0.4 (IDs such as `ZPA-020` refer to it)
 **Next documents:** TEST-PLAN.md, then the implementation under `cmd/` and `internal/`
 
@@ -12,7 +12,7 @@ The design is written in parts. This file grows one subtask at a time:
 | D2 | Policy engine and data model | done |
 | D3 | Data plane: broker, connector stitching, forward proxy | done |
 | D4 | Agent, posture, enrolment | done |
-| D5 | Control-plane API, logging, security, deployment | pending |
+| D5 | Control-plane API, logging, security, deployment | done |
 
 ---
 
@@ -431,3 +431,105 @@ RB1 provides a version check: the CP announces a minimum agent version and the a
 ### D4.6 Privacy
 
 Posture contains only the fields above. No process list, no browsing history, no file names. The decision log stores user, device, app or host and action. This is consistent with REQUIREMENTS.md section 12.4 and should stay narrow unless a customer opts in.
+
+---
+
+## D5. Control-plane API, logging, security, deployment
+
+Requirements: ADM-001, 003, 006 (subsets), NFR-001..003, 020..023 (subsets), ARCH-008.
+
+### D5.1 Admin API (`cmd/ztx-cp`)
+
+JSON over HTTPS. Admin authentication in RB1 is a bearer API token per admin (hashed at rest, scoped to a tenant, with a role). OIDC admin login is a later part.
+
+| Method and path | Purpose | Role |
+|---|---|---|
+| `POST /v1/tenants` | Create tenant (bootstrap token only) | bootstrap |
+| `PUT /v1/idp` | Set IdP issuer, client ID, group claim | admin |
+| `GET/POST /v1/segments`, `PUT/DELETE /v1/segments/{id}` | App segments | admin |
+| `GET/PUT /v1/policies/{kind}` | Read or replace a policy (validated, versioned) | admin |
+| `POST /v1/policies/{kind}/dry-run` | Evaluate a sample request against a draft policy | admin, viewer |
+| `POST /v1/policies/safe-defaults` | Apply the safe-defaults pack | admin |
+| `POST /v1/connectors/tokens` | Create a one-time connector enrolment token | admin |
+| `GET /v1/devices`, `POST /v1/devices/{id}/revoke` | Devices | admin |
+| `GET /v1/users`, `POST /v1/users/{id}/disable` | Users | admin |
+| `GET /v1/audit` | Admin audit trail | admin, viewer |
+| `GET /v1/decisions?user=&app=&action=&since=` | Decision log search | admin, viewer |
+| `GET /healthz`, `GET /metrics` | Operations | none, internal |
+
+Agent and connector endpoints (`/auth/*`, `/enrol/*`, `/policy/stream`) are separate listeners with their own TLS configuration so that admin and device traffic cannot share a port.
+
+Rules: every write goes through `Validate` and the audit log, includes optimistic concurrency (`If-Match` on `version`), and returns the new version. Pagination uses cursors. Errors use a single JSON error shape with a stable `code`.
+
+### D5.2 Admin UI
+
+Minimal static UI (HTML and plain JavaScript, no build step) served by the CP: setup wizard (IdP, first segment, safe defaults, enrol connector, install link), device and user lists with revoke and disable, a decision-log viewer with the "why" (matched rule), and a plain-language alert list. No framework in RB1.
+
+### D5.3 Alerts and plain-language summaries (SMB-003, OPS-001)
+
+A small evaluator on the decision log produces alerts with a recommended action:
+
+| Trigger | Message | Recommended action |
+|---|---|---|
+| 10 denies for the same user and app in 10 minutes | "Alice was blocked 10 times from the ERP database" | Review rule `r-finance-db` or contact Alice |
+| New device first seen from a new country (if the geo database is configured) | "Alice enrolled a new device from Brazil" | Revoke if unexpected |
+| Connector offline over 2 minutes | "Office connector is offline" | Check the host |
+| Posture fails after having passed | "Bob's laptop lost disk encryption" | Ask Bob to re-enable it |
+
+Delivery: UI list and email via SMTP settings. Webhooks are deferred.
+
+### D5.4 Logging and observability
+
+- `log/slog` JSON logs for services, separate from the decision log.
+- Decision log sink in RB1: append-only JSON Lines files rotated daily and by size, with the EN also forwarding to the CP for search. Retention default 90 days.
+- Metrics (Prometheus text format): active sessions, session setup latency histogram, decisions by action, connector count, policy version per EN, CP stream lag.
+- Every request carries a correlation ID that appears in the agent log, the EN decision log and the block page.
+
+### D5.5 Security design
+
+**Trust boundaries:** admin browser to CP, device to EN, connector to EN, EN to CP, EN to origin. Each has its own credential type.
+
+| Threat (ARCH-008) | Control |
+|---|---|
+| Subverting the decision (stolen device cert) | 12 h lifetime, device key never leaves the device, revocation push, posture re-checked every 5 minutes |
+| Compromised EN pivoting into the network | Connector target allow-list, connectors accept only mux `OPEN` from an authenticated EN, ENs have no credentials to the app network |
+| Compromised connector | Holds only its own key. Its certificate is revocable. It sees only traffic for its segments |
+| Malicious tenant admin cross-tenant access | Tenant ID is taken from the credential, never from the request, and every store call is scoped by it |
+| DoS against the EN | Connection and rate limits per device, per tenant fair queuing for new sessions, header and frame size caps |
+| Policy tampering in transit | Policy stream over mTLS, with a signature by the CP policy key that ENs verify |
+| Insider with CP access | Audit log is append-only and hash-chained, so deletions are detectable. Secrets and keys are not logged |
+| SSRF through the web proxy | Origin dial denies loopback, link-local, private and the cloud metadata address, and re-checks after DNS resolution |
+| Loss of visibility | Decision log written before bytes are forwarded for denies and at close for allows. EN refuses new sessions if its log sink is full beyond a threshold |
+| Storage of sensitive data | No payload at rest. Private keys at mode 0600. Refresh tokens and admin tokens hashed or stored with OS permissions |
+
+**PKI.** The CP holds a tenant CA key (file with mode 0600 in RB1, to be moved into a KMS or HSM later). Root key offline for production. Each tenant has its own intermediate (ARCH-021 target, a single CA with tenant in the subject is acceptable for RB1 and is recorded as a gap).
+
+**Secure development:** `go vet`, `staticcheck`, `govulncheck`, race detector in CI, fuzzing for the mux frame parser and the policy JSON loader, dependency count tracked.
+
+### D5.6 Deployment
+
+- One static binary per role, container images based on distroless, systemd units provided.
+- Single-box mode for evaluation: `ztx-cp`, `ztx-en` and a connector in one `docker compose` file with a local test IdP (a minimal OIDC server for tests).
+- Production topology sketch: one CP per region behind a load balancer, at least two ENs per region, connectors in pairs per site.
+- Configuration by flags and a YAML or JSON file. Secrets from files or environment variables, never from the command line.
+
+### D5.7 Requirements traceability (RB1)
+
+The test plan carries the full matrix. Summary of which design part covers which requirement family:
+
+| Family | Design part |
+|---|---|
+| ARCH-xxx | D1, D3, D5.5 |
+| ZPA-xxx (subset) | D2, D3.3, D3.4 |
+| ZIA-xxx (subset) | D2, D3.5 |
+| AGT-xxx (subset) | D4 |
+| INT-001/002 | D4.2 |
+| ADM, OPS, SMB (subset) | D2.4, D5.1..5.3 |
+| NFR (subset) | D3.6, D3.7, D5.4, D5.5 |
+
+### D5.8 Open design questions
+
+1. Replace the own mux with an existing multiplexer or QUIC once the patent review in REQUIREMENTS.md section 15 is done.
+2. Whether the transparent-tunnel agent is built natively per OS or on top of an existing open-source tunnel (licence review needed).
+3. Whether ENs run on a partner cloud's edge. This affects the "no payload at rest" claim and the PKI.
+4. Whether to decrypt web traffic by default (ZIA-040 and the privacy trade-off) or keep host-only policy for the SMB tier.
