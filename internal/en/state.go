@@ -5,10 +5,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/larytet/zscaler/internal/dlp"
 	"io"
 	"net/http"
 	"sync"
@@ -38,6 +40,7 @@ type tenantView struct {
 	ca      *pki.CA
 	leafKey *ecdsa.PrivateKey
 	secrets map[string]store.Secret
+	edm     map[string]*dlp.EDM
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -75,7 +78,7 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 	nv := &view{tenants: map[string]*tenantView{}}
 	for id, t := range snap.Tenants {
 		tv := &tenantView{segs: map[string]broker.Segment{}, users: map[string]policy.User{},
-			pols: map[policy.Kind]*policy.Policy{}, revoked: map[string]bool{}, grants: map[string]time.Time{}, secrets: map[string]store.Secret{}}
+			pols: map[policy.Kind]*policy.Policy{}, revoked: map[string]bool{}, grants: map[string]time.Time{}, secrets: map[string]store.Secret{}, edm: map[string]*dlp.EDM{}}
 		for _, g := range t.Segments {
 			tv.segs[g.ID] = g
 		}
@@ -90,6 +93,11 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		}
 		for _, sc := range t.Secrets {
 			tv.secrets[sc.Name] = sc
+		}
+		for _, e := range t.EDM {
+			if salt, err := hex.DecodeString(e.Salt); err == nil {
+				tv.edm[e.Name] = dlp.NewEDM(salt, e.Hashes)
+			}
 		}
 		if t.Inspect != nil && t.Inspect.Enabled {
 			if ca, err := pki.CAFromPEM([]byte(t.Inspect.CACert), []byte(t.Inspect.CAKey), nil); err == nil {
@@ -177,6 +185,14 @@ func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
 		return true, t.exempt, t.ca
 	}
 	return false, nil, nil
+}
+
+// EDM returns the tenant's exact-data-match sets, compiled (DATA-006).
+func (s *SyncState) EDM(tenant string) map[string]*dlp.EDM {
+	if t := s.t(tenant); t != nil {
+		return t.edm
+	}
+	return nil
 }
 
 // Secret returns a stored credential for injection (AGS-001).

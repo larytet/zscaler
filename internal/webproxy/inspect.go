@@ -140,7 +140,7 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	if pol != nil {
 		if pol.UsesDLP() && q.Body != nil && q.Body != http.NoBody && (q.Method == "POST" || q.Method == "PUT" || q.Method == "PATCH") {
 			var skipped bool
-			hits, skipped = scanBody(q)
+			hits, skipped = scanBody(q, p.edmSets(id.Tenant))
 			if skipped {
 				note := rec // visible in the log: the rule could not see this body
 				note.Action, note.Reason = "info", "dlp-skipped-too-large"
@@ -305,7 +305,19 @@ const MaxScanBytes = 1 << 20
 
 // scanBody reads at most MaxScanBytes of the request body, scans it, and puts the body
 // back so it can still be forwarded. skipped is true when the body was too large to scan.
-func scanBody(q *http.Request) (hits []string, skipped bool) {
+// EDMSource is an optional State extension: a tenant's exact-data-match sets (DATA-006).
+type EDMSource interface {
+	EDM(tenant string) map[string]*dlp.EDM
+}
+
+func (p *Proxy) edmSets(tenant string) map[string]*dlp.EDM {
+	if es, ok := p.State.(EDMSource); ok {
+		return es.EDM(tenant)
+	}
+	return nil
+}
+
+func scanBody(q *http.Request, sets map[string]*dlp.EDM) (hits []string, skipped bool) {
 	if q.ContentLength > MaxScanBytes {
 		return nil, true
 	}
@@ -321,7 +333,7 @@ func scanBody(q *http.Request) (hits []string, skipped bool) {
 	if err != nil {
 		return nil, false
 	}
-	return dlp.Scan(buf), false
+	return dlp.ScanWith(buf, sets), false
 }
 
 type readCloser struct {
@@ -373,7 +385,7 @@ func (p *Proxy) scanResponse(w http.ResponseWriter, resp *http.Response, pol *po
 	resp.Body = io.NopCloser(bytes.NewReader(buf))
 	resp.ContentLength = int64(len(buf))
 	resp.Header.Del("Content-Length")
-	hits := dlp.Scan(buf)
+	hits := dlp.ScanWith(buf, p.edmSets(id.Tenant))
 	if len(hits) == 0 {
 		return false
 	}

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 )
@@ -124,6 +125,7 @@ type Tenant struct {
 	AgentTimes  map[string]AgentTimes      `json:"agent_times,omitempty"` // AI agent registry: created and last used
 	Inspect     InspectCfg                 `json:"inspect,omitempty"`
 	Secrets     map[string]Secret          `json:"secrets,omitempty"`
+	EDM         map[string]EDMSet          `json:"edm,omitempty"`
 	Devices     map[string]Device          `json:"devices"`
 }
 
@@ -359,6 +361,9 @@ func (s *Store) PutPolicy(tenant string, k policy.Kind, p *policy.Policy, ifMatc
 	if err := p.Compile(known); err != nil {
 		return cur, err
 	}
+	if err := t.checkEDM(p); err != nil {
+		return cur, err
+	}
 	if err := t.checkInjects(p); err != nil {
 		return cur, err
 	}
@@ -534,6 +539,7 @@ type TenantSnap struct {
 	Grants         []Grant // only unexpired ones
 	Inspect        *InspectSnap
 	Secrets        []Secret
+	EDM            []EDMSet // exact-data-match sets: salted hashes only
 }
 
 // Grant is an admin-approved, time-limited access (just-in-time).
@@ -600,6 +606,9 @@ func (s *Store) Snapshot() *Snapshot {
 		}
 		if t.Inspect.Enabled && t.Inspect.CAKey != "" {
 			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey, LeafKey: t.Inspect.LeafKey}
+		}
+		for _, e := range t.EDM {
+			ts.EDM = append(ts.EDM, e)
 		}
 		for _, sc := range t.Secrets {
 			ts.Secrets = append(ts.Secrets, sc)
@@ -845,6 +854,22 @@ func (s *Store) DeleteSecret(tenant, name string) error {
 }
 
 // secretsCover checks that every inject rule names an existing secret and covers its host.
+// checkEDM refuses a policy that names a data set that does not exist.
+func (t *Tenant) checkEDM(p *policy.Policy) error {
+	for _, r := range p.Rules {
+		for _, list := range [][]string{r.Match.DLP, r.Match.DLPResponse} {
+			for _, d := range list {
+				if strings.HasPrefix(d, dlp.EDMPrefix) {
+					if _, ok := t.EDM[strings.TrimPrefix(d, dlp.EDMPrefix)]; !ok {
+						return fmt.Errorf("rule %q uses the unknown data set %q", r.ID, d)
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (t *Tenant) checkInjects(p *policy.Policy) error {
 	for _, r := range p.Rules {
 		if r.Inject == "" {
@@ -878,4 +903,99 @@ func (s *Store) Secret(tenant, name string) (Secret, bool) {
 	}
 	sc, ok := t.Secrets[name]
 	return sc, ok
+}
+
+// EDMSet is one exact-data-match list. Only salted hashes are kept; the values are not.
+type EDMSet struct {
+	Name    string    `json:"name"`
+	Salt    string    `json:"salt,omitempty"`   // hex; never shown by the API
+	Hashes  []string  `json:"hashes,omitempty"` // never shown by the API
+	Count   int       `json:"count"`
+	Skipped int       `json:"skipped,omitempty"` // values that could not be matched (too short, too long, spaces)
+	Updated time.Time `json:"updated"`
+}
+
+// PutEDM replaces a data set with the given values. It returns how many were kept and how many
+// were skipped as unmatchable. The values are hashed here and then forgotten.
+func (s *Store) PutEDM(tenant, name string, values []string) (kept, skipped int, err error) {
+	if !dlp.ValidEDMName(name) {
+		return 0, 0, fmt.Errorf("invalid data set name")
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return 0, 0, err
+	}
+	seen := map[string]bool{}
+	var hashes []string
+	for _, v := range values {
+		h, ok := dlp.Hash(salt, v)
+		if !ok {
+			skipped++
+			continue
+		}
+		if !seen[h] {
+			seen[h] = true
+			hashes = append(hashes, h)
+		}
+	}
+	if len(hashes) == 0 {
+		return 0, skipped, fmt.Errorf("no usable values: each must be one token of 4 to 64 letters, digits or . _ @ + -")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, exists := t.EDM[name]; !exists && len(t.EDM) >= 5 {
+		return 0, 0, fmt.Errorf("at most 5 data sets")
+	}
+	if t.EDM == nil {
+		t.EDM = map[string]EDMSet{}
+	}
+	t.EDM[name] = EDMSet{Name: name, Salt: hex.EncodeToString(salt), Hashes: hashes, Count: len(hashes), Skipped: skipped, Updated: time.Now().UTC()}
+	return len(hashes), skipped, s.save()
+}
+
+// EDMSets lists a tenant's data sets without the salt or hashes.
+func (s *Store) EDMSets(tenant string) ([]EDMSet, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EDMSet, 0, len(t.EDM))
+	for _, e := range t.EDM {
+		e.Salt, e.Hashes = "", nil
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+// DeleteEDM removes a data set unless a policy still uses it.
+func (s *Store) DeleteEDM(tenant, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if _, ok := t.EDM[name]; !ok {
+		return ErrNotFound
+	}
+	for k, d := range t.Policies {
+		for _, r := range d.Policy.Rules {
+			for _, list := range [][]string{r.Match.DLP, r.Match.DLPResponse} {
+				for _, x := range list {
+					if x == dlp.EDMPrefix+name {
+						return fmt.Errorf("data set %q is still used by rule %q of the %s policy", name, r.ID, k)
+					}
+				}
+			}
+		}
+	}
+	delete(t.EDM, name)
+	return s.save()
 }

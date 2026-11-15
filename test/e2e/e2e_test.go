@@ -2109,3 +2109,97 @@ func TestScn019CredentialInjection(t *testing.T) {
 		t.Fatalf("deleting a secret a rule still injects must be refused, got %d", code)
 	}
 }
+
+// SCN-020 (DATA-006): exact data match. An admin uploads a list of customer numbers; the platform
+// keeps only hashes, yet a decrypted upload containing one of them is blocked at the node.
+func TestScn020ExactDataMatch(t *testing.T) {
+	var reached atomic.Int32
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		reached.Add(1)
+		io.Copy(io.Discard, q.Body)
+		fmt.Fprint(w, "stored")
+	}))
+	defer origin.Close()
+	hp := strings.TrimPrefix(origin.URL, "https://")
+	host := strings.Split(hp, ":")[0]
+	pemFile := filepath.Join(t.TempDir(), "origin.pem")
+	os.WriteFile(pemFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: origin.Certificate().Raw}), 0o600)
+
+	s := newStack(t, "--lab-allow-dial", hp, "--lab-upstream-ca", pemFile)
+	s.must("PUT", "/v1/edm/customers", map[string]any{"values": []string{"CUST-004711", "CUST-004712", "jane.doe@example.com"}}, s.token)
+	for _, p := range []string{"/v1/edm"} {
+		if _, b := s.api("GET", p, nil, s.token); strings.Contains(string(b), "CUST-004711") || strings.Contains(string(b), "hashes") {
+			t.Fatalf("%s showed values or hashes: %s", p, b)
+		}
+	}
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/web", map[string]any{"default_action": "allow", "rules": []map[string]any{{
+		"id": "no-customer-data", "priority": 10, "action": "deny", "match": map[string]any{"dlp": []string{"edm:customers"}}}}}, s.token)
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
+	req, _ := http.NewRequest("GET", s.adminU+"/v1/inspection/ca.pem", nil)
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.admin.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	waitPort(t, a.ports["http"])
+	proxy := fmt.Sprintf("127.0.0.1:%d", a.ports["http"])
+	post := func(body string) (int, bool) {
+		c, err := net.Dial("tcp", proxy)
+		if err != nil {
+			return 0, false
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hp, hp)
+		br := bufio.NewReader(c)
+		r, err := http.ReadResponse(br, nil)
+		if err != nil || r.StatusCode != 200 {
+			return 0, false
+		}
+		inner := tls.Client(&bufferedConn{Conn: c, r: br}, &tls.Config{RootCAs: pool, ServerName: host})
+		inner.SetDeadline(time.Now().Add(5 * time.Second))
+		if inner.Handshake() != nil {
+			return 0, false
+		}
+		fmt.Fprintf(inner, "POST /up HTTP/1.1\r\nHost: %s\r\nConnection: close\r\nContent-Length: %d\r\n\r\n%s", hp, len(body), body)
+		rr, err := http.ReadResponse(bufio.NewReader(inner), nil)
+		if err != nil {
+			return 0, false
+		}
+		io.Copy(io.Discard, rr.Body)
+		return rr.StatusCode, true
+	}
+	// wait until the node has the set and the policy: a clean upload goes through
+	eventually(t, "the node to enforce the policy", 25*time.Second, func() bool {
+		code, ok := post(`{"note":"nothing sensitive"}`)
+		return ok && code == 200
+	})
+	eventually(t, "a listed customer number to be blocked", 25*time.Second, func() bool {
+		code, ok := post(`{"customer":"CUST-004711"}`)
+		return ok && code == 403
+	})
+	before := reached.Load()
+	if code, _ := post(`{"mail":"Jane.Doe@Example.com"}`); code != 403 {
+		t.Fatalf("a listed address in other case must be blocked: %d", code)
+	}
+	if code, _ := post(`{"customer":"CUST-009999"}`); code != 200 {
+		t.Fatalf("a value not on the list must pass: %d", code)
+	}
+	if reached.Load() != before+1 {
+		t.Fatal("blocked bodies reached the origin")
+	}
+	raw, _ := os.ReadFile(filepath.Join(s.dir, "en", "decisions.jsonl"))
+	if strings.Contains(string(raw), "CUST-004711") {
+		t.Fatal("a listed value reached the node's decision log")
+	}
+	if code, _ := s.api("DELETE", "/v1/edm/customers", nil, s.token); code != 409 {
+		t.Fatalf("deleting a set a rule uses must be refused, got %d", code)
+	}
+}

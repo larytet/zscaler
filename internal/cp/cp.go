@@ -5,6 +5,8 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/larytet/zscaler/internal/dlp"
 	"io"
 	"net/http"
 	"regexp"
@@ -97,6 +99,9 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/ai-agents/{name}/readonly-pack", a.wrap(read, a.readonlyPack))
 	m.HandleFunc("GET /v1/ai-agents/{name}/lint", a.wrap(read, a.lintAIAgent))
 	m.HandleFunc("GET /v1/shadow-ai", a.wrap(read, a.shadowAI))
+	m.HandleFunc("PUT /v1/edm/{name}", a.wrap(write, a.putEDM))
+	m.HandleFunc("GET /v1/edm", a.wrap(write, a.listEDM))
+	m.HandleFunc("DELETE /v1/edm/{name}", a.wrap(write, a.deleteEDM))
 	m.HandleFunc("PUT /v1/secrets/{name}", a.wrap(write, a.putSecret))
 	m.HandleFunc("GET /v1/secrets", a.wrap(write, a.listSecrets))
 	m.HandleFunc("DELETE /v1/secrets/{name}", a.wrap(write, a.deleteSecret))
@@ -1085,5 +1090,44 @@ func (a *API) deleteSecret(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 		return nil, fail(409, "in_use", err.Error())
 	}
 	a.log(c, "secret.delete", name, nil, nil)
+	return map[string]string{"deleted": name}, nil
+}
+
+// putEDM replaces an exact-data-match set (DATA-006). Values are hashed on arrival and not kept; they
+// are not written to the audit log either (only the counts).
+func (a *API) putEDM(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	name := r.PathValue("name")
+	var in struct {
+		Values []string `json:"values"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	if len(in.Values) > dlp.EDMMaxValues {
+		return nil, fail(400, "invalid", fmt.Sprintf("at most %d values per data set", dlp.EDMMaxValues))
+	}
+	kept, skipped, err := a.Store.PutEDM(c.tenant, name, in.Values)
+	if err != nil {
+		return nil, fail(400, "invalid", err.Error())
+	}
+	a.log(c, "edm.put", name, nil, map[string]int{"kept": kept, "skipped": skipped})
+	return map[string]any{"name": name, "kept": kept, "skipped": skipped,
+		"note": "values are stored as salted hashes only; a guessable value (a phone number, a short ID) can be guessed by whoever holds the hashes"}, nil
+}
+
+func (a *API) listEDM(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	return a.Store.EDMSets(c.tenant)
+}
+
+func (a *API) deleteEDM(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	name := r.PathValue("name")
+	if err := a.Store.DeleteEDM(c.tenant, name); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, fail(404, "not_found", "not found")
+		}
+		return nil, fail(409, "in_use", err.Error())
+	}
+	a.log(c, "edm.delete", name, nil, nil)
 	return map[string]string{"deleted": name}, nil
 }

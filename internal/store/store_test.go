@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -319,5 +320,42 @@ func TestSecretsAreWriteOnlyAndGuardedByPolicy(t *testing.T) { // AGT-006
 	}
 	if err := s.DeleteSecret("a", "api"); err == nil || !strings.Contains(err.Error(), "in use") && !strings.Contains(err.Error(), "used") && !strings.Contains(err.Error(), "inject") {
 		t.Fatalf("deleting a secret a rule still uses must be refused: %v", err)
+	}
+}
+
+func TestExactDataMatchSetsKeepOnlyHashes(t *testing.T) { // AGT-017 (store)
+	s, _, _ := twoTenants(t)
+	kept, skipped, err := s.PutEDM("a", "customers", []string{"CUST-004711", "CUST-004711", "abc", "has space", "jane.doe@example.com"})
+	if err != nil || kept != 2 || skipped != 2 {
+		t.Fatalf("%d %d %v", kept, skipped, err)
+	}
+	list, _ := s.EDMSets("a")
+	if len(list) != 1 || list[0].Count != 2 || list[0].Salt != "" || list[0].Hashes != nil {
+		t.Fatalf("the listing must show counts only: %+v", list)
+	}
+	if other, _ := s.EDMSets("b"); len(other) != 0 {
+		t.Fatal("tenant b sees tenant a's data set")
+	}
+	if blob, _ := json.Marshal(s.Snapshot().Tenants["a"]); strings.Contains(string(blob), "CUST-004711") || strings.Contains(strings.ToLower(string(blob)), "jane.doe") {
+		t.Fatal("a value was stored in clear")
+	}
+	if _, _, err := s.PutEDM("a", "bad name", []string{"CUST-004711"}); err == nil {
+		t.Fatal("bad name accepted")
+	}
+	if _, _, err := s.PutEDM("a", "empty", []string{"abc"}); err == nil {
+		t.Fatal("a set with no usable value must be refused")
+	}
+	web := func(set string) *policy.Policy {
+		return &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Rules: []policy.Rule{
+			{ID: "r", Priority: 1, Action: policy.Deny, Match: policy.Match{DLP: []string{set}}}}}
+	}
+	if _, err := s.PutPolicy("a", policy.Web, web("edm:ghost"), 0); err == nil {
+		t.Fatal("a rule naming a data set that does not exist must be refused")
+	}
+	if _, err := s.PutPolicy("a", policy.Web, web("edm:customers"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteEDM("a", "customers"); err == nil {
+		t.Fatal("deleting a set a rule still uses must be refused")
 	}
 }

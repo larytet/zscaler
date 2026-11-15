@@ -104,12 +104,12 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: dlp_response is only valid in web policies", w)
 		}
 		for _, dn := range m.DLPResponse {
-			if !dlp.Known(dn) {
+			if !dlp.KnownType(dn) {
 				add("%s: unknown dlp_response type %q (known: %s)", w, dn, strings.Join(dlp.Names(), ", "))
 			}
 		}
 		for _, dn := range m.DLP {
-			if !dlp.Known(dn) {
+			if !dlp.KnownType(dn) {
 				add("%s: unknown dlp type %q (known: %s)", w, dn, strings.Join(dlp.Names(), ", "))
 			}
 		}

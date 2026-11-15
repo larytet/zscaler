@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
@@ -35,6 +36,13 @@ type state struct {
 	exempt  []string
 	ca      *pki.CA
 	secrets map[string]store.Secret
+	edm     map[string]*dlp.EDM
+}
+
+func (s *state) EDM(string) map[string]*dlp.EDM {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.edm
 }
 
 func (s *state) Secret(_, name string) (store.Secret, bool) {

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"github.com/larytet/zscaler/internal/dlp"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -153,5 +154,40 @@ func TestInjectNeedsInspection(t *testing.T) { // AGT-005
 				t.Fatalf("a tunnel that would carry no credential must be refused: %v %v", resp, err)
 			}
 		})
+	}
+}
+
+func TestExactDataMatchBlocksListedValuesOnly(t *testing.T) { // AGT-017 (DATA-006)
+	r, o, c, br, got := dlpRig(t)
+	host := hostport(o.URL)
+	salt := []byte("test-salt")
+	var hs []string
+	for _, v := range []string{"CUST-004711", "jane.doe@example.com"} {
+		h, _ := dlp.Hash(salt, v)
+		hs = append(hs, h)
+	}
+	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 7, Rules: []policy.Rule{
+		{ID: "no-customers", Priority: 1, Action: policy.Deny, Match: policy.Match{DLP: []string{"edm:customers"}}}}}
+	if err := pol.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	r.st.set(func(s *state) { s.pol = pol; s.edm = map[string]*dlp.EDM{"customers": dlp.NewEDM(salt, hs)} })
+	code, body := get(t, c, br, "POST", host, "/up", `{"id":"CUST-004711","note":"hello"}`)
+	if code != 403 || !strings.Contains(body, "edm:customers") || strings.Contains(body, "CUST-004711") {
+		t.Fatalf("a listed value was not blocked, or the page echoed it: %d %q", code, body)
+	}
+	if len(got.get()) != 0 {
+		t.Fatal("the origin received the blocked body")
+	}
+	if code, _ := get(t, c, br, "POST", host, "/up", `{"id":"CUST-004712"}`); code != 200 {
+		t.Fatalf("a value that is not on the list must pass: %d", code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.logs {
+		if strings.Contains(fmt.Sprint(l), "CUST-004711") {
+			t.Fatal("the value reached the decision log")
+		}
 	}
 }

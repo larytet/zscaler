@@ -223,3 +223,5 @@ func ibanValid(s []byte) bool {
 	}
 	return rem == 1
 }
+
+func sortStrings(s []string) { sort.Strings(s) }

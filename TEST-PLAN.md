@@ -417,5 +417,7 @@ Written before the slices it covers. Priorities follow the requirements: Should 
 | AGT-013 | L4 | P2 | End to end with real binaries: an agent with an injected credential reaches a TLS origin, the origin sees the credential, the agent process never held it | As stated | AGS-001 |
 | AGT-014 | L3 | P2 | Per-agent volume cap | Pause and alert at the limit; owner can resume | AGS-009 |
 | AGT-015 | manual | P2 | An owner who is not a security expert reads the agent registry, the approval request and the rule-of-two warning | Understands each without help (add to USABILITY-RUNBOOK) | Principle 5 |
+| AGT-016 | L3 | P2 | Agent registry: created, last use, access end, unused after 30 days | Shown; a used agent is not flagged; tenant isolated | AGS-005 |
+| AGT-017 | L2/L3/L4 | P1 | Exact data match (DATA-006): a listed value in a decrypted request or response; a value one character off; other case; a long token containing it | Listed values blocked (also in other case and before a full stop), others pass; only hashes stored; sets listed as counts; a rule naming an unknown set refused; delete of a set in use refused; SCN-020 with real binaries | DATA-006 (exact data match part) |
 
 Not covered in this plan until built: AGS-007 chat approval, AGS-008, AGS-010, AGS-011, AGS-012, AGS-014, AGS-015 (decision log chain), AGS-018.
