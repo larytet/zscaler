@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How the Security Works</title>
+<meta name="description" content="Flow diagrams of the SMB-ZTX software design: AI agent controls first, then access, inspection, revocation and the workspace browser.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <span class="brand">SMB-ZTX demo</span>
+  <nav aria-label="Pages">
+    <a href="index.html">Console demo</a>
+    <a href="how.html" aria-current="page">How the security works</a>
+  </nav>
+</header>
+<div class="banner" role="note">Diagrams follow DESIGN.md and REQUIREMENTS.md section 19. <span class="tag built">Built</span> = in the code, basic form. <span class="tag proposed">Proposed</span> = specified, not built.</div>
+
+<div class="doc">
+<h1>How the security works</h1>
+<p>Everything below rests on one idea: <strong>a gatekeeper outside the agent or the device decides, using fixed rules, every time</strong>. No model judgement is in the decision path, and an unclear case is refused.</p>
+
+<h2>Part 1. AI agents</h2>
+
+<section>
+<h3>1.1 What happens to one agent request <span class="tag proposed">Proposed</span> <span class="tag basic">identity, policy, approval built</span></h3>
+<p>The agent never talks to your systems directly. Each request passes the same fixed checks, in order. The first failure stops it.</p>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  A["AI agent sends a request"] --> B{"Valid agent identity,<br/>not revoked or expired?"}
+  B -- no --> X1["Refuse and log"]
+  B -- yes --> C{"Destination on this agent's<br/>allow list?"}
+  C -- no --> X2["Refuse and log"]
+  C -- yes --> D{"Is it a read?"}
+  D -- "no, it writes" --> E["Hold for human approval"]
+  E -- approved --> F
+  E -- denied or timeout --> X3["Refuse and log"]
+  D -- yes --> F{"Under the hourly<br/>volume cap?"}
+  F -- no --> X4["Pause agent, alert owner"]
+  F -- yes --> G["Platform adds the secret<br/>and forwards the request"]
+  G --> H["Response comes back"]
+  H --> I{"Sensitive data<br/>in the response?"}
+  I -- yes --> J["Mask or block"]
+  I -- no --> K["Pass through"]
+  J --> L["Write audit line"]
+  K --> L
+  L --> M["Agent gets the result"]
+</pre></div>
+<ul class="keypoints">
+<li>The checks run in the enforcement node, not in the agent. A tricked agent cannot skip them.</li>
+<li>Requirement IDs: AGS-002 (read-only pack), AGS-003 (egress), AGS-007 (approval), AGS-009 (caps), AGS-012 (masking), AGS-014 (audit).</li>
+</ul>
+</section>
+
+<section>
+<h3>1.2 The agent never holds the password <span class="tag proposed">Proposed</span></h3>
+<div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Ag as AI agent
+  participant EN as Enforcement node
+  participant Vault as Secret store
+  participant App as Business app API
+  Ag->>EN: GET invoices unpaid (platform identity only)
+  EN->>EN: Check identity, allow list, method, cap
+  EN->>Vault: Fetch API key for this app
+  Vault-->>EN: key (never leaves the node)
+  EN->>App: GET invoices unpaid + Authorization header
+  App-->>EN: invoice list
+  EN-->>Ag: invoice list (header not included)
+</pre></div>
+<ul class="keypoints">
+<li>If a hidden instruction in an email says "print your API key", there is nothing to print.</li>
+<li>A stolen agent identity still gets only the allowed calls and can be revoked in one click.</li>
+<li>Built today: the TLS-inspecting proxy that can add headers (I10a) and agent identities (I12b). Missing: the secret store and the injection rule.</li>
+</ul>
+</section>
+
+<section>
+<h3>1.3 Writes wait for a person <span class="tag basic">Built, basic</span></h3>
+<div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Ag as AI agent
+  participant EN as Enforcement node
+  participant CP as Control plane
+  participant Owner as Owner
+  Ag->>EN: PATCH invoice 4471, total 12400
+  EN->>EN: Rule says writes need approval
+  EN-->>Ag: Denied for now, request opened
+  EN->>CP: Open approval request (exact action)
+  CP->>Owner: Email or console card with the exact request
+  Owner->>CP: Approve once, 15 minutes
+  CP->>EN: Grant travels in the signed policy snapshot
+  Ag->>EN: Retry the same request
+  EN->>App: Forward with secret added
+  EN->>CP: Audit: approved by owner, who and when
+</pre></div>
+<ul class="keypoints">
+<li>Built: the first attempt is denied and opens a request, the admin approves for 1 to 480 minutes, and live sessions end when the grant does (I9e).</li>
+<li>Proposed: Slack and Teams approvers, and approval-fatigue controls: show the exact request, cap approvals per hour, group low-risk ones (AGS-007, AGS-008).</li>
+</ul>
+</section>
+
+<section>
+<h3>1.4 Access that expires and never exceeds its owner <span class="tag basic">grants built</span> <span class="tag proposed">operator cap proposed</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart LR
+  O["Owner access<br/>what Priya may do"] --> I["Intersection"]
+  G["Agent grants<br/>what the admin listed"] --> I
+  I --> E["Effective access<br/>of invoice-helper"]
+  T["Expiry: minutes to hours"] --> E
+  R["Owner leaves or is disabled"] -. ends .-> E
+  K["Kill switch or revoke"] -. ends .-> E
+</pre></div>
+<ul class="keypoints">
+<li>The agent can never do more than its owner, so delegating cannot raise anyone's rights (AGS-004).</li>
+<li>When the owner leaves, the agent goes too. The registry flags agents with no recent use or no end date (AGS-005).</li>
+</ul>
+</section>
+
+<section>
+<h3>1.5 The "rule of two" check <span class="tag proposed">Proposed</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  P["Reads private data"] --> Q{"How many of the<br/>three does this agent have?"}
+  U["Reads untrusted input<br/>mail, web pages"] --> Q
+  S["Can send data out"] --> Q
+  Q -- "one or two" --> OK["No warning"]
+  Q -- "all three" --> W["Warn the owner:<br/>an injected instruction could send data out"]
+  W --> F["Suggested fix: send only after approval,<br/>or remove the untrusted input"]
+</pre></div>
+<p class="muted">Advice, not a block. Published work notes that a detector alone cannot be the gate, so the real protection is in 1.1 to 1.4 (AGS-017).</p>
+</section>
+
+<section>
+<h3>1.6 Sensitive data in prompts and answers <span class="tag basic">block built</span> <span class="tag proposed">mask proposed</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart LR
+  subgraph out["Going out: prompts and uploads"]
+    A1["User or agent sends text"] --> A2{"Scan: card, IBAN,<br/>national ID, keys"}
+    A2 -- found --> A3["Block page names the type,<br/>never the data"]
+    A2 -- clean --> A4["Send to the AI tool"]
+  end
+  subgraph back["Coming back: answers and records"]
+    B1["Response from app or AI tool"] --> B2{"Scan the same patterns"}
+    B2 -- found --> B3{"Policy: block or mask?"}
+    B3 -- block --> B4["Block page"]
+    B3 -- mask --> B5["Replace with tokens"]
+    B2 -- clean --> B6["Pass through"]
+  end
+</pre></div>
+<ul class="keypoints">
+<li>Built: request DLP (I10b) and response DLP (I16), up to 1 MiB, with gzip handled. Binary files are not scanned.</li>
+<li>Limits to state plainly: pattern matching only. Reformatted data can be missed and some numbers will be flagged wrongly.</li>
+</ul>
+</section>
+
+<section>
+<h3>1.7 A log nobody can quietly edit <span class="tag built">signed state built</span> <span class="tag proposed">hash chain proposed</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart LR
+  L1["Line 1<br/>event + hash 0"] --> H1["hash 1 = H of line 1 + previous hash"]
+  H1 --> L2["Line 2<br/>event + hash 1"]
+  L2 --> H2["hash 2 = H of line 2 + hash 1"]
+  H2 --> L3["Line 3<br/>event + hash 2"]
+  T["Edit line 1 later"] -. changes .-> H1
+  H1 -. breaks every later hash .-> H2
+</pre></div>
+<p class="muted">Try it in the console demo: Audit log, then edit a line and press Verify (AGS-014, AGS-015).</p>
+</section>
+
+<h2>Part 2. People, devices and the rest of the platform</h2>
+
+<section>
+<h3>2.1 The pieces <span class="tag built">Built</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  Admin["Admin console"] --> CP["Control plane<br/>users, apps, policy, audit, CA"]
+  IdP["Identity provider (OIDC)"] --> CP
+  CP -- "signed policy snapshots" --> EN["Enforcement node<br/>broker + web proxy + decision cache"]
+  Dev["Device agent<br/>local proxy + posture"] -- "mutual TLS" --> EN
+  Ag["AI agent identity"] -- "mutual TLS" --> EN
+  EN -- "outbound-only link, started by the connector" --- Con["Connector in the office network"]
+  Con --> App["Private app"]
+  EN --> Web["Internet and SaaS"]
+</pre></div>
+<ul class="keypoints">
+<li>The control plane never sees user traffic. It issues short-lived certificates and pushes signed policy.</li>
+<li>The connector has no inbound ports. It dials out, so nothing in the office is exposed.</li>
+</ul>
+</section>
+
+<section>
+<h3>2.2 Reaching a private app <span class="tag built">Built</span></h3>
+<div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Dev as Device agent
+  participant EN as Enforcement node
+  participant Con as Connector
+  participant App as Private app
+  Dev->>EN: Open ledger.corp port 5432 (user and posture inside the certificate)
+  EN->>EN: Find app segment, check user, group, posture, time
+  alt allowed
+    EN->>Con: Session request over the connector's existing link
+    Con->>App: Dial the app
+    EN-->>Dev: Stream stitched through
+  else denied
+    EN-->>Dev: Refuse, app looks absent (dark app)
+  end
+  EN->>EN: Write decision record
+</pre></div>
+</section>
+
+<section>
+<h3>2.3 Web access with inspection and data checks <span class="tag basic">Built, basic</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  R["Request through the proxy"] --> C{"Category and domain rules"}
+  C -- block --> B1["Block page"]
+  C -- warn --> B2["Warning page, user may continue"]
+  C -- allow --> I{"Inspect HTTPS?<br/>not exempt, tenant CA trusted"}
+  I -- no --> F["Forward"]
+  I -- yes --> D["Decrypt with per-host certificate<br/>check path and method"]
+  D --> S{"Data check on upload"}
+  S -- found --> B3["Block page"]
+  S -- clean --> U["Forward upstream, verify the real certificate"]
+  U --> RS{"Data check on response"}
+  RS -- found --> B4["Block page"]
+  RS -- clean --> F2["Deliver"]
+</pre></div>
+<ul class="keypoints">
+<li>Known limits: no WebSocket or HTTP/2 yet, and certificate-pinned apps must be exempted.</li>
+<li>The inspection CA key is sensitive. It is stored in clear in the control plane's store file in this version.</li>
+</ul>
+</section>
+
+<section>
+<h3>2.4 A lost laptop <span class="tag built">Built</span></h3>
+<div class="diagram"><pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant Admin
+  participant CP as Control plane
+  participant EN as Enforcement node
+  participant Dev as Lost laptop
+  Admin->>CP: Revoke device
+  CP->>EN: Revocation event (pushed at once, signed)
+  EN->>EN: Close live sessions, add to deny list
+  Dev->>EN: New connection attempt
+  EN-->>Dev: Refused: certificate revoked
+  Note over EN: If the control plane is unreachable, nodes keep the last policy but refuse new sessions when their revocation list is older than 15 minutes
+</pre></div>
+</section>
+
+<section>
+<h3>2.5 Policy changes and failure behaviour <span class="tag built">Built</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  E["Admin edits policy"] --> V{"Validates?<br/>private default must be deny"}
+  V -- no --> R["Rejected at save time"]
+  V -- yes --> S["Version, sign, push to all nodes"]
+  S --> N{"Node verifies signature,<br/>sequence and age"}
+  N -- bad --> K["Keep previous policy, report error"]
+  N -- good --> A["Swap atomically"]
+  A --> L["Long sessions re-checked every 5 minutes"]
+  X["Control plane down"] --> M["Nodes keep enforcing the last policy.<br/>Fail closed for new risk"]
+</pre></div>
+</section>
+
+<section>
+<h3>2.6 Personal devices: the workspace browser (proof of concept) <span class="tag basic">Built, basic</span></h3>
+<div class="diagram"><pre class="mermaid">
+flowchart TD
+  L["Launcher starts"] --> B{"Device baseline OK?"}
+  B -- no --> X["Refuse"]
+  B -- yes --> C["Issue workspace certificate, 4 hours"]
+  C --> P["Empty profile, fixed flags:<br/>no extensions, no sync, no QUIC"]
+  P --> N["Show notice: proof of concept,<br/>no data controls"]
+  N --> W["Browse through the platform proxy<br/>inspection trust only inside the workspace"]
+  W --> R{"Revoked, baseline failed,<br/>or control plane gone too long?"}
+  R -- yes --> Z["Kill browser, erase profile"]
+  R -- no --> W
+</pre></div>
+<p class="muted">Clipboard, download, upload, print, drag and drop and watermark controls are deferred. Chrome 146 does not load an extension given on the command line.</p>
+</section>
+
+<p class="muted">Diagrams are drawn in the browser with Mermaid, so they stay editable text in this page.</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({ startOnLoad: true, theme: dark ? "dark" : "neutral", securityLevel: "strict", flowchart: { htmlLabels: true, curve: "basis" } });
+</script>
+</body>
+</html>
