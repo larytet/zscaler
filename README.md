@@ -67,7 +67,7 @@ test/real/run.sh clean       # remove leftovers of earlier runs (by label) and n
 
 A run uses one namespace named `ztx-real-<run id>` and removes it at the end, also when a test fails. Results are
 appended to [RESULTS-REAL.md](RESULTS-REAL.md) with the date, commit, the node's operating system and core count.
-Only some of the planned tests exist yet; STATUS.md says which.
+All 20 planned tests exist (TEST-PLAN.md T7.6); RESULTS-REAL.md records every run, including failed ones.
 
 ## Try it on one machine
 
@@ -157,6 +157,8 @@ Removable media (Linux agents): add `"posture": {"removable_media": false}` to a
 Documents you must not lose: `PUT /v1/edm/pricelist` with `{"documents": ["...pasted text..."]}` keeps only hashes of eight-word runs. A web rule with `"dlp": ["edm:pricelist"]` then blocks decrypted requests that repeat about ten words in a row from it. Text only; an edited copy or a short excerpt is not found.
 
 Policy history: `GET /v1/policies/web/versions` lists the last 50 saved versions with who saved each; `GET /v1/policies/web/diff?from=3` says what changed since version 3 (rules added, removed, changed, default action); `POST /v1/policies/web/rollback` with `{"version": 3}` and `If-Match: <current>` saves version 3 again as a new version. Nothing is rewritten, and every rollback is in the audit log.
+
+Certificate lifetime: `ztx-cp --device-cert-ttl 1h` sets how long a device certificate lives (default 12 hours, 30 seconds to 7 days). A shorter life means a revoked or disabled user loses access sooner, and agents renew a third of the lifetime before expiry (at most an hour).
 
 Credential injection (needs inspection on): store a credential with `PUT /v1/secrets/{name}` (`host`, `header`, `value`), then give a web rule `"inject": "name"` (action allow, domains inside the secret's host). The enforcement node adds the header to the decrypted request, replacing the agent's own, so an AI agent can call the API without ever holding the key. Values are write-only: `GET /v1/secrets` lists names, hosts and headers only, and the value is kept out of the audit log, decision log, captures and responses (it is scrubbed if the API echoes it back). The value is stored in clear in the control-plane store file and on enforcement nodes, as the inspection key is.
 

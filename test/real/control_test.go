@@ -253,3 +253,49 @@ func TestRealAI001AgentIdentity(t *testing.T) {
 	// removing the agent ends its grant at once
 	w.must("DELETE", "/v1/ai-agents/helper", nil)
 }
+
+// REAL-AG-002 (AG-007, AG-008): certificate renewal on a real clock. Device certificates live 30 s
+// here; the agent runs for more than three lifetimes and access never breaks, with no new sign-in.
+// Then the user is disabled: renewal is refused and access ends within one certificate lifetime.
+func TestRealAG002CertificateRenewalOnARealClock(t *testing.T) {
+	const ttl = 30 * time.Second
+	w := newWorldN(t, 1, func(w *world) { w.cpExtra = []string{"--device-cert-ttl", ttl.String()} })
+	w.deployApp("erp")
+	w.deployConnector("connector")
+	a := w.newAgent("laptop", map[string]string{"erp.ztx": "erp"})
+	steady(t, a, 60*time.Second, 2)
+	serial0, exp0 := certSerial(t, a)
+	if life := time.Until(exp0); life > ttl+time.Second {
+		t.Fatalf("the certificate lives %v: the control plane did not apply the configured lifetime of %v", life.Round(time.Second), ttl)
+	}
+
+	serials := map[string]bool{serial0: true}
+	start := time.Now()
+	for time.Since(start) < 105*time.Second {
+		if !echoes(a.socks(), "erp.ztx", "tick") {
+			t.Fatalf("access broke %v into the run (certificates seen so far: %d)", time.Since(start).Round(time.Second), len(serials))
+		}
+		s, _ := certSerial(t, a)
+		serials[s] = true
+		time.Sleep(2 * time.Second)
+	}
+	if len(serials) < 4 {
+		t.Fatalf("over %v of a %v lifetime the agent should have held at least 4 certificates, it held %d", time.Since(start).Round(time.Second), ttl, len(serials))
+	}
+	t.Logf("REAL-AG-002: %d certificates in %v with a %v lifetime, access never broke", len(serials), time.Since(start).Round(time.Second), ttl)
+	if strings.Contains(w.output("ztx-agent"), "Sign in") {
+		t.Fatal("the agent asked for a new sign-in: renewal must use the refresh token")
+	}
+
+	// a disabled user cannot renew: access ends within about one lifetime and stays ended
+	w.must("POST", "/v1/users/u1/disable", nil)
+	disabled := time.Now()
+	eventually(t, "access to end for the disabled user", ttl+30*time.Second, func() bool { return !echoes(a.socks(), "erp.ztx", "x") })
+	t.Logf("REAL-AG-002: access ended %v after the user was disabled", time.Since(disabled).Round(time.Second))
+	for i := 0; i < 5; i++ {
+		if echoes(a.socks(), "erp.ztx", "x") {
+			t.Fatal("access came back for a disabled user")
+		}
+		time.Sleep(time.Second)
+	}
+}

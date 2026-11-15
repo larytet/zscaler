@@ -1138,10 +1138,10 @@ func TestPolicyHistoryDiffAndRollback(t *testing.T) { // AGT-021 (ADM-004)
 	if c, b, _ = e.call("GET", "/v1/policies/web/diff?from=1&to=4", e.adminA, nil); c != 200 || !strings.Contains(string(b), `"same":true`) {
 		t.Fatalf("version 4 must equal version 1: %d %s", c, b)
 	}
-	if c, b, _ = e.call("GET", "/v1/policies/web/versions", e.adminA, nil); !strings.Contains(string(b), "rollback to version 1") || strings.Count(string(b), `"version"`) != 4 {
+	if _, b, _ = e.call("GET", "/v1/policies/web/versions", e.adminA, nil); !strings.Contains(string(b), "rollback to version 1") || strings.Count(string(b), `"version"`) != 4 {
 		t.Fatalf("%s", b)
 	}
-	if c, b, _ = e.call("GET", "/v1/audit", e.adminA, nil); !strings.Contains(string(b), "policy.rollback") {
+	if _, b, _ = e.call("GET", "/v1/audit", e.adminA, nil); !strings.Contains(string(b), "policy.rollback") {
 		t.Fatalf("a rollback must be audited: %s", b)
 	}
 	// tenant isolation of the history

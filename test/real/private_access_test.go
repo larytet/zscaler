@@ -10,8 +10,11 @@ import (
 )
 
 // appClients returns the addresses the app has logged as clients.
-func (w *world) appClients() []string {
-	out, _ := w.k("logs deployment/echo -n " + w.ns)
+func (w *world) appClients() []string { return w.clientsOf("echo") }
+
+// clientsOf returns the client addresses an echo service has logged.
+func (w *world) clientsOf(name string) []string {
+	out, _ := w.k("logs deployment/" + name + " -n " + w.ns)
 	var ips []string
 	for _, l := range strings.Split(out, "\n") {
 		if strings.HasPrefix(l, "conn from ") {
@@ -133,4 +136,35 @@ func TestRealPA005DeniedUserNeverReachesApp(t *testing.T) {
 	w.must("PUT", "/v1/policies/private", map[string]any{"default_action": "deny", "rules": []map[string]any{{
 		"id": "staff", "priority": 1, "action": "allow", "match": map[string]any{"groups": []string{"all-staff"}, "apps": []string{"erp"}}}}})
 	eventually(t, "access to return", 30*time.Second, func() bool { return echoes(a.socks(), "erp.ztx", "back") })
+}
+
+// REAL-PA-006 (PA-016, ZPA-021): an app's target is moved to another service. Within the connector's
+// refresh time the new service receives the traffic and the old one receives none.
+func TestRealPA006SegmentTargetMoves(t *testing.T) {
+	w, a := startPrivateAccess(t)
+	eventually(t, "access to the first service", 60*time.Second, func() bool { return echoes(a.socks(), "erp.ztx", "x") })
+	if len(w.clientsOf("echo")) == 0 {
+		t.Fatal("the first service saw nothing")
+	}
+	host2 := w.deployEchoService("echo2")
+	if n := len(w.clientsOf("echo2")); n != 0 {
+		t.Fatalf("the second service already has %d clients", n)
+	}
+	moved := time.Now()
+	w.must("PUT", "/v1/segments/erp", map[string]any{"id": "erp", "group": "site1", "class": "standard",
+		"targets": []map[string]any{{"host": host2, "ports": []int{7000}}}})
+	eventually(t, "traffic to reach the second service", 30*time.Second, func() bool {
+		echoes(a.socks(), "erp.ztx", "moved")
+		return len(w.clientsOf("echo2")) > 0
+	})
+	t.Logf("REAL-PA-006: the new target received traffic %v after the change (connector refresh 3 s, default 30 s)", time.Since(moved).Round(100*time.Millisecond))
+	mark := len(w.clientsOf("echo"))
+	for i := 0; i < 5; i++ {
+		if !echoes(a.socks(), "erp.ztx", "after") {
+			t.Fatal("access broke after the move")
+		}
+	}
+	if n := len(w.clientsOf("echo")); n != mark {
+		t.Fatalf("the old service still received %d connections after the move", n-mark)
+	}
 }

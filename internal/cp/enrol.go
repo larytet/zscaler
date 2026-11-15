@@ -34,6 +34,9 @@ type Enrol struct {
 	HTTP *http.Client // for IdP calls (tests)
 	// MinAgentVersion is announced to agents with every certificate; older agents refuse to start sessions.
 	MinAgentVersion string
+	// DeviceTTL is the lifetime of a device certificate; 0 means pki.DeviceTTL. A shorter life means a
+	// revoked or disabled user loses access sooner, at the cost of more renewals.
+	DeviceTTL time.Duration
 	// PolicyKey signs every state snapshot served to enforcement nodes.
 	PolicyKey *ecdsa.PrivateKey
 	seq       atomic.Int64
@@ -120,6 +123,13 @@ func deviceID(pubDER string) string {
 	return "d-" + hex.EncodeToString(h[:6])
 }
 
+func (e *Enrol) deviceTTL() time.Duration {
+	if e.DeviceTTL > 0 {
+		return e.DeviceTTL
+	}
+	return pki.DeviceTTL
+}
+
 func (e *Enrol) issue(pub any, id pki.Identity, ttl time.Duration, names ...string) (certOut, *x509.Certificate, error) {
 	der, err := e.CA.Sign(pub, id, ttl, names...)
 	if err != nil {
@@ -176,7 +186,7 @@ func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	role, ttl := pki.RoleDevice, pki.DeviceTTL
+	role, ttl := pki.RoleDevice, e.deviceTTL()
 	if in.Workspace {
 		role, ttl = pki.RoleWorkspace, WorkspaceTTL
 	}
@@ -238,7 +248,7 @@ func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	ttl := pki.DeviceTTL
+	ttl := e.deviceTTL()
 	if id.Role == pki.RoleWorkspace {
 		ttl = WorkspaceTTL // a workspace never gets a longer credential by renewing
 	}
@@ -461,7 +471,7 @@ func (e *Enrol) enrolService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	did := deviceID(in.PublicKey)
-	out, cert, err := e.issue(pub, pki.Identity{Tenant: tenant, Subject: subject, Device: did, Role: pki.RoleDevice}, pki.DeviceTTL)
+	out, cert, err := e.issue(pub, pki.Identity{Tenant: tenant, Subject: subject, Device: did, Role: pki.RoleDevice}, e.deviceTTL())
 	if err != nil {
 		writeErr(w, err)
 		return

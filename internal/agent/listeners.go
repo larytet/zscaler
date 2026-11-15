@@ -298,7 +298,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		every = time.Duration(a.Cfg.PostureEverySeconds) * time.Second
 	}
 	go a.PostureLoop(ctx, every)
-	go a.RenewLoop(ctx, time.Hour, nil)
+	go a.RenewLoop(ctx, 0, nil)
 	<-ctx.Done()
 	srv.Close()
 	return nil

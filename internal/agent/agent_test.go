@@ -496,3 +496,35 @@ func TestProbeReportsRemovableMedia(t *testing.T) { // AGT-019
 		t.Fatal("not measured on this system: must stay unknown, not guessed")
 	}
 }
+
+func TestRenewLoopAutomaticLeadHandlesShortLifetimes(t *testing.T) { // AG-007, found by REAL-AG-002
+	r := newRig(t)
+	r.enrol.DeviceTTL = 3 * time.Second
+	a := r.agent()
+	if err := a.Enrol(context.Background(), follow); err != nil {
+		t.Fatal(err)
+	}
+	if lead := a.renewLead(0); lead < 900*time.Millisecond || lead > 1100*time.Millisecond {
+		t.Fatalf("the automatic lead for a 3 s certificate should be about a third of it, got %v", lead)
+	}
+	if a.renewLead(5*time.Minute) != 5*time.Minute {
+		t.Fatal("an explicit lead must be kept")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go a.RenewLoop(ctx, 0, nil)
+	seen := map[string]bool{}
+	start := time.Now()
+	for time.Since(start) < 7*time.Second && len(seen) < 3 {
+		a.mu.Lock()
+		seen[a.leaf.SerialNumber.String()] = true
+		a.mu.Unlock()
+		time.Sleep(50 * time.Millisecond)
+	}
+	if len(seen) < 3 {
+		t.Fatalf("expected the certificate to be renewed twice in 7 s, saw %d certificates", len(seen))
+	}
+	if n := len(seen); n > 6 {
+		t.Fatalf("renewing in a tight loop: %d certificates in 7 s", n)
+	}
+}

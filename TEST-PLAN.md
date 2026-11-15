@@ -526,15 +526,12 @@ family at a time (STATUS.md says which exist).
 | REAL-PERF-001 | NFR-002, NFR-003 | Private-app set-up time and throughput through the connector pod | Reported against the design targets; misses are listed, not hidden |
 | REAL-SEC-001 | SEC-001..006, NFR-020 | Stolen certificate without key, foreign CA, old TLS, connector given a target outside its list | Refused in each case; no payload written to disk on the node |
 
-**Written and passing on a real cluster so far:** REAL-ENV-001, REAL-PA-001, REAL-PA-002, REAL-PA-003, REAL-PA-004,
-REAL-PA-005, REAL-PA-007, REAL-ZIA-001, REAL-ZIA-002, REAL-ZIA-003, REAL-ZIA-004, REAL-AG-001, REAL-CP-001,
-REAL-CP-002 and REAL-AI-001 (fifteen of the 19). The web tests reach an HTTPS
-origin in the cluster through a node port on the cluster node's address (the private app of the PA tests is never exposed
-that way); the enforcement node is started with the lab-only switches that let it dial that private address and trust
-the origin's certificate. The others are written family by family; STATUS.md and RESULTS-REAL.md say which have run. Two details of how
-they work: images are built on the node, loaded into the cluster node (kind) and removed again at the end (also
-from the cluster node's image store), and the service side (control plane and enforcement nodes) listens only on the
-address of the cluster's container network, so it is not exposed on the node's other interfaces.
+**All 20 tests of the table are written, and all 20 passed together in one run on a one-node kind cluster** (see
+RESULTS-REAL.md). The web tests reach an HTTPS origin in the cluster through a node port on the cluster node's address
+(the private app of the PA tests is never exposed that way); the enforcement node is started with the lab-only switches
+that let it dial that private address and trust the origin's certificate. A requirement is verified in a real
+environment only to the extent its test checks it: the results of REAL-PERF-001 are measurements on one machine, not a
+capacity claim.
 
 ### T7.7 Pass criteria
 

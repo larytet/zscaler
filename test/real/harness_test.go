@@ -109,6 +109,7 @@ type world struct {
 	fakeBin string
 	site    *webSite
 	cpArgs  []string
+	cpExtra []string // extra control plane arguments, set before it starts
 	cpProc  *exec.Cmd
 	ens     []*enInst
 	enExtra []string // extra enforcement node arguments, set before the nodes start
@@ -283,6 +284,7 @@ func newWorldN(t *testing.T, n int, pre ...func(*world)) *world {
 		"--admin-listen", fmt.Sprintf("127.0.0.1:%d", w.ports["admin"]),
 		"--enrol-listen", fmt.Sprintf("%s:%d", w.hostIP, w.ports["enrol"]),
 		"--names", "localhost,127.0.0.1," + w.hostIP}
+	w.cpArgs = append(w.cpArgs, w.cpExtra...)
 	w.cpProc = w.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=" + bootTok}, w.cpArgs...)
 	waitAddr(t, fmt.Sprintf("127.0.0.1:%d", w.ports["admin"]))
 	waitAddr(t, fmt.Sprintf("%s:%d", w.hostIP, w.ports["enrol"]))
@@ -335,27 +337,27 @@ func newWorldN(t *testing.T, n int, pre ...func(*world)) *world {
 	return w
 }
 
-// deployApp runs the echo app in the cluster and registers it as segment `id`, reached by its
-// service name. It returns the in-cluster host name of the app.
-func (w *world) deployApp(id string) string {
+// deployEchoService runs an echo app in the cluster under the given name (a Deployment and a ClusterIP
+// Service) and returns the in-cluster host name of the service.
+func (w *world) deployEchoService(name string) string {
 	w.t.Helper()
 	w.apply(fmt.Sprintf(`apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: echo
+  name: %[1]s
   labels:
-%s
+%[2]s
 spec:
   replicas: 1
   selector:
-    matchLabels: {app: echo}
+    matchLabels: {app: %[1]s}
   template:
     metadata:
-      labels: {app: echo}
+      labels: {app: %[1]s}
     spec:
       containers:
       - name: echo
-        image: %s
+        image: %[3]s
         imagePullPolicy: IfNotPresent
         args: ["--listen", ":7000"]
         resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 64Mi}}
@@ -363,15 +365,22 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: echo
+  name: %[1]s
   labels:
-%s
+%[2]s
 spec:
-  selector: {app: echo}
+  selector: {app: %[1]s}
   ports: [{port: 7000, targetPort: 7000}]
-`, labels, w.echoImg, labels))
-	w.mustK("rollout status deployment/echo -n " + w.ns + " --timeout=120s")
-	host := "echo." + w.ns + ".svc.cluster.local"
+`, name, labels, w.echoImg))
+	w.mustK("rollout status deployment/" + name + " -n " + w.ns + " --timeout=120s")
+	return name + "." + w.ns + ".svc.cluster.local"
+}
+
+// deployApp runs the echo app in the cluster and registers it as segment `id`, reached by its
+// service name. It returns the in-cluster host name of the app.
+func (w *world) deployApp(id string) string {
+	w.t.Helper()
+	host := w.deployEchoService("echo")
 	w.must("POST", "/v1/segments", map[string]any{"id": id, "group": "site1", "class": "standard",
 		"targets": []map[string]any{{"host": host, "ports": []int{7000}}}})
 	w.must("POST", "/v1/policies/safe-defaults", nil) // after the segment exists: its rules name the segments that are there
@@ -673,4 +682,27 @@ func deviceID(t *testing.T, a *agentInst) string {
 		t.Fatal(err)
 	}
 	return strings.Split(leaf.Subject.CommonName, "/")[2]
+}
+
+// output returns what the processes whose name starts with prefix have printed so far.
+func (w *world) output(prefix string) string {
+	var sb strings.Builder
+	for k, b := range w.bufs {
+		if strings.HasPrefix(k, prefix) {
+			sb.WriteString(b.String())
+		}
+	}
+	return sb.String()
+}
+
+// certSerial reads the serial number and expiry of an agent's device certificate.
+func certSerial(t *testing.T, a *agentInst) (string, time.Time) {
+	t.Helper()
+	b := mustRead(t, filepath.Join(a.dir, "device.crt"))
+	blk, _ := pem.Decode([]byte(b))
+	leaf, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return leaf.SerialNumber.String(), leaf.NotAfter
 }

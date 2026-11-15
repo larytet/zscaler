@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/larytet/zscaler/internal/pathprobe"
+	"github.com/larytet/zscaler/internal/pki"
 	"io"
 	"net"
 	"net/http"
@@ -368,7 +369,7 @@ func (a *Agent) RenewLoop(ctx context.Context, lead time.Duration, onErr func(er
 		exp, ok := a.Expires()
 		wait := time.Minute
 		if ok {
-			if wait = time.Until(exp.Add(-lead)); wait < 0 {
+			if wait = time.Until(exp.Add(-a.renewLead(lead))); wait < 0 {
 				wait = 0
 			}
 		}
@@ -583,4 +584,23 @@ func (a *Agent) pathStages() pathprobe.Result {
 		}()
 	}
 	return last
+}
+
+// renewLead is how long before expiry the certificate is renewed. Zero means automatic: an hour, or
+// a third of the certificate's lifetime when that is shorter, so a short lifetime is renewed in good
+// time instead of in a tight loop.
+func (a *Agent) renewLead(lead time.Duration) time.Duration {
+	if lead > 0 {
+		return lead
+	}
+	lead = time.Hour
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.leaf != nil {
+		// certificates are back-dated by pki.Tolerance for clock skew: it is not part of their life
+		if third := (a.leaf.NotAfter.Sub(a.leaf.NotBefore) - pki.Tolerance) / 3; third > 0 && third < lead {
+			lead = third
+		}
+	}
+	return lead
 }
