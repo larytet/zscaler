@@ -7,10 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
+
+	"github.com/larytet/zscaler/internal/logx"
 )
 
 func main() {
@@ -18,6 +20,7 @@ func main() {
 	cert := flag.String("cert", "/tls/tls.crt", "certificate file")
 	key := flag.String("key", "/tls/tls.key", "key file")
 	flag.Parse()
+	logx.Setup("originapp")
 	var mu sync.Mutex
 	var seen []string
 	mux := http.NewServeMux()
@@ -50,6 +53,6 @@ func main() {
 		fmt.Fprintf(w, "origin: %s %s auth=%s body=%d", r.Method, r.URL.Path, auth, len(b))
 	})
 	srv := &http.Server{Addr: *addr, Handler: mux, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
-	log.Printf("originapp listening on %s", *addr)
-	log.Fatal(srv.ListenAndServeTLS(*cert, *key))
+	slog.Info("originapp listening", "addr", *addr)
+	logx.Die(srv.ListenAndServeTLS(*cert, *key))
 }

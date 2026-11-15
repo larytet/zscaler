@@ -6,7 +6,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -16,6 +15,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/cp"
 	"github.com/larytet/zscaler/internal/decisions"
+	"github.com/larytet/zscaler/internal/logx"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
@@ -24,9 +24,10 @@ import (
 func main() {
 	addr := flag.String("listen", "127.0.0.1:8099", "loopback address to listen on")
 	flag.Parse()
+	logx.Setup("ztx-demo")
 	host, _, err := net.SplitHostPort(*addr)
 	if err != nil || net.ParseIP(host) == nil || !net.ParseIP(host).IsLoopback() {
-		log.Fatal("ztx-demo only listens on a loopback address")
+		logx.Fatal("ztx-demo only listens on a loopback address")
 	}
 	st, _ := store.Open("")
 	tok, _ := st.CreateTenant("demo", "Demo Co")
@@ -79,7 +80,7 @@ func main() {
 	api.RefreshRisk()
 
 	fmt.Printf("ztx-demo (LAB ONLY, plain HTTP, in memory)\n  console:      http://%s/\n  admin token:  %s\n  viewer token: %s\n", *addr, tok, viewer)
-	log.Fatal((&http.Server{Addr: *addr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
+	logx.Die((&http.Server{Addr: *addr, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second}).ListenAndServe())
 }
 
 func tru() *bool { b := true; return &b }

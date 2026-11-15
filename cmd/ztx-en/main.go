@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -21,6 +20,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/cli"
 	"github.com/larytet/zscaler/internal/en"
+	"github.com/larytet/zscaler/internal/logx"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/store"
 	"github.com/larytet/zscaler/internal/webproxy"
@@ -45,6 +45,7 @@ func main() {
 	every := flag.Duration("sync-every", en.DefaultSyncEvery, "state poll interval")
 	staleAfter := flag.Duration("stale-after", 15*time.Minute, "how long without hearing from the control plane before this node counts its state as stale (what then happens to new sessions is each tenant's choice, NFR-012)")
 	flag.Parse()
+	logx.Setup("ztx-en")
 	if *showVersion {
 		fmt.Println("ztx-en", version)
 		return
@@ -52,21 +53,21 @@ func main() {
 
 	caPEM, err := os.ReadFile(*cpCA)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	tok, _ := cli.Secret(*tokFile, "ZTX_EN_TOKEN")
 	id, err := cli.LoadOrEnrol(*data, *cpURL, caPEM, "/enrol/en", tok, *name)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	verifier, err := pki.VerifierFromPEM(id.PEM, nil) // verify-only: the EN never holds the CA key
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 
 	state := en.NewSyncState()
 	if *staleAfter < 5*time.Second || *staleAfter > 24*time.Hour {
-		log.Fatal("--stale-after must be between 5s and 24h")
+		logx.Fatal("--stale-after must be between 5s and 24h")
 	}
 	state.StaleAfter = *staleAfter
 	rev := pki.NewRevocations(nil)
@@ -76,7 +77,7 @@ func main() {
 	}
 	lf, err := os.OpenFile(lp, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	var lmu sync.Mutex
 	var sinkOK atomic.Bool
@@ -94,7 +95,7 @@ func main() {
 	}
 
 	node := &broker.EN{SinkHealthy: sinkOK.Load, Name: *name, CA: verifier, Rev: rev, State: state, Log: logRec, Cert: id.Cert,
-		Logger: slog.New(slog.NewTextHandler(os.Stderr, nil))}
+		Logger: slog.Default()}
 	state.OnChange = func(old, cur *store.Snapshot) {
 		revs, dis := en.Diff(old, cur)
 		for _, d := range revs {
@@ -107,25 +108,25 @@ func main() {
 	}
 
 	if id.PolicyPub == nil {
-		log.Fatal("this enforcement node has no pinned policy-signing key; enrol it again with a new token")
+		logx.Fatal("this enforcement node has no pinned policy-signing key; enrol it again with a new token")
 	}
 	poller := &en.Poller{URL: *cpURL, TLS: id.TLS(cli.HostOf(*cpURL)), State: state, PolicyPub: id.PolicyPub, Version: version}
 	if err := poller.Once(); err != nil {
-		log.Printf("initial sync failed (will keep trying, sessions are denied until it succeeds): %v", err)
+		slog.Warn("initial sync failed (will keep trying, sessions are denied until it succeeds)", "err", err)
 	}
 	stop := make(chan struct{})
-	go poller.Run(*every, stop, func(err error) { log.Printf("sync: %v", err) })
-	go fwd.Run(2*time.Second, stop, func(err error) { log.Printf("forward: %v", err) })
+	go poller.Run(*every, stop, func(err error) { slog.Warn("sync", "err", err) })
+	go fwd.Run(2*time.Second, stop, func(err error) { slog.Warn("forward", "err", err) })
 
 	var classifier *webproxy.Classifier
 	lists := map[string][]string{}
 	if *catFile != "" {
 		b, err := os.ReadFile(*catFile)
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		if err := json.Unmarshal(b, &lists); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 	}
 	classifier = webproxy.NewClassifier(lists)
@@ -136,12 +137,12 @@ func main() {
 			allowed[strings.TrimSpace(t)] = true
 		}
 		px.Exempt = func(a netip.AddrPort) bool { return allowed[a.String()] }
-		log.Printf("WARNING: web proxy may reach private targets %s (lab mode)", *allowDial)
+		slog.Warn("web proxy may reach private targets (lab mode)", "targets", *allowDial)
 	}
 	if *upstreamCA != "" {
 		pemBytes, err := os.ReadFile(*upstreamCA)
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		px.UpstreamRoots = x509.NewCertPool()
 		px.UpstreamRoots.AppendCertsFromPEM(pemBytes)
@@ -149,14 +150,14 @@ func main() {
 	srv := px.Server(id.Cert)
 	pl, err := net.Listen("tcp", *proxyL)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
-	go func() { log.Fatal(srv.Serve(tls.NewListener(pl, srv.TLSConfig))) }()
+	go func() { logx.Die(srv.Serve(tls.NewListener(pl, srv.TLSConfig))) }()
 
 	bl, err := net.Listen("tcp", *brokerL)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
-	log.Printf("enforcement node %s up: broker %s, web proxy %s", *name, *brokerL, *proxyL)
-	log.Fatal(node.Serve(bl))
+	slog.Info("enforcement node up", "name", *name, "broker", *brokerL, "web_proxy", *proxyL)
+	logx.Die(node.Serve(bl))
 }

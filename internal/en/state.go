@@ -15,7 +15,7 @@ import (
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/tenancy"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -359,7 +359,7 @@ func (p *Poller) clockNote() string {
 	msg := strings.Replace(clockhint.Plain(sk), "This computer's", "This node's", 1)
 	if time.Since(p.lastClockWarn) > 10*time.Minute {
 		p.lastClockWarn = time.Now()
-		log.Printf("WARNING: %s", msg)
+		slog.Warn(msg)
 	}
 	return msg
 }

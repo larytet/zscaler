@@ -8,8 +8,9 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"github.com/larytet/zscaler/internal/logx"
 	"github.com/larytet/zscaler/internal/siem"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -57,6 +58,7 @@ func main() {
 	smtpFrom := flag.String("smtp-from", "alerts@localhost", "From address for alert emails")
 	smtpUser := flag.String("smtp-user", "", "SMTP username (password from ZTX_SMTP_PASSWORD)")
 	flag.Parse()
+	logx.Setup("ztx-cp")
 	if *showVersion {
 		fmt.Println("ztx-cp", version)
 		return
@@ -70,48 +72,48 @@ func main() {
 
 	boot, err := cli.Secret(*bootFile, "ZTX_BOOTSTRAP_TOKEN")
 	if err != nil || boot == "" {
-		log.Fatal("a bootstrap token is required (--bootstrap-token-file or ZTX_BOOTSTRAP_TOKEN)")
+		logx.Fatal("a bootstrap token is required (--bootstrap-token-file or ZTX_BOOTSTRAP_TOKEN)")
 	}
 	mk, err := masterKey(*keyFile)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	if mk != nil { // encrypt what is still in clear, once; a sealed file is only checked against this key
 		for _, f := range []string{"ca.key", "policy.key", "store.json"} {
 			changed, err := seal.SealInPlace(filepath.Join(*data, f), mk)
 			if err != nil {
-				log.Fatal(err)
+				logx.Die(err)
 			}
 			if changed {
-				log.Printf("encrypted %s at rest with the master key (copies of the old clear file may remain on the disk: a disk image taken earlier still holds them)", f)
+				slog.Info("encrypted at rest with the master key (copies of the old clear file may remain on the disk: a disk image taken earlier still holds them)", "file", f)
 			}
 		}
 	} else if b, err := os.ReadFile(filepath.Join(*data, "ca.key")); err != nil || !seal.IsSealed(b) {
-		log.Printf("WARNING: no master key: the CA key, the signing key and the tenant secrets are stored in clear in %s (see -master-key-file)", *data)
+		slog.Warn("no master key: the CA key, the signing key and the tenant secrets are stored in clear (see -master-key-file)", "dir", *data)
 	}
 	ca, err := pki.LoadOrCreateCAKey(*data, "smb-ztx root", nil, mk)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	signer, err := pki.LoadOrCreateSignerKey(*data, mk)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	st, err := store.OpenWithKey(filepath.Join(*data, "store.json"), mk)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	ap := filepath.Join(*data, "audit.jsonl")
 	al, err := audit.Open(ap, nil)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	defer al.Close()
 
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	der, err := ca.Sign(&key.PublicKey, pki.Identity{Tenant: "platform", Subject: "cp", Device: "cp", Role: pki.RoleEN}, 7*24*time.Hour, strings.Split(*names, ",")...)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	cert := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 
@@ -125,7 +127,7 @@ func main() {
 	var notifier *alerts.SMTPNotifier
 	if *smtpAddr != "" {
 		n := &alerts.SMTPNotifier{Addr: *smtpAddr, From: *smtpFrom, Username: *smtpUser, Password: os.Getenv("ZTX_SMTP_PASSWORD"),
-			To: st.AlertEmails, Errf: func(err error) { log.Printf("alert email: %v", err) }}
+			To: st.AlertEmails, Errf: func(err error) { slog.Warn("alert email", "err", err) }}
 		eng.OnOpen = n.Notify
 		notifier = n
 	}
@@ -136,18 +138,18 @@ func main() {
 	}()
 	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New(), Approvals: approvals.New(), Health: devhealth.New(), Captures: captures.New()}
 	if *retentionDays < 1 || *retentionDays > 3650 {
-		log.Fatal("--log-retention-days must be between 1 and 3650")
+		logx.Fatal("--log-retention-days must be between 1 and 3650")
 	}
 	archive, err := decisions.OpenArchive(filepath.Join(*data, "decisions"), time.Duration(*retentionDays)*24*time.Hour)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	api.Decisions.SetArchive(archive)
-	log.Printf("%s; %d recent records reloaded", archive.Describe(), api.Decisions.Restore(50000))
+	slog.Info(archive.Describe(), "records_reloaded", api.Decisions.Restore(50000))
 	go func() {
 		for {
 			if n := archive.Purge(); n > 0 {
-				log.Printf("decision archive: %d day files past their retention deleted", n)
+				slog.Info("decision archive: day files past their retention deleted", "files", n)
 			}
 			time.Sleep(6 * time.Hour)
 		}
@@ -155,7 +157,7 @@ func main() {
 	go func() {
 		for {
 			if n := st.PurgeExpiredAdmins(7 * 24 * time.Hour); n > 0 {
-				log.Printf("%d expired administrator accounts deleted", n)
+				slog.Info("expired administrator accounts deleted", "accounts", n)
 			}
 			time.Sleep(6 * time.Hour)
 		}
@@ -164,23 +166,23 @@ func main() {
 	for tenant, c := range st.SIEMConfigs() {
 		c := c
 		if err := api.SIEM.Configure(tenant, &c); err != nil {
-			log.Printf("log sink of tenant %s not started: %v", tenant, err)
+			slog.Warn("log sink not started", "tenant", tenant, "err", err)
 		}
 	}
 	if *devTTL != 0 && (*devTTL < 30*time.Second || *devTTL > 7*24*time.Hour) {
-		log.Fatal("--device-cert-ttl must be between 30s and 7 days")
+		logx.Fatal("--device-cert-ttl must be between 30s and 7 days")
 	}
 	api.RootCACert, api.PolicyPub, api.AtRestSealed = ca.Cert, &signer.PublicKey, mk != nil
 	api.Version, api.MinAgentVersion = version, *minAgent
 	if *failLimit > 0 {
 		ex, err := ratelimit.ParseExempt(*exempt)
 		if err != nil {
-			log.Fatalf("--auth-limit-exempt: %v", err)
+			logx.Fatal("--auth-limit-exempt", "err", err)
 		}
 		api.Limit = ratelimit.New()
 		api.Limit.Max, api.Limit.Lock, api.Limit.Exempt = *failLimit, *failLock, ex
 		api.Limit.OnLock = func(scope, ip string, until time.Time, n int) {
-			log.Printf("SECURITY: %d failed %s sign-ins from %s: locked out until %s", n, scope, ip, until.Format(time.RFC3339))
+			slog.Warn("SECURITY: sign-in lockout after repeated failures", "failures", n, "scope", scope, "from", ip, "until", until.Format(time.RFC3339))
 		}
 	}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent, PolicyKey: signer, DeviceTTL: *devTTL}
@@ -190,7 +192,7 @@ func main() {
 		api.OnApprovalRequest = func(r approvals.Request) {
 			body := r.User + " asked for access to " + r.App + ".\r\n\r\nApprove or deny it in the console, or with POST /v1/approvals/" + strconv.Itoa(r.ID) + "/approve.\r\n"
 			if err := notifier.SendText(r.Tenant, "[Access request] "+r.User+" wants "+r.App, body); err != nil {
-				log.Printf("approval email: %v", err)
+				slog.Warn("approval email", "err", err)
 			}
 		}
 	}
@@ -210,11 +212,11 @@ func main() {
 	}{{admin, *adminL}, {en, *enrolL}} {
 		ln, err := net.Listen("tcp", s.addr)
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
-		go func(srv *http.Server, ln net.Listener) { log.Fatal(srv.ServeTLS(ln, "", "")) }(s.srv, ln)
+		go func(srv *http.Server, ln net.Listener) { logx.Die(srv.ServeTLS(ln, "", "")) }(s.srv, ln)
 	}
-	log.Printf("control plane up: admin %s, enrolment %s, CA certificate for endpoints: %s", *adminL, *enrolL, filepath.Join(*data, "ca.pem"))
+	slog.Info("control plane up", "admin", *adminL, "enrolment", *enrolL, "ca_certificate", filepath.Join(*data, "ca.pem"))
 	select {}
 }
 
@@ -233,7 +235,7 @@ func weeklyDigest(api *cp.API, st *store.Store, n *alerts.SMTPNotifier) {
 			}
 			last[t] = day
 			if err := n.SendText(t, "Your weekly security summary", api.BuildDigest(t, 7).Text()); err != nil {
-				log.Printf("digest email for %s: %v", t, err)
+				slog.Warn("digest email", "tenant", t, "err", err)
 			}
 		}
 	}

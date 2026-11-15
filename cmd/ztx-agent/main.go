@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,6 +17,7 @@ import (
 	"github.com/larytet/zscaler/internal/agent"
 	"github.com/larytet/zscaler/internal/cli"
 	"github.com/larytet/zscaler/internal/devenv"
+	"github.com/larytet/zscaler/internal/logx"
 )
 
 func usage() {
@@ -48,6 +49,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	noBrowser := flag.Bool("no-browser", false, "print the sign-in URL instead of opening a browser")
 	flag.Parse()
+	logx.Setup("ztx-agent")
 	if *showVersion {
 		fmt.Println("ztx-agent", agent.Version)
 		return
@@ -61,15 +63,15 @@ func main() {
 	}
 	b, err := os.ReadFile(cp)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		logx.Fatal("config", "err", err)
 	}
 	var cfg agent.Config
 	if err := json.Unmarshal(b, &cfg); err != nil {
-		log.Fatalf("config: %v", err)
+		logx.Fatal("config", "err", err)
 	}
 	a, err := agent.New(*dir, cfg)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	switch flag.Arg(0) {
 	case "enrol":
@@ -84,7 +86,7 @@ func main() {
 			}
 			return nil
 		}); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		exp, _ := a.Expires()
 		fmt.Println("Enrolled. Certificate valid until", exp.Format("2006-01-02 15:04 MST"))
@@ -98,39 +100,39 @@ func main() {
 			}
 			return nil
 		}); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		exp, _ := a.Expires()
 		fmt.Println("Workspace enrolled. Credential valid until", exp.Format("2006-01-02 15:04 MST"))
 	case "workspace":
 		if err := agent.ValidateWorkspaceArgs(flag.Args()[1:]); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		path := *browser
 		if path == "" {
 			path = findBrowser()
 		}
 		if path == "" {
-			log.Fatal("no Chromium-family browser found; install Chrome, Chromium or Edge, or pass --browser")
+			logx.Fatal("no Chromium-family browser found; install Chrome, Chromium or Edge, or pass --browser")
 		}
 		fmt.Fprintln(os.Stderr, agent.WorkspaceNotice)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		o := agent.WorkspaceOptions{Browser: path, PostureEvery: *postureEvery, RenewEvery: *renewEvery, Grace: *grace,
-			RequireDisk: *needDisk, RequireFirewall: *needFW, Log: func(s string) { log.Println(s) }}
+			RequireDisk: *needDisk, RequireFirewall: *needFW, Log: func(s string) { slog.Info(s) }}
 		if len(flag.Args()) > 1 {
 			o.StartURL = flag.Arg(1)
 		}
 		if err := a.RunWorkspace(ctx, o); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 	case "dev-env":
 		if err := a.Load(); err != nil {
-			log.Fatalf("%v (run `ztx-agent enrol` first)", err)
+			logx.Fatal("not enrolled (run `ztx-agent enrol` first)", "err", err)
 		}
 		caPEM, err := a.FetchInspectionCA()
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		if caPEM == nil {
 			fmt.Fprintln(os.Stderr, "TLS inspection is off for this organisation: developer tools need nothing.")
@@ -162,22 +164,22 @@ func main() {
 	case "enrol-service":
 		tok, err := cli.Secret(*tokenFile, "ZTX_AGENT_TOKEN")
 		if err != nil || tok == "" {
-			log.Fatal("a service token is required (--token-file or ZTX_AGENT_TOKEN)")
+			logx.Fatal("a service token is required (--token-file or ZTX_AGENT_TOKEN)")
 		}
 		if err := a.EnrolService(tok); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		exp, _ := a.Expires()
 		fmt.Println("Enrolled as a service identity. Certificate valid until", exp.Format("2006-01-02 15:04 MST"))
 	case "run":
 		if err := a.Load(); err != nil {
-			log.Fatalf("%v (run `ztx-agent enrol` first)", err)
+			logx.Fatal("not enrolled (run `ztx-agent enrol` first)", "err", err)
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
-		log.Println("agent running; PAC at http://127.0.0.1:9100/proxy.pac")
+		slog.Info("agent running", "pac", "http://127.0.0.1:9100/proxy.pac")
 		if err := a.Run(ctx); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 	case "status":
 		if err := a.Load(); err != nil {

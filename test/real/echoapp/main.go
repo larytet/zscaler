@@ -6,22 +6,25 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
+
+	"github.com/larytet/zscaler/internal/logx"
 )
 
 func main() {
 	addr := flag.String("listen", ":7000", "listen address")
 	flag.Parse()
+	logx.Setup("echoapp")
 	ln, err := net.Listen("tcp", *addr)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
-	log.Printf("echoapp listening on %s", *addr)
+	slog.Info("echoapp listening", "addr", *addr)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		fmt.Printf("conn from %s\n", c.RemoteAddr())
 		go func() { io.Copy(c, c); c.Close() }()

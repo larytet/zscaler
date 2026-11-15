@@ -5,10 +5,10 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"strings"
 
+	"github.com/larytet/zscaler/internal/logx"
 	"github.com/larytet/zscaler/internal/release"
 )
 
@@ -17,6 +17,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "usage: ztx-release keygen|build|verify [flags]")
 		os.Exit(2)
 	}
+	logx.Setup("ztx-release")
 	switch os.Args[1] {
 	case "keygen":
 		fs := flag.NewFlagSet("keygen", flag.ExitOnError)
@@ -24,13 +25,13 @@ func main() {
 		fs.Parse(os.Args[2:])
 		pub, priv, err := release.Keygen()
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		if err := os.WriteFile(*out+".pub", pub, 0o644); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		if err := os.WriteFile(*out+".key", priv, 0o600); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		fmt.Printf("wrote %s.pub (publish it) and %s.key (keep it secret: a secret store or an HSM, not the repository)\n", *out, *out)
 	case "build":
@@ -49,16 +50,16 @@ func main() {
 		}
 		files, err := release.Build(release.Options{Root: *root, Out: *out, Version: *version, Targets: targets})
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		var priv []byte
 		if *key != "" {
 			if priv, err = os.ReadFile(*key); err != nil {
-				log.Fatal(err)
+				logx.Die(err)
 			}
 		}
 		if err := release.Finish(*out, files, *version, priv); err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		fmt.Printf("built %d files in %s", len(files), *out)
 		if priv == nil {
@@ -72,7 +73,7 @@ func main() {
 		fs.Parse(os.Args[2:])
 		pb, err := os.ReadFile(*pub)
 		if err != nil {
-			log.Fatal(err)
+			logx.Die(err)
 		}
 		if problems := release.Verify(*dir, pb); len(problems) > 0 {
 			for _, p := range problems {

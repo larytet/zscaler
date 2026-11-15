@@ -11,10 +11,9 @@ import (
 	"encoding/json"
 	"github.com/larytet/zscaler/internal/signed"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -434,8 +433,9 @@ func TestManagedExemptionSettingsReachTheNode(t *testing.T) { // AGT-032 (ZIA-03
 
 func TestNodeSaysPlainlyWhenItsClockIsOff(t *testing.T) { // AGT-045 (GAP-REQ-06)
 	var buf strings.Builder
-	log.SetOutput(&buf)
-	defer log.SetOutput(os.Stderr)
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	defer slog.SetDefault(old)
 	p := &Poller{}
 	if p.clockNote() != "" {
 		t.Fatal("a note before any answer was seen")
@@ -447,7 +447,7 @@ func TestNodeSaysPlainlyWhenItsClockIsOff(t *testing.T) { // AGT-045 (GAP-REQ-06
 	if !strings.Contains(note, "This node's clock is about 9 minutes ahead of the control plane's") {
 		t.Fatalf("%q", note)
 	}
-	if !strings.Contains(buf.String(), "WARNING: This node's clock") {
+	if !strings.Contains(buf.String(), "This node's clock") {
 		t.Errorf("not logged: %q", buf.String())
 	}
 	before := buf.Len()

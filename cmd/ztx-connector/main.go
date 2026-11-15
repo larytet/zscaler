@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -18,6 +18,7 @@ import (
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/cli"
+	"github.com/larytet/zscaler/internal/logx"
 	"github.com/larytet/zscaler/internal/versions"
 )
 
@@ -35,6 +36,7 @@ func main() {
 	enName := flag.String("en-name", "localhost", "TLS server name of the enforcement nodes")
 	targetsEvery := flag.Duration("targets-every", 30*time.Second, "how often to refresh the target allow-list")
 	flag.Parse()
+	logx.Setup("ztx-connector")
 	if *showVersion {
 		fmt.Println("ztx-connector", version)
 		return
@@ -42,12 +44,12 @@ func main() {
 
 	caPEM, err := os.ReadFile(*cpCA)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 	tok, _ := cli.Secret(*tokFile, "ZTX_CONNECTOR_TOKEN")
 	id, err := cli.LoadOrEnrol(*data, *cpURL, caPEM, "/enrol/connector", tok, *name)
 	if err != nil {
-		log.Fatal(err)
+		logx.Die(err)
 	}
 
 	// The allow-list comes from the control plane and is refreshed every 30 s.
@@ -60,13 +62,13 @@ func main() {
 		req.Header.Set(versions.Header, version)
 		resp, err := cl.Do(req)
 		if err != nil {
-			log.Printf("targets: %v", err)
+			slog.Warn("targets", "err", err)
 			return
 		}
 		defer resp.Body.Close()
 		var ts []broker.Target
 		if resp.StatusCode != 200 || json.NewDecoder(resp.Body).Decode(&ts) != nil {
-			log.Printf("targets: unexpected response %d", resp.StatusCode)
+			slog.Warn("targets: unexpected response", "status", resp.StatusCode)
 			return
 		}
 		m := map[string]bool{}
@@ -106,11 +108,11 @@ func main() {
 		go func(addr string) {
 			defer wg.Done()
 			c := &broker.Connector{Addr: addr, TLS: tlsFor(id, *enName), Allow: allowFn,
-				Events: func(s string) { log.Printf("[%s] %s", addr, s) }}
+				Events: func(s string) { slog.Info(s, "enforcement_node", addr) }}
 			c.Run(ctx)
 		}(addr)
 	}
-	log.Printf("connector %s running (%d enforcement node(s))", *name, len(strings.Split(*ens, ",")))
+	slog.Info("connector running", "name", *name, "enforcement_nodes", len(strings.Split(*ens, ",")))
 	wg.Wait()
 }
 
