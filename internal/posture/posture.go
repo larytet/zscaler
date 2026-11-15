@@ -28,7 +28,9 @@ type Report struct {
 	DiskEncrypted *bool     `json:"disk_encrypted"`
 	FirewallOn    *bool     `json:"firewall_on"`
 	ScreenLock    *bool     `json:"screen_lock"`
-	AgentVersion  string    `json:"agent_version"`
+	// RemovableMedia is true when a removable drive (USB stick, SD card) is mounted (DATA-005, basic).
+	RemovableMedia *bool  `json:"removable_media,omitempty"`
+	AgentVersion   string `json:"agent_version"`
 	// Health is optional device health (CPU, memory, disk), signed along with the posture.
 	Health *devhealth.Snapshot `json:"health,omitempty"`
 }
@@ -36,7 +38,7 @@ type Report struct {
 // ToPolicy converts a verified report for the policy engine.
 func (r *Report) ToPolicy() *policy.Posture {
 	return &policy.Posture{OS: r.OS, OSVersion: r.OSVersion, DiskEncrypted: r.DiskEncrypted,
-		FirewallOn: r.FirewallOn, ScreenLock: r.ScreenLock, ReportedAt: r.TS}
+		FirewallOn: r.FirewallOn, ScreenLock: r.ScreenLock, RemovableMedia: r.RemovableMedia, ReportedAt: r.TS}
 }
 
 var enc = base64.RawURLEncoding

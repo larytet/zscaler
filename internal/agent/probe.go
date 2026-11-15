@@ -66,6 +66,7 @@ func Collect(p Probes) posture.Report {
 	case "linux":
 		r.DiskEncrypted = posture.ParseLsblkCrypt(out("lsblk", "-n", "-o", "TYPE"))
 		r.FirewallOn = posture.ParseUFW(out("ufw", "status"))
+		r.RemovableMedia = posture.ParseLsblkRemovable(out("lsblk", "-l", "-n", "-o", "RM,MOUNTPOINT"))
 	}
 	return r
 }

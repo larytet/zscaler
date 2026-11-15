@@ -71,6 +71,8 @@ type Agent struct {
 	deviceID  string
 	minAgent  string
 	enConnect time.Duration
+	pathRes   pathprobe.Result // last path-stage measurement, refreshed in the background
+	pathBusy  bool
 	appOpens  map[string][]time.Duration
 }
 
@@ -479,7 +481,7 @@ func (a *Agent) SendPosture(c *broker.Conn) error {
 	h := devhealth.Collect()
 	a.addMeasurements(&h)
 	if !a.Cfg.DisablePathProbes {
-		h.Result = pathprobe.Run(context.Background(), pathprobe.Options{ResolveName: a.Cfg.ENName, Anchor: a.Cfg.PathAnchor, Timeout: time.Second})
+		h.Result = a.pathStages()
 	}
 	rep.Health = &h
 	rep.DeviceID, rep.TS, rep.Nonce, rep.AgentVersion = id, time.Now().UTC(), posture.NewNonce(), Version
@@ -562,4 +564,23 @@ func (a *Agent) addMeasurements(h *devhealth.Snapshot) {
 			h.AppOpenMs[app] = int(s[len(s)/2].Milliseconds())
 		}
 	}
+}
+
+// pathStages returns the last path-stage measurement and starts a fresh one in the background, so
+// a slow or filtered network never delays a posture report (which gates access). The first report
+// after start therefore carries no stages; later ones carry the previous measurement.
+func (a *Agent) pathStages() pathprobe.Result {
+	a.mu.Lock()
+	last, busy := a.pathRes, a.pathBusy
+	a.pathBusy = true
+	a.mu.Unlock()
+	if !busy {
+		go func() {
+			r := pathprobe.Run(context.Background(), pathprobe.Options{ResolveName: a.Cfg.ENName, Anchor: a.Cfg.PathAnchor, Timeout: time.Second})
+			a.mu.Lock()
+			a.pathRes, a.pathBusy = r, false
+			a.mu.Unlock()
+		}()
+	}
+	return last
 }

@@ -39,12 +39,13 @@ const (
 // Posture is a device posture report that has already been signature-verified.
 // Tri-state values are pointers: nil means unknown and is treated as false.
 type Posture struct {
-	OS            string    `json:"os"`
-	OSVersion     string    `json:"os_version"`
-	DiskEncrypted *bool     `json:"disk_encrypted"`
-	FirewallOn    *bool     `json:"firewall_on"`
-	ScreenLock    *bool     `json:"screen_lock"`
-	ReportedAt    time.Time `json:"ts"`
+	OS             string    `json:"os"`
+	OSVersion      string    `json:"os_version"`
+	DiskEncrypted  *bool     `json:"disk_encrypted"`
+	FirewallOn     *bool     `json:"firewall_on"`
+	ScreenLock     *bool     `json:"screen_lock"`
+	RemovableMedia *bool     `json:"removable_media"` // true: a removable drive is mounted
+	ReportedAt     time.Time `json:"ts"`
 }
 
 type User struct {
@@ -102,7 +103,9 @@ type PostureMatch struct {
 	DiskEncrypted *bool             `json:"disk_encrypted,omitempty"`
 	FirewallOn    *bool             `json:"firewall_on,omitempty"`
 	ScreenLock    *bool             `json:"screen_lock,omitempty"`
-	MaxAgeSeconds int               `json:"max_age_seconds,omitempty"`
+	// RemovableMedia false requires that no removable drive is mounted; true requires one. Unknown fails.
+	RemovableMedia *bool `json:"removable_media,omitempty"`
+	MaxAgeSeconds  int   `json:"max_age_seconds,omitempty"`
 }
 
 type TimeMatch struct {
@@ -445,6 +448,7 @@ func postureOK(req *PostureMatch, got *Posture, now time.Time) bool {
 		{req.DiskEncrypted, got.DiskEncrypted},
 		{req.FirewallOn, got.FirewallOn},
 		{req.ScreenLock, got.ScreenLock},
+		{req.RemovableMedia, got.RemovableMedia},
 	} {
 		if c.want != nil && (c.have == nil || *c.have != *c.want) {
 			return false

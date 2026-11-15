@@ -154,12 +154,13 @@ func (r Record) Durable() bool { return r.Kind != "capture" }
 
 // PostureSnap is the posture that was in force for a decision.
 type PostureSnap struct {
-	OS            string    `json:"os,omitempty"`
-	OSVersion     string    `json:"os_version,omitempty"`
-	DiskEncrypted *bool     `json:"disk_encrypted,omitempty"`
-	FirewallOn    *bool     `json:"firewall_on,omitempty"`
-	ScreenLock    *bool     `json:"screen_lock,omitempty"`
-	ReportedAt    time.Time `json:"reported_at"`
+	OS             string    `json:"os,omitempty"`
+	OSVersion      string    `json:"os_version,omitempty"`
+	DiskEncrypted  *bool     `json:"disk_encrypted,omitempty"`
+	FirewallOn     *bool     `json:"firewall_on,omitempty"`
+	ScreenLock     *bool     `json:"screen_lock,omitempty"`
+	RemovableMedia *bool     `json:"removable_media,omitempty"`
+	ReportedAt     time.Time `json:"reported_at"`
 }
 
 type openReq struct {
@@ -471,7 +472,7 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		rec.Groups = u.Groups
 	}
 	if p := ds.get(); p != nil {
-		rec.Posture = &PostureSnap{OS: p.OS, OSVersion: p.OSVersion, DiskEncrypted: p.DiskEncrypted, FirewallOn: p.FirewallOn, ScreenLock: p.ScreenLock, ReportedAt: p.ReportedAt}
+		rec.Posture = &PostureSnap{OS: p.OS, OSVersion: p.OSVersion, DiskEncrypted: p.DiskEncrypted, FirewallOn: p.FirewallOn, ScreenLock: p.ScreenLock, RemovableMedia: p.RemovableMedia, ReportedAt: p.ReportedAt}
 	}
 	pol := e.State.Policy(id.Tenant, policy.Private)
 	if pol == nil {

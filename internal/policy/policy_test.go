@@ -566,3 +566,21 @@ func TestCaptureFlagAndValidation(t *testing.T) { // ZIA-022b
 		}
 	}
 }
+
+func TestRemovableMediaPostureRule(t *testing.T) { // AGT-019 (DATA-005, basic)
+	p := mk(t, Private, Rule{ID: "a", Priority: 1, Action: Allow, Match: Match{Groups: []string{"fin"},
+		Posture: &PostureMatch{RemovableMedia: bp(false)}}})
+	r := req("fin")
+	r.Device.Posture.RemovableMedia = bp(false)
+	if p.Evaluate(r).Action != Allow {
+		t.Fatal("no removable drive mounted must be allowed")
+	}
+	r.Device.Posture.RemovableMedia = bp(true)
+	if p.Evaluate(r).Action != Deny {
+		t.Fatal("a mounted removable drive must be refused")
+	}
+	r.Device.Posture.RemovableMedia = nil
+	if p.Evaluate(r).Action != Deny {
+		t.Fatal("unknown must fail closed, like every other posture check")
+	}
+}

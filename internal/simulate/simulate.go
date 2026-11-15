@@ -56,7 +56,7 @@ func Run(draft *policy.Policy, entries []decisions.Entry) Result {
 		var pos *policy.Posture
 		if e.Posture != nil {
 			pos = &policy.Posture{OS: e.Posture.OS, OSVersion: e.Posture.OSVersion, DiskEncrypted: e.Posture.DiskEncrypted,
-				FirewallOn: e.Posture.FirewallOn, ScreenLock: e.Posture.ScreenLock, ReportedAt: e.Posture.ReportedAt}
+				FirewallOn: e.Posture.FirewallOn, ScreenLock: e.Posture.ScreenLock, RemovableMedia: e.Posture.RemovableMedia, ReportedAt: e.Posture.ReportedAt}
 		}
 		d := draft.Evaluate(policy.Request{Kind: policy.Private, App: e.App, Now: e.TS,
 			User:   policy.User{Subject: e.User, Email: e.User, Groups: e.Groups},

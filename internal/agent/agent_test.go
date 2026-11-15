@@ -479,3 +479,20 @@ func TestMeasurementsAreMediansOfRealOpens(t *testing.T) { // DEX-001
 		t.Fatalf("old samples were not dropped: %d", h.AppOpenMs["erp"])
 	}
 }
+
+func TestProbeReportsRemovableMedia(t *testing.T) { // AGT-019
+	run := func(name string, args ...string) (string, error) {
+		if name == "lsblk" && len(args) > 0 && args[0] == "-l" {
+			return "0 /\n1 /media/usb\n", nil
+		}
+		return "", nil
+	}
+	r := Collect(Probes{OS: "linux", Run: run})
+	if r.RemovableMedia == nil || !*r.RemovableMedia {
+		t.Fatalf("%+v", r.RemovableMedia)
+	}
+	r = Collect(Probes{OS: "darwin", Run: run})
+	if r.RemovableMedia != nil {
+		t.Fatal("not measured on this system: must stay unknown, not guessed")
+	}
+}

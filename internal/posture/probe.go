@@ -66,3 +66,18 @@ func ParseLsblkCrypt(out string) *bool {
 	}
 	return bptr(false)
 }
+
+// ParseLsblkRemovable reads `lsblk -l -n -o RM,MOUNTPOINT` (Linux) and reports whether a removable
+// drive is mounted. Empty output is unknown.
+func ParseLsblkRemovable(out string) *bool {
+	if strings.TrimSpace(out) == "" {
+		return nil
+	}
+	for _, l := range strings.Split(out, "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 2 && f[0] == "1" {
+			return bptr(true)
+		}
+	}
+	return bptr(false)
+}

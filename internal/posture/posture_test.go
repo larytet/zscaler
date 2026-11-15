@@ -112,6 +112,10 @@ func TestProbeParsers(t *testing.T) { // POS-004 (inline samples; golden files l
 			t.Errorf("%s: got %v want %v", name, got, want)
 		}
 	}
+	eq("removable mounted", ParseLsblkRemovable("0 /\n0 /boot\n1 /media/usb\n"), &tr)
+	eq("removable present but not mounted", ParseLsblkRemovable("0 /\n1\n"), &fa)
+	eq("no removable", ParseLsblkRemovable("0 /\n0 /home\n"), &fa)
+	eq("lsblk missing", ParseLsblkRemovable(""), nil)
 	eq("fdesetup on", ParseFdesetup("FileVault is On.\n"), &tr)
 	eq("fdesetup off", ParseFdesetup("FileVault is Off.\n"), &fa)
 	eq("fdesetup localised", ParseFdesetup("FileVault ist aktiviert.\n"), nil)
