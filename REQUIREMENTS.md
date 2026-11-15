@@ -2,7 +2,7 @@
 
 **Working name:** SMB-ZTX (placeholder)
 **Goal:** Feature parity with the Zscaler Zero Trust Exchange (ZIA, ZPA, ZDX, data security) for organisations of roughly 5–250 people with no dedicated security team.
-**Status:** Draft v0.5, 2026-11-15
+**Status:** Draft v0.6, 2026-11-15
 **Audience:** Product, architecture, engineering
 
 ---
@@ -180,14 +180,14 @@ Parity source: ZPA product page, About Access Policy help page, US 11,652,797, l
 
 ### 5.5 Access types
 
-- **ZPA-040 (M):** **Browser access** (clientless) for web apps, RDP, SSH, with no agent, for unmanaged devices and contractors `[V]`.
+- **ZPA-040 (M):** **Browser access** (clientless) for web apps, RDP, SSH, with no agent, for unmanaged devices and contractors `[V]`. From 0.6: apps whose segment class is `sensitive` (WB-008) require the workspace browser; other apps may be reached from a plain browser through the resource portal.
 - **ZPA-041 (M), raised from S in 0.2:** **AppProtection**: inline Layer 7 inspection of the entire application payload at the connector, blocking OWASP Top 10 attacks, with **custom signature support for virtual patching** of zero-days `[V: DS-ZPA]`. Integrated DLP, incident response and data classification for private apps `[V: DS-ZPA]`. Zscaler sells this as an add-on. For SMB-ZTX it should be included in the base tier, since small teams have no WAF.
 - **ZPA-050 (S), new in 0.2:** **Legacy server-to-client (S2C) apps** such as VoIP and follow-me printing, through a network connector (a VM in front of the servers, connecting inside-out to VPN service edges in the cloud) `[V: DS-ZPA]`.
 - **ZPA-051 (S), new in 0.2:** **Private cloud controller**: a per-tenant on-premises controller so users, private service edges and app connectors keep working when the cloud is unreachable, with automatic switchover to business-continuity mode `[V: DS-ZPA]`. Supersedes the vaguer ZPA-044.
 - **ZPA-052 (M), new in 0.2:** **User portal**: one web portal where users reach authorised apps and privileged consoles `[V: DS-ZPA]`.
 - **ZPA-053 (M), new in 0.2:** **Continuous health monitoring** of all apps, and **log streaming** to SIEM, in the base tier `[V: DS-ZPA]`.
 - **ZPA-054 (S), new in 0.2:** **Source IP anchoring**: selectively forward app traffic from a known IP to destination servers `[V: DS-ZPA]`.
-- **ZPA-055 (M), new in 0.2:** Browser access for unmanaged devices backed by **cloud browser isolation** (pixels only), with isolation policy over copy/paste, print and upload/download, and a Chrome Enterprise Browser posture integration `[V: DS-ZPA]`.
+- **ZPA-055 (M), reworded in 0.6:** Access to private apps from **unmanaged devices** goes through the **workspace browser** (section 18.4, WB-001..WB-013), which enforces isolation policy over copy/paste, print, upload/download and screenshots inside the browser on the user's device. It does **not** use cloud-streamed browser isolation (pixels from a remote rendering fleet); that is ZIA-024b (C). Posture of the browser and its profile is checked as in WB-007 `[V: Zscaler DS-ZPA describes the cloud-isolation variant; the workspace-browser model is Palo Alto's]`.
 - **ZPA-056 (M), new in 0.2:** Connector and edge **platform support**: App Connector on AWS, GCP, Azure, Nutanix, VMware, OpenShift, Docker, Red Hat. Private service edge on the same minus OpenShift. Private cloud controller on AWS, Azure, VMware, Red Hat `[V: DS-ZPA]`. SMB subset for v1: AWS, Azure, GCP, VMware, Docker.
 - **ZPA-057 (M), new in 0.2:** **Autonomous user-to-app segmentation**: discover apps by domain name and IP subnet, ML recommendations trained on access patterns, and live insights `[V: DS-ZPA]`. Strengthens ZPA-021.
 - **ZPA-058 (M), new in 0.2:** **Risk-based policy engine** that continuously revalidates access on user, device, content and application risk `[V: DS-ZPA]`.
@@ -274,11 +274,12 @@ Evaluation order from Zscaler's ZIA policy leading practices `[V: search summary
 - **ZIA-022a (M), new in 0.2:** **DNS security**: route suspicious C2 connections to deep inspection, and block DNS requests to known-bad destinations, on all ports and protocols `[V: DS-ZIA]`.
 - **ZIA-022b (M), new in 0.2:** **Traffic capture**: capture decrypted traffic by policy criteria for forensics, with no extra appliance `[V: DS-ZIA]`.
 - **ZIA-022c (M), new in 0.2:** **Correlated threat insights**: alerts correlated with threat score, affected asset and severity `[V: DS-ZIA]`.
-- **ZIA-022d (M), new in 0.2:** **Application isolation** for agentless unmanaged-device access to SaaS, cloud and private apps, with copy/paste, upload/download and print control `[V: DS-ZIA]`.
+- **ZIA-022d (M), reworded in 0.6:** **Application isolation** for unmanaged-device access to SaaS, cloud and private apps, with copy/paste, upload/download and print control, delivered by the **workspace browser** (WB-006), not by a remote rendering fleet `[V: DS-ZIA names the capability; the delivery model is a 0.6 product decision]`.
 - **ZIA-022e (C), new in 0.2:** **IoT device visibility**: automatic discovery and ML classification of IoT devices, servers and unmanaged devices `[V: DS-ZIA]`.
 - **ZIA-022f (S), new in 0.2:** **Post-quantum cryptography visibility**: inspect and report on classical and PQC traffic, including "harvest now, decrypt later" exposure `[V: DS-ZIA; claim is Zscaler's]`.
 - **ZIA-023 (M):** Cloud sandbox for unknown files with AI-driven instant verdicts, and large-file sandboxing `[V: product page mentions "sandboxing code and unknown or large files with instant AI-verdicts"]`.
-- **ZIA-024 (M):** Browser isolation for risky or uncategorised sites `[V: search result mentions a file isolated on a remote browser]`.
+- **ZIA-024 (M), reworded in 0.6:** Risky or uncategorised sites are opened in the **workspace browser's isolated profile** (or blocked), chosen by web policy (action `isolate`). On a device without the workspace browser the `isolate` action falls back to `deny` and says so on the block page.
+- **ZIA-024b (C), new in 0.6:** Cloud-streamed browser isolation (disposable containers on an enforcement node, pixels to the user) for users who cannot install the workspace browser. Deferred: needs a rendering fleet `[V: search result mentions a file isolated on a remote browser]`.
 - **ZIA-025 (S):** Threat intelligence feed updates pushed to enforcement nodes in near real time `[V: central authority distributes threat updates]`.
 
 ### 6.4 TLS inspection design
@@ -443,7 +444,7 @@ All ZIA editions are **priced per user**, with some products priced differently.
 Implication: Zscaler's enterprise packaging has **many 500-user minimums**, plus 10/20 app-segment caps. The August 2026 SMB initiative promises "right-sized" packaging but does not state its numbers `[V: press release]`, so it is not known whether these minimums are lifted for SMB bundles. That is the clearest product opening.
 
 - **SMB-006 (M), new in 0.3:** **No seat minimums** on any feature, and no per-feature gating at small scale. Zscaler's 500-user minimums and 10/20 app-segment caps are the main gaps to avoid. Use soft fair-use limits instead.
-- **SMB-007 (S), new in 0.3:** Per-user pricing with all inspection features (AppProtection, advanced firewall, isolation up to a fair-use traffic cap, log streaming) in the top tier.
+- **SMB-007 (S), new in 0.3, reworded in 0.6:** Per-user pricing with all inspection features (AppProtection, advanced firewall, log streaming) in the top tier. The workspace browser runs on the user's own device, so it carries no traffic cap and no per-session isolation charge.
 
 - **SMB-001 (M):** Setup wizard that connects an IdP, installs the agent through MDM or an email link, and enables a safe default policy.
 - **SMB-002 (M):** "Safe defaults" policy pack: block known-bad categories, enable TLS inspection with sensible exemptions, block unsanctioned file-sharing uploads, require posture for sensitive apps.
@@ -462,7 +463,8 @@ Implication: Zscaler's enterprise packaging has **many 500-user minimums**, plus
 | URL filtering, cloud app control, file type control | 6.2 | M | V |
 | Malware, ATP, IPS, DNS security | 6.1a, 6.3 | M | V |
 | Cloud sandbox | 6.3 | M | V |
-| Browser isolation | 6.3 | S | V |
+| Browser isolation and unmanaged-device access (workspace browser, 18.4) | 6.3, 18.4 | M | V |
+| Cloud-streamed browser isolation (ZIA-024b) | 6.3 | C | V |
 | DLP, CASB | 6.5 | M | V/I |
 | GenAI controls | 6.5, 7 | M/S | V |
 | ZTNA, dark apps, connector stitching | 5.1–5.4 | M | V |
@@ -532,6 +534,8 @@ Known from search result summaries only (pages not opened in full):
 - **0.4** Added `COMPETITIVE-ANALYSIS.md` (Cato Networks, Palo Alto Networks) and section 18 below. PDFs now live in the git-ignored `.doc/` folder.
 - **0.5** Product decision: 34 requirements promoted from **S** to **M** (see 17.1). Parity-matrix rows for isolation, DEX and risk-based policy follow. No requirement was demoted.
 
+- **0.6** Product decision: unmanaged devices and browser isolation are delivered by a **workspace browser** on the device (section 18.4, new family WB-001..WB-013). ZPA-055, ZIA-022d and ZIA-024 reworded to use it; cloud-streamed isolation moves to ZIA-024b (C). Parity matrix, SMB-007 and the ZPA-040 note updated. No requirement was removed.
+
 ### 17.1 Promoted to Must in 0.5
 
 | Group | IDs |
@@ -582,17 +586,33 @@ Detail, sources and research limits are in `COMPETITIVE-ANALYSIS.md`. These are 
 - **ZIA-040 (M) credential-theft prevention.** Detect a corporate password being typed into an untrusted site and block it, by comparing entered credentials with corporate ones `[V: Palo Alto blog]`. High value for phishing, which is the top SMB risk.
 - **ADM-020 (M) change modelling.** Before saving a policy change, show who would gain or lose access and which flows would break `[V: Palo Alto AIOps "change-management modelling and policy analysis"]`. Refines ZPA-028.
 
-### 18.4 Unmanaged devices: a secure workspace browser
+### 18.4 Unmanaged devices: the workspace browser (product decision, 0.6)
 
-The most distinctive idea for a business with contractors and personal laptops and **no mobile device management**.
+**Decision (0.6):** unmanaged devices (contractors, personal laptops, no mobile device management) reach corporate apps through a **workspace browser**: an isolated, managed browser profile that runs on the user's own device. This replaces cloud-streamed browser isolation as the default (that stays available as ZIA-024b, class C). Reasons: it needs no remote rendering fleet, so it has no per-session server cost; it works for the small tenants this product targets; it gives one place to enforce data controls for web apps, private apps and SaaS.
 
-- **BYOD-001 (M).** A managed browser (or browser profile) that gives an isolated corporate workspace on an unmanaged device, installable in minutes, with no agent and no MDM `[V: Palo Alto Prisma Access Browser white paper]`.
-- **BYOD-002 (M).** Last-mile data controls: block screenshots, camera and microphone, mask sensitive fields, watermark, encrypt downloaded files `[V: same]`.
-- **BYOD-003 (M).** Last-mile access controls: login restrictions, MFA, admin approval for sensitive actions `[V: same]`.
-- **BYOD-004 (M).** Re-check device posture about every 90 seconds and defend against malicious extensions `[V: same; the 90-second figure is Palo Alto's]`.
-- **BYOD-005 (C).** Inspect browser traffic that proxies miss (QUIC, ECH, large files) because inspection happens inside the browser `[V: same]`.
+What it is not: it cannot stop a compromised operating system from reading the screen or memory. It reduces risk on devices we do not manage. The product must say so to admins and users (WB-013).
 
-This overlaps ZPA-055 (isolated browser access) and ZIA-022d (application isolation). The difference is that the browser runs on the user's device, not as streamed pixels. Both models should be evaluated. A secure browser is cheaper to run (no remote rendering farm) but needs a native app per OS.
+- **BYOD-001 (M).** An isolated corporate workspace on an unmanaged device, installable in minutes, with no agent and no MDM `[V: Palo Alto Prisma Access Browser white paper]`. Detailed by WB-001 to WB-004.
+- **BYOD-002 (M).** Last-mile data controls: block screenshots, camera and microphone, mask sensitive fields, watermark, encrypt downloaded files `[V: same]`. Detailed by WB-006.
+- **BYOD-003 (M).** Last-mile access controls: login restrictions, MFA, admin approval for sensitive actions `[V: same]`. Detailed by WB-004 and WB-008 (approval reuses ZPA-027).
+- **BYOD-004 (M).** Re-check device posture about every 90 seconds and defend against malicious extensions `[V: same; the 90-second figure is Palo Alto's]`. Detailed by WB-005 and WB-007.
+- **BYOD-005 (C).** Inspect browser traffic that proxies miss (QUIC, ECH, large files) because inspection happens inside the browser `[V: same]`. Same as WB-012.
+
+Workspace browser requirements (new in 0.6):
+
+- **WB-001 (M) Delivery.** A signed installer or launcher for Windows, macOS and Linux that a person without administrator rights can install where the operating system allows, in under 5 minutes from receiving an invitation link. It is built on the user's installed Chromium-family browser or a bundled one, as an isolated profile; it must not change the personal browser or its settings.
+- **WB-002 (M) Isolated profile.** A separate profile and storage area: no sync with a personal account, no personal bookmarks, saved passwords, history or extensions, cookies and local storage confined to the workspace. The profile is erased on sign-out, on admin command, when the device is revoked, and after a configurable idle period.
+- **WB-003 (M) Forced path.** All traffic from the workspace goes through an enforcement node: proxy settings are fixed and cannot be changed by the user, direct connections are blocked. The tenant's TLS inspection CA (ZIA-040) is trusted **inside the workspace only**, so the personal device's system trust store is never touched.
+- **WB-004 (M) Sign-in and device binding.** Sign-in through the tenant's identity provider (OIDC, MFA as the provider enforces it). The workspace enrols a device-bound, short-lived credential in the same way the agent does (section 4), so revoking the device or disabling the user ends the workspace session within seconds.
+- **WB-005 (M) Extensions and debugging.** Only extensions on an admin allow-list may load; developer mode, remote debugging ports, unpacked extensions and command-line overrides are blocked. A blocked extension is reported to the admin.
+- **WB-006 (M) Data controls inside the browser.** Per app and per category: allow or block copy and paste (in, out, or both), downloads (to a workspace-only encrypted folder, or blocked), uploads, printing, saving, drag and drop; screenshot and screen-share blocking where the operating system supports it; a visible watermark with user and time. Controls are policy, not browser settings the user can change.
+- **WB-007 (M) Posture.** The workspace checks the browser's patch level, the operating system version, screen lock and disk encryption about every 90 seconds, and locks (and optionally erases) the profile when the device falls below the tenant's baseline. A missing or stale result counts as failing (principle 5 in the design).
+- **WB-008 (M) Which apps need it.** Admins mark apps, categories and segments as requiring the workspace. A segment class `sensitive` requires it by default. Access decisions record `workspace: true` or `false`. A request from a plain browser to a workspace-only app is denied with a message that tells the user how to install the workspace browser.
+- **WB-009 (M) Logging.** Workspace sessions are logged like any other: user, device, app or host, rule, verdict. Data-control events (a blocked paste, a blocked download) are logged with the control name and never with the content.
+- **WB-010 (S) Updates.** The workspace updates itself, and the control plane announces a minimum version below which it refuses to start a session (the same mechanism as AGT-011 and the minimum agent version).
+- **WB-011 (S) Offline and sign-out behaviour.** When the control plane or enforcement node is unreachable the workspace keeps working for no longer than a configured grace period, then locks. The default grace period is short (minutes), not hours.
+- **WB-012 (C) Browser-side inspection.** Inspect what a proxy cannot see (QUIC, ECH, very large uploads) inside the browser. Same as BYOD-005.
+- **WB-013 (M) Honest limits.** The admin console and the first-run screen state that the workspace browser does not protect against a compromised operating system, a camera pointed at the screen, or an authorised user retyping data. Marketing claims must not go beyond this.
 
 ### 18.5 Operations for people without a security team (the main Cato lesson)
 
