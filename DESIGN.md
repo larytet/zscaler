@@ -581,7 +581,7 @@ Browser isolation (ZIA-024, ZIA-022d, ZPA-055) is the highest-value deferred (S)
 | Page runs | In a disposable container on an EN, streamed as pixels | Locally in a managed Chromium profile |
 | Endpoint footprint | None | A browser or profile to install |
 | Cost for an SMB build | High: container fleet, streaming protocol, per-session resources | Lower: browser extension and policy, posture re-check |
-| Policy hooks | Isolate action in the web rule, read-only, clipboard, upload, download, print | Same controls enforced in the browser |
+| Policy hooks | Isolate action in the web rule, read-only, clipboard, upload, download, print | Same controls enforced in the browser (this part is **deferred**, see D8) |
 
 **Decision for now:** no isolation in RB1 or RB2. Both approaches need an `isolate` action in the rule model (D2.2). To keep that door open, the rule action enum reserves the value `isolate`, and the evaluator rejects it as unsupported in RB1. The recommended first step is the workspace browser (BYOD-001), because it needs no container fleet.
 
@@ -629,7 +629,7 @@ We do **not** fork or write a browser. The workspace is a **launcher** (`ztx-wor
 | Launcher | Enrols the workspace credential, prepares the profile, starts the browser, runs the posture loop, erases the profile | On the device, no administrator rights where possible |
 | Isolated profile | Separate user-data directory and (PROTOTYPE) separate trust store | `<state dir>/workspace/profile` |
 | Local workspace proxy | The agent's existing loopback proxies (SOCKS for `.ztx` apps, HTTP for the web) on ephemeral ports chosen at launch, served together with a proxy auto-config file. **A per-launch credential is not possible with command-line flags** (Chrome has no flag for proxy credentials); the workspace extension (W3) will supply one through the proxy-authentication event. Until then any program on the same device can use these ports for as long as the workspace runs, which is the same exposure the plain agent's proxies already have | On the device, loopback only |
-| Workspace extension | Clipboard, download, upload, drag-and-drop and print controls, watermark, extension allow-list reporting | Inside the browser |
+| Workspace extension | **Deferred (decision C): not built in v1.** Would provide clipboard, download, upload, drag-and-drop and print controls, watermark, the proxy credential and extension allow-list reporting | Inside the browser |
 | Enforcement node | Recognises workspace sessions, applies the `workspace` policy condition and the `isolate` action | Unchanged apart from policy |
 
 ### D8.3 Identity: a workspace is a device role
@@ -664,7 +664,7 @@ Allow-list only. The launcher refuses to start the browser with extra extension 
 |---|---|---|
 | A. Ship a Chromium build the workspace controls (a bundle per OS, about 150 MB) | Extension by flag, no administrator rights, full control of policy | We own patching a browser: security updates must follow upstream within days; larger download; per-OS packaging |
 | B. Use the user's Chrome or Edge with an enterprise policy file that force-installs the extension | Smaller, the browser updates itself | Writing the policy needs administrator rights (breaks WB-001 for unmanaged personal devices), and it would apply to the user's whole browser, not only the workspace profile, unless profile-scoped policy is possible `[I]` |
-| C. No extension: keep the launcher and move the controls elsewhere | Nothing to ship in the browser | Clipboard, drag and drop and watermark controls are lost; download and upload control only at the proxy (partly possible with inspection and DLP, not for every flow); print control and the proxy credential are lost |
+| C. No extension: keep the launcher and move the controls elsewhere. **Chosen for v1 (proof of concept)** | Nothing to ship in the browser | Clipboard, drag and drop and watermark controls are lost; download and upload control only at the proxy (partly possible with inspection and DLP, not for every flow); print control and the proxy credential are lost |
 
 **Decision (requirements v0.7): option C for v1.** No extension is built in this version, so the workspace is a proof of concept (see the notice at the top of D8). Options A and B stay recorded above as the ways to add the extension in a later version; choosing either reopens W3 and the deferred tests in TEST-PLAN T4.
 
