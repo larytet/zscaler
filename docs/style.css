@@ -109,3 +109,10 @@ th { color: var(--muted); font-weight: 600; }
 .chip button { border: 0; background: transparent; padding: 0 .4rem; }
 .or { font-size: .75rem; color: var(--muted); }
 .check { display: block; margin: .3rem 0; color: var(--ink); font-size: 1rem; }
+
+/* tooltips */
+.tip { position: fixed; z-index: 30; max-width: 280px; background: var(--ink); color: var(--bg); padding: .45rem .65rem; border-radius: 8px; font-size: .85rem; line-height: 1.35; pointer-events: none; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.tip.hidden { display: none; }
+[data-tip]:not(button):not(a):not(input):not(select):not(textarea):not(label):not(.seg) { cursor: help; }
+th[data-tip], .kpi[data-tip], .tag[data-tip] { text-decoration: underline dotted var(--line); text-underline-offset: 3px; }
+.tag[data-tip], .kpi[data-tip] { text-decoration: none; }
