@@ -18,7 +18,9 @@ import (
 
 	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/store"
 	tidp "github.com/larytet/zscaler/test/idp"
 )
 
@@ -353,5 +355,32 @@ func TestIngestAndAlertsEndpoint(t *testing.T) {
 	code, b, _ = e.call("GET", "/v1/alerts", e.adminB, nil)
 	if code != 200 || strings.Contains(string(b), "repeated-denies") {
 		t.Fatalf("tenant b sees tenant a alerts: %s", b)
+	}
+}
+
+func TestDecisionSearch(t *testing.T) {
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	recs := []broker.Record{
+		{Tenant: "a", Kind: "private", Action: "allow", Event: "open", User: "u1", App: "erp", TS: time.Now()},
+		{Tenant: "a", Kind: "private", Action: "deny", Event: "open", User: "u2", App: "erp", Rule: "r1", TS: time.Now()},
+		{Tenant: "b", Kind: "private", Action: "deny", Event: "open", User: "x", App: "secret", TS: time.Now()},
+	}
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	code, b, _ := e.call("GET", "/v1/decisions?action=deny", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), `"u2"`) || strings.Contains(string(b), `"u1"`) || strings.Contains(string(b), "secret") {
+		t.Fatalf("%d %s", code, b)
+	}
+	if _, b, _ = e.call("GET", "/v1/decisions", e.adminB, nil); strings.Contains(string(b), `"u1"`) || !strings.Contains(string(b), "secret") {
+		t.Fatalf("tenant isolation: %s", b)
+	}
+	if code, _, _ = e.call("GET", "/v1/decisions?since=yesterday", e.adminA, nil); code != 400 {
+		t.Fatalf("bad since accepted: %d", code)
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if code, _, _ = e.call("GET", "/v1/decisions?user=u1", viewer, nil); code != 200 {
+		t.Fatalf("viewer: %d", code)
 	}
 }

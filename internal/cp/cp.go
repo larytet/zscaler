@@ -14,6 +14,7 @@ import (
 	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
@@ -27,6 +28,7 @@ type API struct {
 	BootstrapToken string
 	// Hooks let enforcement nodes react immediately to revocations.
 	Alerts         *alerts.Engine
+	Decisions      *decisions.Store
 	OnRevokeDevice func(tenant string, d store.Device)
 	OnDisableUser  func(tenant, subject string)
 }
@@ -70,6 +72,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("POST /v1/users/{id}/disable", a.wrap(write, a.disableUser))
 	m.HandleFunc("GET /v1/audit", a.wrap(read, a.listAudit))
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
+	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
 	return m
@@ -529,4 +532,28 @@ func cursor(r *http.Request) (after, limit int) {
 		limit = 500
 	}
 	return
+}
+
+func (a *API) listDecisions(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	if a.Decisions == nil {
+		return []decisions.Entry{}, nil
+	}
+	q := r.URL.Query()
+	f := decisions.Filter{User: q.Get("user"), App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind")}
+	if v := q.Get("since"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, fail(400, "invalid", "since must be an RFC 3339 time")
+		}
+		f.Since = t
+	}
+	f.After, f.Limit = cursor(r)
+	out, next := a.Decisions.Query(c.tenant, f) // tenant from the token only
+	if next != 0 {
+		w.Header().Set("X-Next-Cursor", strconv.Itoa(next))
+	}
+	if out == nil {
+		out = []decisions.Entry{}
+	}
+	return out, nil
 }

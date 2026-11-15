@@ -19,6 +19,7 @@ import (
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/cli"
 	"github.com/larytet/zscaler/internal/cp"
+	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -78,7 +79,7 @@ func main() {
 			eng.Tick()
 		}
 	}()
-	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng}
+	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New()}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent}
 
 	admin := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,

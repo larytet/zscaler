@@ -344,9 +344,12 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(400, "invalid", "expected a JSON array of at most 5000 records"))
 		return
 	}
-	if e.API.Alerts != nil {
-		for _, rec := range recs {
+	for _, rec := range recs {
+		if e.API.Alerts != nil {
 			e.API.Alerts.Ingest(rec)
+		}
+		if e.API.Decisions != nil {
+			e.API.Decisions.Add(rec)
 		}
 	}
 	writeJSON(w, 200, map[string]int{"accepted": len(recs)})

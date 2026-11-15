@@ -1,0 +1,90 @@
+// Package decisions keeps a bounded, per-tenant, in-memory history of decision
+// records forwarded by enforcement nodes, and answers searches over it
+// (DESIGN.md D5.1 /v1/decisions). The EN's JSON-lines file remains the durable copy.
+package decisions
+
+import (
+	"sync"
+	"time"
+
+	"github.com/larytet/zscaler/internal/broker"
+)
+
+type Entry struct {
+	Seq int `json:"seq"`
+	broker.Record
+}
+
+type Filter struct {
+	User, App, Action, Kind string
+	Since                   time.Time
+	After                   int // return entries with Seq greater than this
+	Limit                   int
+}
+
+type Store struct {
+	Max int // per tenant, default 50000
+
+	mu   sync.Mutex
+	seq  int
+	data map[string][]Entry
+}
+
+func New() *Store { return &Store{data: map[string][]Entry{}} }
+
+func (s *Store) Add(r broker.Record) {
+	if r.Kind == "posture" || r.Kind == "connector" {
+		return // events feed alerts, they are not access decisions
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	max := s.Max
+	if max == 0 {
+		max = 50000
+	}
+	s.seq++
+	l := append(s.data[r.Tenant], Entry{s.seq, r})
+	if len(l) > max {
+		l = append([]Entry(nil), l[len(l)-max:]...)
+	}
+	s.data[r.Tenant] = l
+}
+
+// Query returns matching entries oldest first, at most Limit (default 100, cap 500),
+// and the Seq to pass as After for the next page ("" semantics: 0 means no more).
+func (s *Store) Query(tenant string, f Filter) (out []Entry, next int) {
+	if f.Limit <= 0 {
+		f.Limit = 100
+	}
+	if f.Limit > 500 {
+		f.Limit = 500
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.data[tenant] {
+		if e.Seq <= f.After ||
+			(f.User != "" && e.User != f.User) || (f.App != "" && e.App != f.App) ||
+			(f.Action != "" && e.Action != f.Action) || (f.Kind != "" && e.Kind != f.Kind) ||
+			(!f.Since.IsZero() && e.TS.Before(f.Since)) {
+			continue
+		}
+		out = append(out, e)
+		if len(out) == f.Limit {
+			return out, e.Seq
+		}
+	}
+	return out, 0
+}
+
+// Since returns every entry for the tenant at or after t (for reports).
+func (s *Store) Since(tenant string, t time.Time) []Entry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Entry
+	for _, e := range s.data[tenant] {
+		if !e.TS.Before(t) {
+			out = append(out, e)
+		}
+	}
+	return out
+}

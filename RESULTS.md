@@ -64,5 +64,5 @@ Not done or only partly done, stated plainly:
 | RES-002 packet loss, RES-004 | Not simulated (see the resilience table) |
 | RES-007 | 3 minutes, not 24 hours |
 | SEC-019 | 30 s per fuzz target, not 30 minutes |
-| `/v1/decisions` search | Listed in the design (D5.1) but **not built**. Decision records are in the EN's JSON-lines file and forwarded to the alert engine only |
+| `/v1/decisions` search | Built in I8a (in-memory, bounded, lost on restart) |
 | Policy signing, `/v1/decisions`, UI | Not built (the admin UI of DESIGN D5.2 does not exist; only the API does) |
