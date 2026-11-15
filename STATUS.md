@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I9a (signed state).
+**Last updated:** 2026-11-15, after I9b (admin console).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -49,7 +49,7 @@ Implementation language: **Go** (chosen by the user).
 | I8b | Weekly digest (ADM-009): `GET /v1/digest` (JSON or `?format=text`), emailed Mondays 08:00 UTC to the alert recipients when SMTP is configured | done. The scheduler loop itself is not tested (the content, the endpoint and the send are); email only against a fake SMTP server | digest tests |
 | I8d | Policy simulation (ZPA-028, ADM-020): decision records now carry the user's groups and the device posture in force; `POST /v1/policies/private/simulate` replays recent decisions against a draft and reports who would be newly allowed or denied | done for private access only. Web decisions cannot be replayed (no category list in records) and source IP is not recorded. Records now hold group names and posture values, a little more than DESIGN D4.6 intended | simulate tests |
 | I9a | Signed control-plane state (DESIGN D5.5, SEC-007): the CP signs every snapshot (ECDSA, sequence number and time covered); ENs pin the public key at enrolment and refuse unsigned, forged, tampered, replayed or stale state | done. Closes the SEC-007 gap. ENs enrolled before this must be enrolled again to get the key. The signing key is a file on the control plane (no KMS) | signed, en tests |
-| I9b | Admin UI (DESIGN D5.2) | **next** | |
+| I9b | Admin console (DESIGN D5.2): static page on the admin listener with Overview, Access, People, Apps, Policy (simulate only), Reports, Investigate; token kept in sessionStorage; strict CSP; no HTML-parsing code (a test enforces it) | done, but **never opened in a real browser**: tests cover serving, headers, the no-HTML-sinks rule and JavaScript syntax only. Read-only except disable-user and revoke-device. No policy editing | ui tests |
 | I9c | Product-side "restricted" group for fast reaction (ZPA-072) | pending | |
 | I9d | Basic risk score feeding policy (ARCH-007) | pending | |
 | I9e | Just-in-time access with approval (ZPA-027) | pending | |
@@ -99,6 +99,6 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 
 ### Not built that the design or test plan expected
 
-- The admin UI (DESIGN D5.2) is not built: API only.
+
 - Of the 34 items promoted to Must in v0.5, only the cheap operations ones are built, in simple form: weekly digest, insurance evidence export, private-access policy simulation, rule suggestions, guided investigation. The other 28 are not (inspection add-ons, DLP, ZPA extras, isolation and BYOD, risk scoring, DEX, AI controls, and others). See ROADMAP.md.
 - Everything in ROADMAP.md.

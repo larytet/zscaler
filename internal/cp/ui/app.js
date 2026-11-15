@@ -1,0 +1,126 @@
+'use strict';
+// Everything shown comes from users and hosts, so it is never parsed as HTML:
+// only textContent and DOM nodes are used (a test enforces this).
+const $ = (id) => document.getElementById(id);
+const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
+const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
+
+let token = null;
+try { token = sessionStorage.getItem('ztx-token'); } catch (e) { token = null; }
+
+async function api(method, path, body, raw) {
+  const r = await fetch(path, { method, headers: Object.assign({ 'Authorization': 'Bearer ' + token },
+    body ? { 'Content-Type': 'application/json' } : {}), body: body ? JSON.stringify(body) : undefined });
+  const text = await r.text();
+  if (r.status === 401) { signOut(); throw new Error('Your session is not valid. Sign in again.'); }
+  if (!r.ok) { let m = text; try { m = JSON.parse(text).message || text; } catch (e) {} throw new Error(r.status + ': ' + m); }
+  if (raw) return text;
+  return text ? JSON.parse(text) : null;
+}
+
+function table(cols, rows) {
+  const t = el('table'), h = el('tr');
+  cols.forEach((c) => h.appendChild(el('th', c)));
+  t.appendChild(h);
+  rows.forEach((r) => { const tr = el('tr'); r.forEach((c) => { const td = el('td'); if (c instanceof Node) td.appendChild(c); else td.textContent = c === undefined || c === null ? '' : String(c); tr.appendChild(td); }); t.appendChild(tr); });
+  return t;
+}
+function btn(label, fn, cls) { const b = el('button', label, cls); b.addEventListener('click', async () => { b.disabled = true; try { await fn(); } catch (e) { alert(e.message); } b.disabled = false; }); return b; }
+function field(label, input) { const l = el('label', label + ' '); l.appendChild(input); return l; }
+const when = (s) => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleString(); };
+const view = () => $('view');
+function show(...nodes) { const v = view(); clear(v); nodes.forEach((n) => v.appendChild(n)); }
+function failure(e) { show(el('p', e.message, 'err')); }
+
+const tabs = {
+  Overview: async () => {
+    const [alerts, digest] = await Promise.all([api('GET', '/v1/alerts?open=1'), api('GET', '/v1/digest?format=text', null, true)]);
+    const a = el('div'); a.appendChild(el('h2', 'Open alerts'));
+    if (!alerts.length) a.appendChild(el('p', 'No open alerts.', 'ok'));
+    alerts.forEach((x) => { const c = el('div', undefined, 'card'); c.appendChild(el('strong', x.message)); c.appendChild(el('div', 'What to do: ' + x.recommended_action)); c.appendChild(el('div', 'Opened ' + when(x.opened), 'muted')); a.appendChild(c); });
+    const d = el('div'); d.appendChild(el('h2', 'This week')); d.appendChild(el('pre', digest));
+    show(a, d);
+  },
+  Access: async () => {
+    const f = { user: el('input'), app: el('input'), action: el('select') };
+    ['', 'allow', 'deny', 'warn'].forEach((o) => { const opt = el('option', o || 'any'); opt.value = o; f.action.appendChild(opt); });
+    const out = el('div');
+    const go = async () => {
+      const q = new URLSearchParams({ limit: '100' });
+      if (f.user.value) q.set('user', f.user.value); if (f.app.value) q.set('app', f.app.value); if (f.action.value) q.set('action', f.action.value);
+      const rows = (await api('GET', '/v1/decisions?' + q)).reverse();
+      clear(out);
+      out.appendChild(table(['Time', 'Kind', 'User', 'App or host', 'Result', 'Rule', 'Reason'], rows.map((r) => [when(r.ts), r.kind, r.user, r.app || r.target, r.action, r.rule, r.reason])));
+      if (!rows.length) out.appendChild(el('p', 'Nothing matches.', 'muted'));
+    };
+    const row = el('div', undefined, 'row');
+    row.append(field('User', f.user), field('App', f.app), field('Result', f.action), btn('Search', go, 'primary'));
+    show(el('h2', 'Access decisions'), row, out); await go();
+  },
+  People: async () => {
+    const [users, devices] = await Promise.all([api('GET', '/v1/users'), api('GET', '/v1/devices')]);
+    const reload = () => tabs.People().catch(failure);
+    const u = table(['User', 'Email', 'Groups', 'State', ''], users.map((x) => [x.Subject, x.Email, (x.Groups || []).join(', '), x.Disabled ? 'disabled' : 'active',
+      x.Disabled ? '' : btn('Disable', async () => { if (confirm('Disable ' + x.Subject + '? Their sessions end within seconds.')) { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/disable'); await reload(); } }, 'danger')]));
+    const d = table(['Device', 'User', 'State', ''], devices.map((x) => [x.id, x.user, x.revoked ? 'revoked' : 'active',
+      x.revoked ? '' : btn('Revoke', async () => { if (confirm('Revoke device ' + x.id + '?')) { await api('POST', '/v1/devices/' + encodeURIComponent(x.id) + '/revoke'); await reload(); } }, 'danger')]));
+    show(el('h2', 'People'), u, el('h2', 'Devices'), d);
+  },
+  Apps: async () => {
+    const segs = await api('GET', '/v1/segments');
+    show(el('h2', 'Private applications'), table(['Name', 'Connector group', 'Class', 'Targets'], segs.map((s) => [s.id, s.group, s.class || '', (s.targets || []).map((t) => t.host + ':' + (t.ports || []).join('/')).join(', ')])),
+      el('p', 'Apps are only reachable through the broker; their addresses are never sent to users.', 'muted'));
+  },
+  Policy: async () => {
+    const out = el('div'), ta = el('textarea'), res = el('pre');
+    const kind = el('select'); ['private', 'web'].forEach((k) => kind.appendChild(el('option', k)));
+    const load = async () => { try { ta.value = JSON.stringify(await api('GET', '/v1/policies/' + kind.value), null, 2); } catch (e) { ta.value = e.message; } };
+    kind.addEventListener('change', load);
+    const sim = btn('Simulate against the last 7 days', async () => { try { const draft = JSON.parse(ta.value); res.textContent = JSON.stringify(await api('POST', '/v1/policies/private/simulate', { policy: draft, days: 7 }), null, 2); } catch (e) { res.textContent = e.message; } }, 'primary');
+    const row = el('div', undefined, 'row'); row.append(field('Policy', kind), sim);
+    out.append(el('h2', 'Policy'), el('p', 'Edit a draft below and simulate it. Nothing is saved from this page; apply a change with the API once the simulation looks right.', 'muted'), row, ta, res);
+    show(out); await load();
+  },
+  Reports: async () => {
+    const [ev, sug] = await Promise.all([api('GET', '/v1/evidence?format=text', null, true), api('GET', '/v1/suggestions')]);
+    const s = el('div'); s.appendChild(el('h2', 'Suggestions'));
+    (sug.device_problems || []).forEach((p) => s.appendChild(el('div', p, 'card warn')));
+    (sug.rule_suggestions || []).forEach((x) => { const c = el('div', undefined, 'card'); c.appendChild(el('strong', x.summary)); c.appendChild(el('pre', JSON.stringify(x.draft_rule, null, 2))); c.appendChild(el('div', x.caution, 'muted')); s.appendChild(c); });
+    if (!(sug.device_problems || []).length && !(sug.rule_suggestions || []).length) s.appendChild(el('p', 'No suggestions.', 'muted'));
+    show(s, el('h2', 'Insurance questionnaire evidence'), el('pre', ev));
+  },
+  Investigate: async () => {
+    const u = el('input'), out = el('div');
+    const go = async () => {
+      if (!u.value) return; const r = await api('GET', '/v1/investigate?user=' + encodeURIComponent(u.value));
+      clear(out); out.appendChild(el('div', r.summary, 'card'));
+      out.appendChild(table(['Time', 'What', 'Result', 'Why', 'Fix'], r.timeline.map((s) => [when(s.ts), s.what, s.outcome, s.why, s.fix])));
+    };
+    const row = el('div', undefined, 'row'); row.append(field('User', u), btn('Investigate', go, 'primary'));
+    show(el('h2', 'Why was someone blocked?'), row, out);
+  },
+};
+
+function signOut() { token = null; try { sessionStorage.removeItem('ztx-token'); } catch (e) {} render(); }
+
+async function open(name) {
+  Array.from($('tabs').children).forEach((b) => b.setAttribute('aria-current', b.textContent === name ? 'true' : 'false'));
+  try { await tabs[name](); } catch (e) { failure(e); }
+}
+
+function render() {
+  const nav = $('tabs'); clear(nav); clear($('who'));
+  if (!token) { $('login').hidden = false; view().hidden = true; return; }
+  $('login').hidden = true; view().hidden = false;
+  Object.keys(tabs).forEach((n) => { const b = el('button', n); b.addEventListener('click', () => open(n)); nav.appendChild(b); });
+  $('who').appendChild(btn('Sign out', async () => signOut()));
+  open('Overview');
+}
+
+$('loginform').addEventListener('submit', async (ev) => {
+  ev.preventDefault(); $('loginerr').textContent = '';
+  token = $('token').value; $('token').value = '';
+  try { await api('GET', '/v1/segments'); try { sessionStorage.setItem('ztx-token', token); } catch (e) {} render(); }
+  catch (e) { token = null; $('loginerr').textContent = e.message; }
+});
+render();

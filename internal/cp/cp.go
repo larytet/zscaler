@@ -56,6 +56,7 @@ type handler func(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error
 
 func (a *API) Handler() http.Handler {
 	m := http.NewServeMux()
+	a.mountUI(m)
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	m.HandleFunc("POST /v1/tenants", a.createTenant)
 	m.HandleFunc("POST /v1/ens/tokens", a.enToken)

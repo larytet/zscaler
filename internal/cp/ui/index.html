@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMB-ZTX console</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<header>
+  <h1>SMB-ZTX</h1>
+  <nav id="tabs"></nav>
+  <span id="who"></span>
+</header>
+<main>
+  <section id="login">
+    <h2>Sign in</h2>
+    <p>Paste your admin token. It is kept in this browser tab only and is sent only to this server.</p>
+    <form id="loginform">
+      <label>Admin token <input id="token" type="password" autocomplete="off" required></label>
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="loginerr" class="err" role="alert"></p>
+  </section>
+  <section id="view" hidden></section>
+</main>
+<script src="/ui/app.js"></script>
+</body>
+</html>
