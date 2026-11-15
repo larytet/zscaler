@@ -905,3 +905,45 @@ func TestPa016SegmentTargetChange(t *testing.T) {
 		t.Fatal("the old target is still reachable through the segment")
 	}
 }
+
+// SCN-007 (ZPA-072): restricting a user takes effect within seconds, without the identity provider.
+func TestScn007RestrictUser(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	c, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	echoOnce(t, c, "before")
+	s.must("POST", "/v1/users/u1/restrict", map[string]string{"reason": "phishing report"}, s.token)
+	start := time.Now()
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	for {
+		if _, err := c.Write([]byte("x")); err != nil {
+			break
+		}
+		if _, err := c.Read(make([]byte, 1)); err != nil {
+			break
+		}
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("session survived %v after the restriction", d)
+	}
+	if s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("a restricted user opened a new session")
+	}
+	found := false
+	for _, d := range s.decisions() {
+		if d["rule"] == "sd-restricted" && d["action"] == "deny" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the decision log does not show the restricted rule")
+	}
+	s.must("POST", "/v1/users/u1/unrestrict", nil, s.token)
+	eventually(t, "access to return after the restriction is lifted", 15*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+}

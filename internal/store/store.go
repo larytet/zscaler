@@ -57,6 +57,7 @@ type Tenant struct {
 	Segments    map[string]broker.Segment  `json:"segments"`
 	Policies    map[policy.Kind]*PolicyDoc `json:"policies"`
 	Users       map[string]policy.User     `json:"users"`
+	Restricted  map[string]string          `json:"restricted,omitempty"` // subject -> reason
 	Devices     map[string]Device          `json:"devices"`
 }
 
@@ -326,6 +327,43 @@ func (s *Store) SetUserDisabled(tenant, subject string, disabled bool) error {
 	return s.save()
 }
 
+// effective adds product-side groups to what the identity provider said.
+func (t *Tenant) effective(u policy.User) policy.User {
+	if _, ok := t.Restricted[u.Subject]; ok {
+		g := make([]string, 0, len(u.Groups)+1)
+		for _, x := range u.Groups {
+			if x != policy.RestrictedGroup {
+				g = append(g, x)
+			}
+		}
+		u.Groups = append(g, policy.RestrictedGroup)
+	}
+	return u
+}
+
+// SetRestricted puts a user in, or takes them out of, the product-side
+// restricted group. It survives IdP group refreshes at login.
+func (s *Store) SetRestricted(tenant, subject string, restricted bool, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if _, ok := t.Users[subject]; !ok {
+		return ErrNotFound
+	}
+	if restricted {
+		if t.Restricted == nil {
+			t.Restricted = map[string]string{}
+		}
+		t.Restricted[subject] = reason
+	} else {
+		delete(t.Restricted, subject)
+	}
+	return s.save()
+}
+
 func (s *Store) Users(tenant string) ([]policy.User, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -335,7 +373,7 @@ func (s *Store) Users(tenant string) ([]policy.User, error) {
 	}
 	out := make([]policy.User, 0, len(t.Users))
 	for _, u := range t.Users {
-		out = append(out, u)
+		out = append(out, t.effective(u))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Subject < out[j].Subject })
 	return out, nil
@@ -412,7 +450,7 @@ func (s *Store) User(tenant, subject string) (policy.User, bool) {
 		return policy.User{}, false
 	}
 	u, ok := t.Users[subject]
-	return u, ok
+	return t.effective(u), ok
 }
 
 var _ broker.State = (*Store)(nil)
@@ -439,7 +477,7 @@ func (s *Store) Snapshot() *Snapshot {
 			ts.Segments = append(ts.Segments, g)
 		}
 		for _, u := range t.Users {
-			ts.Users = append(ts.Users, u)
+			ts.Users = append(ts.Users, t.effective(u))
 		}
 		for k, d := range t.Policies {
 			ts.Policies[k] = d.Policy

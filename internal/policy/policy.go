@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// RestrictedGroup is a product-side group. An admin can put a user in it at any
+// time without waiting for the identity provider; the safe-defaults policy denies it first.
+const RestrictedGroup = "restricted"
+
 type Kind string
 
 const (

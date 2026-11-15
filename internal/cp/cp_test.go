@@ -494,3 +494,43 @@ func TestEvidenceEndpoint(t *testing.T) {
 		t.Fatalf("viewer: %d", c)
 	}
 }
+
+func TestRestrictEndpoints(t *testing.T) { // ZPA-072
+	e := newEnv(t)
+	e.api.Store.UpsertUser("a", policy.User{Subject: "alice", Groups: []string{"all-staff"}})
+	if c, b, _ := e.call("POST", "/v1/users/alice/restrict", e.adminA, map[string]string{"reason": "phishing report"}); c != 200 {
+		t.Fatalf("%d %s", c, b)
+	}
+	if u, _ := e.api.Store.User("a", "alice"); u.Groups[len(u.Groups)-1] != policy.RestrictedGroup {
+		t.Fatalf("%+v", u)
+	}
+	if c, _, _ := e.call("POST", "/v1/users/alice/restrict", e.adminB, nil); c != 404 {
+		t.Fatalf("tenant b: %d", c)
+	}
+	if c, _, _ := e.call("POST", "/v1/users/alice/restrict", e.adminA, map[string]string{"reason": strings.Repeat("x", 300)}); c != 400 {
+		t.Fatalf("long reason: %d", c)
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("POST", "/v1/users/alice/unrestrict", viewer, nil); c != 403 {
+		t.Fatalf("viewer: %d", c)
+	}
+	if c, _, _ := e.call("POST", "/v1/users/alice/unrestrict", e.adminA, nil); c != 200 {
+		t.Fatal(c)
+	}
+	_, b, _ := e.call("GET", "/v1/audit", e.adminA, nil)
+	if !strings.Contains(string(b), "user.restrict") || !strings.Contains(string(b), "user.unrestrict") {
+		t.Fatalf("not audited: %s", b)
+	}
+	// the safe defaults deny the restricted group before anything else
+	priv, web := SafeDefaults([]broker.Segment{{ID: "erp", Class: "standard"}})
+	for _, p := range []*policy.Policy{priv, web} {
+		if err := p.Compile(nil); err != nil {
+			t.Fatal(err)
+		}
+		d := p.Evaluate(policy.Request{Kind: p.Kind, App: "erp", Host: "x.test", Now: time.Now(),
+			User: policy.User{Groups: []string{"all-staff", policy.RestrictedGroup}}})
+		if d.Action != policy.Deny || d.RuleID != "sd-restricted" {
+			t.Fatalf("%s: %+v", p.Kind, d)
+		}
+	}
+}

@@ -76,6 +76,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("POST /v1/devices/{id}/revoke", a.wrap(write, a.revokeDevice))
 	m.HandleFunc("GET /v1/users", a.wrap(read, a.listUsers))
 	m.HandleFunc("POST /v1/users/{id}/disable", a.wrap(write, a.disableUser))
+	m.HandleFunc("POST /v1/users/{id}/restrict", a.wrap(write, a.restrictUser))
+	m.HandleFunc("POST /v1/users/{id}/unrestrict", a.wrap(write, a.unrestrictUser))
 	m.HandleFunc("GET /v1/audit", a.wrap(read, a.listAudit))
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
@@ -433,6 +435,8 @@ func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
 	tr := true
 	posture := &policy.PostureMatch{DiskEncrypted: &tr, FirewallOn: &tr, MaxAgeSeconds: 3600}
 	private = &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny}
+	private.Rules = append(private.Rules, policy.Rule{ID: "sd-restricted", Priority: 1, Action: policy.Deny,
+		Reason: "Restricted users are blocked first", Match: policy.Match{Groups: []string{policy.RestrictedGroup}}})
 	var std, adm []string
 	for _, s := range segs {
 		switch s.Class {
@@ -453,6 +457,8 @@ func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
 			Match:  policy.Match{Groups: []string{"admins"}, Apps: adm, Posture: posture}})
 	}
 	web = &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Rules: []policy.Rule{
+		{ID: "sd-restricted", Priority: 1, Action: policy.Deny, Reason: "Restricted users are blocked first",
+			Match: policy.Match{Groups: []string{policy.RestrictedGroup}}},
 		{ID: "sd-bad", Priority: 10, Action: policy.Deny, Reason: "Known-bad categories",
 			Match: policy.Match{Categories: []string{"malware", "phishing", "command-and-control"}}},
 		{ID: "sd-warn", Priority: 20, Action: policy.Warn, Reason: "Risky categories",
@@ -707,4 +713,33 @@ func (a *API) investigate(w http.ResponseWriter, r *http.Request, c ctxInfo) (an
 		return nil, fail(400, "invalid", "user is required")
 	}
 	return advice.Investigate(user, a.recent(r, c.tenant)), nil
+}
+
+func (a *API) restrictUser(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id := r.PathValue("id")
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+	}
+	if len(in.Reason) > 200 {
+		return nil, fail(400, "invalid", "reason is limited to 200 characters")
+	}
+	if err := a.Store.SetRestricted(c.tenant, id, true, in.Reason); err != nil {
+		return nil, err
+	}
+	a.log(c, "user.restrict", id, nil, in.Reason)
+	return map[string]any{"restricted": id}, nil
+}
+
+func (a *API) unrestrictUser(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id := r.PathValue("id")
+	if err := a.Store.SetRestricted(c.tenant, id, false, ""); err != nil {
+		return nil, err
+	}
+	a.log(c, "user.unrestrict", id, nil, nil)
+	return map[string]any{"unrestricted": id}, nil
 }

@@ -143,3 +143,49 @@ func TestLoginDoesNotReenableDisabledUser(t *testing.T) {
 		t.Fatal("login re-enabled a disabled user")
 	}
 }
+
+func TestRestrictedGroupSurvivesIdPRefresh(t *testing.T) { // ZPA-072
+	s, _, _ := twoTenants(t)
+	s.UpsertUser("a", policy.User{Subject: "alice", Groups: []string{"finance", "all-staff"}})
+	if err := s.SetRestricted("a", "alice", true, "phished"); err != nil {
+		t.Fatal(err)
+	}
+	has := func(u policy.User) bool {
+		for _, g := range u.Groups {
+			if g == policy.RestrictedGroup {
+				return true
+			}
+		}
+		return false
+	}
+	u, _ := s.User("a", "alice")
+	if !has(u) || len(u.Groups) != 3 {
+		t.Fatalf("%+v", u)
+	}
+	s.UpsertUser("a", policy.User{Subject: "alice", Groups: []string{"hr"}}) // next login: the IdP reports new groups
+	if u, _ := s.User("a", "alice"); !has(u) {
+		t.Fatal("a login lifted the restriction")
+	}
+	s.UpsertUser("a", policy.User{Subject: "alice", Groups: []string{"restricted"}}) // an IdP group of the same name must not double up
+	if u, _ := s.User("a", "alice"); len(u.Groups) != 1 {
+		t.Fatalf("duplicate group: %+v", u.Groups)
+	}
+	users, _ := s.Users("a")
+	if !has(users[0]) {
+		t.Fatal("Users() does not show the restriction")
+	}
+	if !has(s.Snapshot().Tenants["a"].Users[0]) {
+		t.Fatal("the snapshot sent to enforcement nodes does not carry the restriction")
+	}
+	if err := s.SetRestricted("b", "alice", true, ""); err != ErrNotFound {
+		t.Fatalf("tenant b restricted tenant a's user: %v", err)
+	}
+	if err := s.SetRestricted("a", "ghost", true, ""); err != ErrNotFound {
+		t.Fatal("restricting an unknown user")
+	}
+	s.UpsertUser("a", policy.User{Subject: "alice", Groups: []string{"hr"}})
+	s.SetRestricted("a", "alice", false, "")
+	if u, _ := s.User("a", "alice"); has(u) {
+		t.Fatal("unrestrict did not work")
+	}
+}
