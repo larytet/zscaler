@@ -369,3 +369,51 @@ func TestRiskConditions(t *testing.T) { // ARCH-007
 		}
 	}
 }
+
+func TestPathAndMethodRulesNeedInspection(t *testing.T) { // ZPA-074 (web side)
+	p := mk(t, Web,
+		Rule{ID: "no-upload", Priority: 1, Action: Deny, Match: Match{Domains: []string{"files.example"}, Paths: []string{"/upload"}, Methods: []string{"post", "PUT"}}},
+		Rule{ID: "admin-ro", Priority: 2, Action: Deny, Match: Match{Domains: []string{"files.example"}, Paths: []string{"/admin"}, Methods: []string{"DELETE"}}})
+	insp := func(method, path string) Decision {
+		return p.Evaluate(Request{Kind: Web, Host: "files.example", Now: t0, Inspected: true, Method: method, Path: path})
+	}
+	for _, c := range []struct {
+		method, path string
+		want         Action
+	}{
+		{"POST", "/upload", Deny}, {"PUT", "/upload/x", Deny}, {"GET", "/upload", Allow}, {"POST", "/other", Allow},
+		{"POST", "/uploads", Deny}, // prefix semantics: documented, and the admin should write /upload/ for a directory
+		{"DELETE", "/admin/users", Deny}, {"GET", "/admin/users", Allow}, {"POST", "/", Allow},
+	} {
+		if got := insp(c.method, c.path).Action; got != c.want {
+			t.Errorf("%s %s: got %s", c.method, c.path, got)
+		}
+	}
+	// without decryption the proxy cannot see paths: the rule must not match (and must not block everything)
+	if d := p.Evaluate(Request{Kind: Web, Host: "files.example", Now: t0}); d.Action != Allow {
+		t.Fatalf("a path rule matched traffic that was not inspected: %+v", d)
+	}
+}
+
+func TestPathRuleValidation(t *testing.T) {
+	rule := func(m Match) *Policy {
+		return &Policy{Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Deny, Match: m}}}
+	}
+	if errs := Validate(rule(Match{Paths: []string{"/ok"}, Methods: []string{"get"}}), nil); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	for name, m := range map[string]Match{
+		"no leading slash": {Paths: []string{"upload"}},
+		"space in path":    {Paths: []string{"/a b"}},
+		"newline in path":  {Paths: []string{"/a\nb"}},
+		"unknown method":   {Methods: []string{"TRACE"}},
+	} {
+		if errs := Validate(rule(m), nil); len(errs) == 0 {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	priv := &Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Match: Match{Groups: []string{"g"}, Paths: []string{"/x"}}}}}
+	if errs := Validate(priv, nil); len(errs) == 0 {
+		t.Fatal("paths accepted in a private policy")
+	}
+}

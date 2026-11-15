@@ -15,6 +15,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -144,7 +145,7 @@ func writeFake(t *testing.T, dir, name, out string) {
 	}
 }
 
-func newStack(t *testing.T) *stack {
+func newStack(t *testing.T, enExtra ...string) *stack {
 	s := &stack{t: t, dir: t.TempDir(), bin: build(t), ports: map[string]int{}, ifMatch: "0", bufs: map[string]*lockedBuf{}}
 	s.idp = tidp.New("cid")
 	t.Cleanup(s.idp.Close)
@@ -224,6 +225,7 @@ func newStack(t *testing.T) *stack {
 	s.enArgs = []string{"--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
 		"--data", filepath.Join(s.dir, "en"), "--listen", fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]),
 		"--proxy-listen", fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"]), "--categories", cats, "--sync-every", "300ms"}
+	s.enArgs = append(s.enArgs, enExtra...)
 	s.enProc = s.start("ztx-en", []string{"ZTX_EN_TOKEN=" + tk.Token}, s.enArgs...)
 	waitPort(t, s.ports["broker"])
 	waitPort(t, s.ports["proxy"])
@@ -1015,3 +1017,141 @@ func TestScn008JustInTimeAccess(t *testing.T) {
 		t.Fatal("the decision log does not show the approved access")
 	}
 }
+
+// SCN-009 (ZIA-040, ZPA-074 web side): TLS inspection with path rules, through the real binaries.
+func TestScn009TLSInspection(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		b, _ := io.ReadAll(q.Body)
+		fmt.Fprintf(w, "origin saw %s %s body=%d", q.Method, q.URL.Path, len(b))
+	}))
+	defer origin.Close()
+	originHP := strings.TrimPrefix(origin.URL, "https://")
+	originHost := strings.Split(originHP, ":")[0]
+	originPEM := filepath.Join(t.TempDir(), "origin.pem")
+	os.WriteFile(originPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: origin.Certificate().Raw}), 0o600)
+
+	s := newStack(t, "--lab-allow-dial", originHP, "--lab-upstream-ca", originPEM)
+	// a web policy that blocks uploads to the origin; it needs decryption to see the method and path
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/web", map[string]any{"default_action": "allow", "rules": []map[string]any{{
+		"id": "no-upload", "priority": 10, "action": "deny",
+		"match": map[string]any{"domains": []string{originHost}, "paths": []string{"/upload"}, "methods": []string{"POST"}}}}}, s.token)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	proxyAddr := fmt.Sprintf("127.0.0.1:%d", a.ports["http"])
+	waitPort(t, a.ports["http"])
+
+	connect := func(roots *x509.CertPool) (*tls.Conn, *bufio.Reader, error) {
+		c, err := net.Dial("tcp", proxyAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { c.Close() })
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", originHP, originHP)
+		br := bufio.NewReader(c)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		if resp.StatusCode != 200 { // for example 407 until the EN has synced the new user
+			return nil, nil, fmt.Errorf("connect answered %d", resp.StatusCode)
+		}
+		inner := tls.Client(&bufferedConn{Conn: c, r: br}, &tls.Config{RootCAs: roots, ServerName: originHost})
+		inner.SetDeadline(time.Now().Add(5 * time.Second))
+		if err := inner.Handshake(); err != nil {
+			return nil, nil, err
+		}
+		inner.SetDeadline(time.Time{})
+		return inner, bufio.NewReader(inner), nil
+	}
+	req := func(c *tls.Conn, br *bufio.Reader, method, path, body string) (int, string) {
+		fmt.Fprintf(c, "%s %s HTTP/1.1\r\nHost: %s\r\nContent-Length: %d\r\n\r\n%s", method, path, originHP, len(body), body)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return resp.StatusCode, string(b)
+	}
+
+	// before inspection is enabled the tunnel is opaque: the origin's own certificate is shown
+	origPool := x509.NewCertPool()
+	origPool.AddCert(origin.Certificate())
+	eventually(t, "an opaque tunnel", 20*time.Second, func() bool {
+		c, br, err := connect(origPool)
+		if err != nil {
+			return false
+		}
+		code, body := req(c, br, "GET", "/x", "")
+		return code == 200 && strings.Contains(body, "origin saw GET /x")
+	})
+
+	// the admin enables inspection and installs the tenant's CA on the device
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
+	req2, _ := http.NewRequest("GET", s.adminU+"/v1/inspection/ca.pem", nil)
+	req2.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.admin.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if strings.Contains(string(caPEM), "PRIVATE KEY") {
+		t.Fatal("the CA download contains the private key")
+	}
+	inspPool := x509.NewCertPool()
+	if !inspPool.AppendCertsFromPEM(caPEM) {
+		t.Fatal("CA download is not a certificate")
+	}
+	var c *tls.Conn
+	var br *bufio.Reader
+	eventually(t, "inspection to take effect", 20*time.Second, func() bool {
+		var err error
+		c, br, err = connect(inspPool) // only succeeds when the proxy presents a cert from the tenant's CA
+		return err == nil
+	})
+	if code, body := req(c, br, "GET", "/ok", ""); code != 200 || body != "origin saw GET /ok body=0" {
+		t.Fatalf("%d %q", code, body)
+	}
+	if code, body := req(c, br, "POST", "/upload", "secret file"); code != 403 || !strings.Contains(body, "blocked") {
+		t.Fatalf("upload not blocked: %d %q", code, body)
+	}
+	if code, _ := req(c, br, "GET", "/upload", ""); code != 200 {
+		t.Fatalf("GET /upload must still work: %d", code)
+	}
+	// a device that does not trust the CA cannot use inspected sites, and the admin can see why
+	if _, _, err := connect(x509.NewCertPool()); err == nil {
+		t.Fatal("a client that does not trust the tenant CA completed the handshake")
+	}
+	eventually(t, "the handshake failure and the inspected decisions in the log", 10*time.Second, func() bool {
+		var failed, denied bool
+		for _, d := range s.decisions() {
+			if d["reason"] == "inspection-handshake-failed" {
+				failed = true
+			}
+			if d["rule"] == "no-upload" && d["action"] == "deny" && d["inspected"] == true {
+				denied = true
+			}
+		}
+		return failed && denied
+	})
+	// the exempt list makes a domain opaque again
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true, "exempt": []string{originHost}}, s.token)
+	eventually(t, "the exemption", 20*time.Second, func() bool {
+		c, br, err := connect(origPool)
+		if err != nil {
+			return false
+		}
+		code, _ := req(c, br, "POST", "/upload", "x") // not inspected, so the path rule cannot see it
+		return code == 200
+	})
+}
+
+// bufferedConn reads through a bufio.Reader that may already hold bytes from the conn.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }

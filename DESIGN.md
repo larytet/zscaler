@@ -586,3 +586,18 @@ Browser isolation (ZIA-024, ZIA-022d, ZPA-055) is the highest-value deferred (S)
 ### D6.4 Open question added
 
 5. Whether the first isolation build is cloud-streamed or a workspace browser (D6.3).
+
+---
+
+## D6. TLS inspection (added after v1.0, requirements v0.5)
+
+Requirements: ZIA-040 (now Must), ARCH-021, ZPA-074 (web side). D3.5 above still describes the original no-decryption proxy, which remains the behaviour when inspection is off.
+
+- **Per-tenant intercept CA** (ARCH-021). Created when a tenant first enables inspection, never shared, never regenerated on re-enable (devices keep trusting it). The certificate is downloadable by the tenant's admins; the key travels to enforcement nodes inside the signed snapshot (D5.5).
+- **Decision flow for CONNECT.** The host-level web policy runs first, as before: deny and warn on the host still apply. If the request is allowed and the tenant has inspection on and the host is not on the exempt list, the proxy answers `200`, completes a TLS handshake with the device using a leaf certificate minted for the CONNECT host (cached, 12 hours), and serves the decrypted requests.
+- **Per request.** Each decrypted request is evaluated against the web policy with its host, path and method. Rules may use `paths` (prefix match) and `methods`; on traffic that is not decrypted such rules never match, because the proxy cannot see them. The block page and the warning page work over HTTPS. Decision records note `inspected: true` and carry the rule, never the URL path.
+- **Upstream.** The proxy connects to the origin itself and verifies its certificate against the system roots. An origin it cannot verify gets a 502, never a relay. The same SSRF guard applies at dial time.
+- **Domain fronting.** A request whose `Host` differs from the CONNECT target is refused (421).
+- **Failures are visible.** A device that does not trust the CA, or an app that pins its certificate, fails the handshake; the proxy logs `inspection-handshake-failed` so the admin can add the domain to the exempt list. If a tenant's CA cannot be loaded, inspection stays off for that tenant (an opaque tunnel, never a bad certificate).
+- **Not covered:** WebSockets and other upgrades, HTTP/2, certificate-pinned apps beyond exemptions, installing the CA on devices from the agent, and everything that should build on decryption (DLP, sandbox, capture, developer-tool coverage, handshake snooping).
+- **Risk to note:** the intercept CA key exists on every enforcement node and in the control-plane store file in clear. A compromise of either lets an attacker mint certificates that every device of that tenant trusts. A KMS or HSM and per-node sub-CAs are the fix.

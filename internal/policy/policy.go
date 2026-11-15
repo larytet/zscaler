@@ -68,6 +68,10 @@ type Request struct {
 	Categories []string // web, from classification
 	SrcIP      netip.Addr
 	Now        time.Time
+	// Set only for inspected web requests.
+	Inspected bool
+	Path      string
+	Method    string
 }
 
 type Decision struct {
@@ -104,6 +108,10 @@ type Match struct {
 	Posture    *PostureMatch `json:"posture,omitempty"`
 	Time       *TimeMatch    `json:"time,omitempty"`
 	Network    *NetworkMatch `json:"network,omitempty"`
+	// Paths (URL path prefixes) and Methods apply only to inspected (decrypted) web
+	// traffic. On traffic that is not inspected a rule that names them never matches.
+	Paths   []string `json:"paths,omitempty"`
+	Methods []string `json:"methods,omitempty"`
 	// MaxRisk and MinRisk bound the user's risk score (inclusive).
 	MaxRisk *int `json:"max_risk,omitempty"`
 	MinRisk *int `json:"min_risk,omitempty"`
@@ -296,6 +304,33 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 		}
 		if !ok {
 			return false
+		}
+	}
+	if len(m.Paths)+len(m.Methods) > 0 {
+		if !r.Inspected {
+			return false
+		}
+		if len(m.Paths) > 0 {
+			ok := false
+			for _, p := range m.Paths {
+				if strings.HasPrefix(r.Path, p) {
+					ok = true
+				}
+			}
+			if !ok {
+				return false
+			}
+		}
+		if len(m.Methods) > 0 {
+			ok := false
+			for _, mm := range m.Methods {
+				if strings.EqualFold(mm, r.Method) {
+					ok = true
+				}
+			}
+			if !ok {
+				return false
+			}
 		}
 	}
 	if (m.MaxRisk != nil && r.User.Risk > *m.MaxRisk) || (m.MinRisk != nil && r.User.Risk < *m.MinRisk) {

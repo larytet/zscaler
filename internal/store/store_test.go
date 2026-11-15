@@ -224,3 +224,40 @@ func TestGrantsExpireAndReachSnapshot(t *testing.T) { // ZPA-027
 		t.Fatal("revoke did not end the grant")
 	}
 }
+
+func TestInspectionCAIsPerTenantAndKeyStaysInternal(t *testing.T) { // ARCH-021
+	s, _, _ := twoTenants(t)
+	if err := s.SetInspection("a", true, []string{"bank.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetInspection("b", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	ca, _ := s.Inspection("a")
+	cb, _ := s.Inspection("b")
+	if ca.CACert == "" || ca.CACert == cb.CACert {
+		t.Fatal("tenants must have different intercept CAs")
+	}
+	if ca.CAKey != "" {
+		t.Fatal("Inspection() leaked the private key")
+	}
+	s.SetInspection("a", false, nil)
+	s.SetInspection("a", true, nil)
+	if again, _ := s.Inspection("a"); again.CACert != ca.CACert {
+		t.Fatal("re-enabling inspection created a new CA, which would break every device that trusts the old one")
+	}
+	snap := s.Snapshot().Tenants["a"]
+	if snap.Inspect == nil || snap.Inspect.CAKey == "" || !snap.Inspect.Enabled {
+		t.Fatalf("enabled inspection must reach enforcement nodes: %+v", snap.Inspect)
+	}
+	s.SetInspection("a", false, nil)
+	if s.Snapshot().Tenants["a"].Inspect != nil {
+		t.Fatal("disabled inspection must not ship the CA key")
+	}
+	if s.Snapshot().Tenants["b"].Inspect == nil {
+		t.Fatal("tenant b's setting was lost")
+	}
+	if err := s.SetInspection("ghost", true, nil); err != ErrNotFound {
+		t.Fatalf("%v", err)
+	}
+}

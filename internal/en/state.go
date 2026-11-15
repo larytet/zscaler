@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/signed"
 	"github.com/larytet/zscaler/internal/store"
@@ -30,6 +31,9 @@ type tenantView struct {
 	pols    map[policy.Kind]*policy.Policy
 	revoked map[string]bool
 	grants  map[string]time.Time // user|app -> expiry
+	inspect bool
+	exempt  []string
+	ca      *pki.CA
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -79,6 +83,13 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		}
 		for _, g := range t.Grants {
 			tv.grants[g.User+"|"+g.App] = g.Expires
+		}
+		if t.Inspect != nil && t.Inspect.Enabled {
+			if ca, err := pki.CAFromPEM([]byte(t.Inspect.CACert), []byte(t.Inspect.CAKey), nil); err == nil {
+				tv.inspect, tv.exempt, tv.ca = true, t.Inspect.Exempt, ca
+			} else {
+				errs = append(errs, fmt.Errorf("tenant %s: intercept CA unusable, inspection stays off: %w", id, err))
+			}
 		}
 		for k, p := range t.Policies {
 			if ot := old.tenants[id]; ot != nil && ot.pols[k] != nil && p.Version < ot.pols[k].Version {
@@ -145,6 +156,15 @@ func (s *SyncState) DeviceRevoked(tenant, device string) bool {
 		return t.revoked[device]
 	}
 	return false
+}
+
+// Inspection reports whether a tenant's web traffic is decrypted, which domains are
+// exempt, and the CA used to mint certificates.
+func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
+	if t := s.t(tenant); t != nil && t.inspect {
+		return true, t.exempt, t.ca
+	}
+	return false, nil, nil
 }
 
 // Granted implements broker.Granter from the signed snapshot.

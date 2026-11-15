@@ -27,13 +27,31 @@ import (
 	"github.com/larytet/zscaler/internal/policy"
 )
 
-type state struct{ pol *policy.Policy }
+type state struct {
+	mu      sync.Mutex
+	pol     *policy.Policy
+	enabled bool
+	exempt  []string
+	ca      *pki.CA
+}
 
-func (s state) Policy(string, policy.Kind) *policy.Policy { return s.pol }
-func (state) Segment(string, string) (broker.Segment, bool) {
+func (s *state) Policy(string, policy.Kind) *policy.Policy {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pol
+}
+
+func (s *state) Inspection(string) (bool, []string, *pki.CA) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.enabled, s.exempt, s.ca
+}
+
+func (s *state) set(f func(*state)) { s.mu.Lock(); f(s); s.mu.Unlock() }
+func (*state) Segment(string, string) (broker.Segment, bool) {
 	return broker.Segment{}, false
 }
-func (state) User(t, sub string) (policy.User, bool) {
+func (*state) User(t, sub string) (policy.User, bool) {
 	return policy.User{Subject: sub, Email: sub + "@example.com", Groups: []string{"staff"}}, true
 }
 
@@ -49,6 +67,11 @@ type rig struct {
 	tlsOrig *httptest.Server
 	exempt  map[string]bool
 	emu     sync.Mutex
+	st      *state
+	tenCA   *pki.CA
+	up      *x509.CertPool
+	key     *ecdsa.PrivateKey
+	keyOnce sync.Once
 }
 
 func (r *rig) exemptAdd(hp string) { r.emu.Lock(); r.exempt[hp] = true; r.emu.Unlock() }
@@ -65,6 +88,8 @@ func newRig(t *testing.T) *rig {
 	t.Cleanup(r.tlsOrig.Close)
 	r.exempt = map[string]bool{hostport(r.origin.URL): true, hostport(r.tlsOrig.URL): true}
 
+	r.st = &state{}
+	r.tenCA, _ = pki.NewCA("tenant inspection CA", nil)
 	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 3, Rules: []policy.Rule{
 		{ID: "bad", Priority: 10, Action: policy.Deny, Match: policy.Match{Categories: []string{"malware"}}},
 		{ID: "warn", Priority: 20, Action: policy.Warn, Match: policy.Match{Categories: []string{"file-sharing"}}},
@@ -72,11 +97,14 @@ func newRig(t *testing.T) *rig {
 	if err := pol.Compile(nil); err != nil {
 		t.Fatal(err)
 	}
+	r.st.pol = pol
 	cl := NewClassifier(map[string][]string{
 		"malware":      {"evil.test"},
 		"file-sharing": {"share.test"},
 	})
-	p := &Proxy{CA: ca, Rev: pki.NewRevocations(nil), State: state{pol}, Classifier: cl, Name: "en1",
+	r.up = x509.NewCertPool()
+	r.up.AddCert(r.tlsOrig.Certificate())
+	p := &Proxy{UpstreamRoots: r.up, CA: ca, Rev: pki.NewRevocations(nil), State: r.st, Classifier: cl, Name: "en1",
 		Exempt: func(a netip.AddrPort) bool { r.emu.Lock(); defer r.emu.Unlock(); return r.exempt[a.String()] },
 		Log:    func(rec broker.Record) { r.mu.Lock(); r.logs = append(r.logs, rec); r.mu.Unlock() }}
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -451,3 +479,5 @@ func TestOldTLSRefusedByProxy(t *testing.T) { // SEC-011
 		t.Fatal("proxy accepted TLS 1.2")
 	}
 }
+
+type broker_Record = broker.Record

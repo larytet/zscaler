@@ -88,6 +88,9 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
+	m.HandleFunc("PUT /v1/inspection", a.wrap(write, a.putInspection))
+	m.HandleFunc("GET /v1/inspection", a.wrap(read, a.getInspection))
+	m.HandleFunc("GET /v1/inspection/ca.pem", a.wrap(read, a.getInspectionCA))
 	m.HandleFunc("GET /v1/approvals", a.wrap(read, a.listApprovals))
 	m.HandleFunc("POST /v1/approvals/{id}/approve", a.wrap(write, a.approve))
 	m.HandleFunc("POST /v1/approvals/{id}/deny", a.wrap(write, a.denyRequest))
@@ -880,4 +883,58 @@ func (a *API) endGrant(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, 
 	}
 	a.log(c, "access.end", found.User+"@"+found.App, nil, nil)
 	return map[string]any{"ended": id}, nil
+}
+
+func (a *API) putInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	var in struct {
+		Enabled bool     `json:"enabled"`
+		Exempt  []string `json:"exempt"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	if len(in.Exempt) > 500 {
+		return nil, fail(400, "invalid", "at most 500 exempt domains")
+	}
+	for i, d := range in.Exempt {
+		raw := strings.TrimSuffix(strings.ToLower(strings.TrimSpace(d)), ".") // validate what was typed, not a normalised guess
+		if raw == "" || strings.ContainsAny(raw, "/:@ *\r\n") || strings.HasPrefix(raw, ".") {
+			return nil, fail(400, "invalid", "exempt entries are plain domains such as example.com (subdomains are included)")
+		}
+		in.Exempt[i] = raw
+	}
+	if err := a.Store.SetInspection(c.tenant, in.Enabled, in.Exempt); err != nil {
+		return nil, err
+	}
+	a.log(c, "inspection.update", "tls-inspection", nil, map[string]any{"enabled": in.Enabled, "exempt": len(in.Exempt)})
+	cfg, _ := a.Store.Inspection(c.tenant)
+	return cfg, nil
+}
+
+func (a *API) getInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	cfg, err := a.Store.Inspection(c.tenant)
+	if err != nil {
+		return nil, err
+	}
+	cfg.CACert = "" // fetch it from /v1/inspection/ca.pem
+	if cfg.Exempt == nil {
+		cfg.Exempt = []string{}
+	}
+	return cfg, nil
+}
+
+// getInspectionCA serves the tenant's intercept CA certificate (never its key) so it
+// can be installed on devices. Without it, browsers show certificate errors on inspected sites.
+func (a *API) getInspectionCA(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	cfg, err := a.Store.Inspection(c.tenant)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.CACert == "" {
+		return nil, fail(404, "not_found", "inspection has never been enabled for this tenant")
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", `attachment; filename="inspection-ca.pem"`)
+	io.WriteString(w, cfg.CACert)
+	return nil, nil
 }

@@ -3,6 +3,8 @@
 package webproxy
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -71,6 +73,14 @@ type Proxy struct {
 	usedWarn  map[string]time.Time
 	transport *http.Transport
 	idCache   sync.Map
+	// UpstreamRoots are extra trusted roots for verifying origin servers of inspected
+	// connections (lab use; nil means the system roots only).
+	UpstreamRoots *x509.CertPool
+
+	leafKey   *ecdsa.PrivateKey
+	leafMu    sync.Mutex
+	leaves    sync.Map // tenant|host -> *tls.Certificate
+	tlsTransp *http.Transport
 }
 
 func (p *Proxy) init() {
@@ -80,6 +90,9 @@ func (p *Proxy) init() {
 		if p.Log == nil {
 			p.Log = func(broker.Record) {}
 		}
+		p.leafKey, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		p.tlsTransp = &http.Transport{DialContext: p.safeDialer().DialContext, TLSClientConfig: &tls.Config{RootCAs: p.UpstreamRoots, MinVersion: tls.VersionTLS12},
+			MaxIdleConnsPerHost: 8, IdleConnTimeout: 30 * time.Second, ResponseHeaderTimeout: 30 * time.Second}
 		p.transport = &http.Transport{DialContext: p.safeDialer().DialContext,
 			MaxIdleConnsPerHost: 8, IdleConnTimeout: 30 * time.Second, ResponseHeaderTimeout: 30 * time.Second}
 	})
@@ -203,6 +216,10 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rec.Action = "allow"
 	p.Log(rec)
 	if connect {
+		if ca := p.interceptCA(id.Tenant, host); ca != nil {
+			p.inspect(w, r, id, user, host, port, rec, ca)
+			return
+		}
 		p.tunnel(w, r, rec)
 	} else {
 		p.forward(w, r, rec)
@@ -286,6 +303,9 @@ func (p *Proxy) warnPage(w http.ResponseWriter, r *http.Request, id pki.Identity
 	u := *r.URL
 	if !u.IsAbs() {
 		u.Scheme, u.Host = "http", r.Host
+		if r.TLS != nil { // inside an inspected tunnel
+			u.Scheme = "https"
+		}
 	}
 	q := u.Query()
 	q.Set("ztx_continue", p.warnToken(id, host, time.Now().Add(warnTTL).Unix()))
@@ -367,5 +387,26 @@ func (p *Proxy) tunnel(w http.ResponseWriter, r *http.Request, rec broker.Record
 func closeWrite(c net.Conn) {
 	if cw, ok := c.(interface{ CloseWrite() error }); ok {
 		cw.CloseWrite()
+	}
+}
+
+func x509ParseCertificate(der []byte) (*x509.Certificate, error) { return x509.ParseCertificate(der) }
+
+func copyBody(w http.ResponseWriter, r io.Reader) {
+	fl, _ := w.(http.Flusher)
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := r.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		if err != nil {
+			return
+		}
 	}
 }

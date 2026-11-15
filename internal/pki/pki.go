@@ -387,3 +387,50 @@ func ParsePublicPEM(b []byte) (*ecdsa.PublicKey, error) {
 	}
 	return pk, nil
 }
+
+// CAFromPEM rebuilds a signing CA from its certificate and key (used for per-tenant intercept CAs).
+func CAFromPEM(certPEM, keyPEM []byte, now Clock) (*CA, error) {
+	cblk, _ := pem.Decode(certPEM)
+	kblk, _ := pem.Decode(keyPEM)
+	if cblk == nil || kblk == nil {
+		return nil, errors.New("pki: unreadable CA PEM")
+	}
+	cert, err := x509.ParseCertificate(cblk.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	key, err := x509.ParseECPrivateKey(kblk.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if now == nil {
+		now = time.Now
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return &CA{Cert: cert, Key: key, now: now, pool: pool}, nil
+}
+
+// KeyPEM returns the CA private key (the intercept CA key must reach enforcement nodes).
+func (c *CA) KeyPEM() []byte {
+	der, _ := x509.MarshalECPrivateKey(c.Key)
+	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+}
+
+// SignServer issues a TLS server certificate for host (a DNS name or an IP).
+func (c *CA) SignServer(pub crypto.PublicKey, host string, ttl time.Duration) ([]byte, error) {
+	tpl := &x509.Certificate{
+		SerialNumber: serial(),
+		Subject:      pkix.Name{CommonName: host, Organization: []string{"smb-ztx inspection"}},
+		NotBefore:    c.now().Add(-Tolerance),
+		NotAfter:     c.now().Add(ttl),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		tpl.IPAddresses = []net.IP{ip}
+	} else {
+		tpl.DNSNames = []string{host}
+	}
+	return x509.CreateCertificate(rand.Reader, tpl, c.Cert, pub, c.Key)
+}

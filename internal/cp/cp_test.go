@@ -534,3 +534,43 @@ func TestRestrictEndpoints(t *testing.T) { // ZPA-072
 		}
 	}
 }
+
+func TestInspectionEndpoints(t *testing.T) { // ZIA-040
+	e := newEnv(t)
+	if c, _, _ := e.call("GET", "/v1/inspection/ca.pem", e.adminA, nil); c != 404 {
+		t.Fatalf("CA before inspection was ever enabled: %d", c)
+	}
+	for _, bad := range []string{"https://x.com", "x.com/path", "*.x.com", ".x.com", "a b.com", ""} {
+		if c, _, _ := e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": true, "exempt": []string{bad}}); c != 400 {
+			t.Errorf("exempt entry %q accepted: %d", bad, c)
+		}
+	}
+	if c, b, _ := e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": true, "exempt": []string{"Bank.Example.", "health.example"}}); c != 200 || strings.Contains(string(b), "PRIVATE KEY") {
+		t.Fatalf("%d %s", c, b)
+	}
+	cfg, _ := e.api.Store.Inspection("a")
+	if !cfg.Enabled || len(cfg.Exempt) != 2 || cfg.Exempt[0] != "bank.example" {
+		t.Fatalf("%+v", cfg)
+	}
+	code, b, h := e.call("GET", "/v1/inspection/ca.pem", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), "BEGIN CERTIFICATE") || strings.Contains(string(b), "PRIVATE KEY") || !strings.Contains(h.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("%d %s", code, b)
+	}
+	if _, b, _ := e.call("GET", "/v1/inspection", e.adminA, nil); strings.Contains(string(b), "PRIVATE KEY") || strings.Contains(string(b), "BEGIN") {
+		t.Fatalf("settings endpoint leaked key material: %s", b)
+	}
+	if c, _, _ := e.call("GET", "/v1/inspection/ca.pem", e.adminB, nil); c != 404 {
+		t.Fatalf("tenant b got tenant a's CA: %d", c)
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("PUT", "/v1/inspection", viewer, map[string]any{"enabled": false}); c != 403 {
+		t.Fatalf("viewer changed inspection: %d", c)
+	}
+	if c, _, _ := e.call("GET", "/v1/inspection/ca.pem", viewer, nil); c != 200 {
+		t.Fatalf("viewer cannot fetch the CA to install on a device: %d", c)
+	}
+	_, ab, _ := e.call("GET", "/v1/audit", e.adminA, nil)
+	if !strings.Contains(string(ab), "inspection.update") {
+		t.Fatal("not audited")
+	}
+}

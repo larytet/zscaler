@@ -3,13 +3,16 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"flag"
 	"log"
 	"log/slog"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -32,6 +35,8 @@ func main() {
 	proxyL := flag.String("proxy-listen", "127.0.0.1:9444", "web proxy listen address")
 	logPath := flag.String("decision-log", "", "decision log file (JSON lines); default <data>/decisions.jsonl")
 	catFile := flag.String("categories", "", "JSON file mapping category to domain list")
+	allowDial := flag.String("lab-allow-dial", "", "LAB ONLY: comma-separated host:port targets the web proxy may reach even though they are private (weakens the SSRF guard)")
+	upstreamCA := flag.String("lab-upstream-ca", "", "LAB ONLY: extra CA file trusted when verifying origin servers of inspected connections")
 	every := flag.Duration("sync-every", en.DefaultSyncEvery, "state poll interval")
 	flag.Parse()
 
@@ -109,6 +114,22 @@ func main() {
 	}
 	classifier = webproxy.NewClassifier(lists)
 	px := &webproxy.Proxy{CA: verifier, Rev: rev, State: state, Classifier: classifier, Log: logRec, Name: *name}
+	if *allowDial != "" {
+		allowed := map[string]bool{}
+		for _, t := range strings.Split(*allowDial, ",") {
+			allowed[strings.TrimSpace(t)] = true
+		}
+		px.Exempt = func(a netip.AddrPort) bool { return allowed[a.String()] }
+		log.Printf("WARNING: web proxy may reach private targets %s (lab mode)", *allowDial)
+	}
+	if *upstreamCA != "" {
+		pemBytes, err := os.ReadFile(*upstreamCA)
+		if err != nil {
+			log.Fatal(err)
+		}
+		px.UpstreamRoots = x509.NewCertPool()
+		px.UpstreamRoots.AppendCertsFromPEM(pemBytes)
+	}
 	srv := px.Server(id.Cert)
 	pl, err := net.Listen("tcp", *proxyL)
 	if err != nil {

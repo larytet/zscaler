@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 )
 
@@ -61,6 +62,7 @@ type Tenant struct {
 	Restricted  map[string]string          `json:"restricted,omitempty"` // subject -> reason
 	risk        map[string]int             `json:"-"`                    // computed, in memory only
 	Grants      []Grant                    `json:"grants,omitempty"`
+	Inspect     InspectCfg                 `json:"inspect,omitempty"`
 	Devices     map[string]Device          `json:"devices"`
 }
 
@@ -466,6 +468,7 @@ type TenantSnap struct {
 	Policies       map[policy.Kind]*policy.Policy
 	RevokedDevices []string
 	Grants         []Grant // only unexpired ones
+	Inspect        *InspectSnap
 }
 
 // Grant is an admin-approved, time-limited access (just-in-time).
@@ -474,6 +477,22 @@ type Grant struct {
 	App     string    `json:"app"`
 	Expires time.Time `json:"expires"`
 	By      string    `json:"by"`
+}
+
+// InspectCfg is a tenant's TLS inspection setting. The intercept CA is per tenant
+// (ARCH-021): it is created when inspection is first enabled and never shared.
+type InspectCfg struct {
+	Enabled bool     `json:"enabled"`
+	Exempt  []string `json:"exempt,omitempty"` // domains (and their subdomains) that are never decrypted
+	CACert  string   `json:"ca_cert,omitempty"`
+	CAKey   string   `json:"ca_key,omitempty"`
+}
+
+type InspectSnap struct {
+	Enabled bool
+	Exempt  []string
+	CACert  string
+	CAKey   string
 }
 
 type Snapshot struct {
@@ -499,6 +518,9 @@ func (s *Store) Snapshot() *Snapshot {
 			if d.Revoked {
 				ts.RevokedDevices = append(ts.RevokedDevices, d.ID)
 			}
+		}
+		if t.Inspect.Enabled && t.Inspect.CAKey != "" {
+			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey}
 		}
 		now := time.Now()
 		for _, g := range t.Grants {
@@ -620,4 +642,38 @@ func (s *Store) Granted(tenant, user, app string, now time.Time) bool {
 		}
 	}
 	return false
+}
+
+// SetInspection turns TLS inspection on or off and sets the exemption list. The
+// tenant's intercept CA is created the first time it is enabled.
+func (s *Store) SetInspection(tenant string, enabled bool, exempt []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if enabled && t.Inspect.CAKey == "" {
+		ca, err := pki.NewCA(tenant+" TLS inspection CA", nil)
+		if err != nil {
+			return err
+		}
+		t.Inspect.CACert, t.Inspect.CAKey = string(ca.PEM()), string(ca.KeyPEM())
+	}
+	t.Inspect.Enabled = enabled
+	t.Inspect.Exempt = exempt
+	return s.save()
+}
+
+// Inspection returns the setting without the private key.
+func (s *Store) Inspection(tenant string) (InspectCfg, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return InspectCfg{}, err
+	}
+	c := t.Inspect
+	c.CAKey = ""
+	return c, nil
 }

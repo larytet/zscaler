@@ -176,3 +176,31 @@ func TestLoadOrCreateCAPersists(t *testing.T) {
 		t.Fatalf("ca.key mode %v", st.Mode())
 	}
 }
+
+func TestServerLeafAndCAFromPEM(t *testing.T) {
+	ca, _ := NewCA("intercept", nil)
+	again, err := CAFromPEM(ca.PEM(), ca.KeyPEM(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := newKey(t)
+	for _, host := range []string{"example.com", "10.1.2.3"} {
+		der, err := again.SignServer(&k.PublicKey, host, time.Hour)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, _ := x509.ParseCertificate(der)
+		if _, err := c.Verify(x509.VerifyOptions{Roots: ca.Pool(), DNSName: host, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+			t.Errorf("%s: %v", host, err)
+		}
+	}
+	if _, err := CAFromPEM([]byte("x"), []byte("y"), nil); err == nil {
+		t.Fatal("junk accepted")
+	}
+	// a server leaf is not a client credential
+	der, _ := ca.SignServer(&k.PublicKey, "example.com", time.Hour)
+	c, _ := x509.ParseCertificate(der)
+	if _, err := c.Verify(x509.VerifyOptions{Roots: ca.Pool(), KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err == nil {
+		t.Fatal("a server leaf verified for client auth")
+	}
+}

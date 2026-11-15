@@ -317,3 +317,32 @@ func TestPollerRefusesUnsignedAndTamperedState(t *testing.T) { // SEC-007
 		t.Fatal("a poller without a pinned key must refuse state")
 	}
 }
+
+func TestInspectionReachesENAndBadCAStaysOff(t *testing.T) {
+	st := seed(t)
+	st.SetInspection("t1", true, []string{"bank.example"})
+	s := NewSyncState()
+	if errs := s.Apply(st.Snapshot()); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	on, exempt, ca := s.Inspection("t1")
+	if !on || ca == nil || len(exempt) != 1 {
+		t.Fatalf("%v %v %v", on, exempt, ca)
+	}
+	k, _ := enKey(t)
+	if _, err := ca.SignServer(&k.PublicKey, "example.com", time.Hour); err != nil {
+		t.Fatalf("the EN's copy of the CA cannot sign: %v", err)
+	}
+	if on, _, _ := s.Inspection("nobody"); on {
+		t.Fatal("unknown tenant inspected")
+	}
+	snap := st.Snapshot()
+	snap.Tenants["t1"].Inspect.CAKey = "not a key"
+	s2 := NewSyncState()
+	if errs := s2.Apply(snap); len(errs) == 0 {
+		t.Fatal("a broken intercept CA must be reported")
+	}
+	if on, _, _ := s2.Inspection("t1"); on {
+		t.Fatal("inspection must stay OFF when the CA is unusable (fail open to an opaque tunnel, never to a bad certificate)")
+	}
+}

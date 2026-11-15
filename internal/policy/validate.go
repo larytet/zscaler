@@ -55,7 +55,7 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: unknown action %q", w, r.Action)
 		}
 		m := r.Match
-		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories) == 0 && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
+		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories)+len(m.Paths)+len(m.Methods) == 0 && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
 			add("%s: allow rule matches everything", w)
 		}
 		for _, a := range m.Apps {
@@ -66,6 +66,21 @@ func Validate(p *Policy, known map[string]bool) []error {
 		for _, d := range m.Domains {
 			if strings.ContainsAny(d, "/:@ ") || d == "" {
 				add("%s: bad domain %q (no scheme, path or port)", w, d)
+			}
+		}
+		if len(m.Paths)+len(m.Methods) > 0 && p.Kind != Web {
+			add("%s: paths and methods are only valid in web policies", w)
+		}
+		for _, pth := range m.Paths {
+			if !strings.HasPrefix(pth, "/") || strings.ContainsAny(pth, " \r\n") {
+				add("%s: path %q must start with / and contain no spaces", w, pth)
+			}
+		}
+		for _, mt := range m.Methods {
+			switch strings.ToUpper(mt) {
+			case "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS":
+			default:
+				add("%s: unknown method %q", w, mt)
 			}
 		}
 		for name, v := range map[string]*int{"max_risk": m.MaxRisk, "min_risk": m.MinRisk} {

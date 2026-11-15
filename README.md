@@ -100,6 +100,8 @@ If the device fails the posture check (no disk encryption detected, or no firewa
 
 Fast reaction to a suspected compromise: `POST /v1/users/{id}/restrict` puts the user in a product-side `restricted` group. The safe-default policies deny it first, so live sessions end within seconds without waiting for your identity provider. `POST /v1/users/{id}/unrestrict` lifts it. If you wrote your own policy, add a deny rule for the group `restricted`.
 
+TLS inspection: `PUT /v1/inspection {"enabled": true, "exempt": ["bank.example"]}` decrypts HTTPS (except the exempt domains) so web rules can use `paths` and `methods`. Download the tenant's inspection certificate from `GET /v1/inspection/ca.pem` and install it on devices (system or browser trust store); until then inspected sites show certificate errors. Sites that refuse a replaced certificate go on the exempt list; the decision log records `inspection-handshake-failed` for them. It is off by default. No WebSockets or HTTP/2 through inspected tunnels.
+
 Just-in-time access: give a rule the action `require_approval` (it must name its apps). The first attempt is blocked and opens a request (emailed to the alert recipients when SMTP is set). Approve it with `POST /v1/approvals/{id}/approve {"minutes": 60}` or in the console; access starts within seconds and ends on its own, or earlier with `POST /v1/approvals/{id}/end`.
 
 Risk: `GET /v1/risk` lists users with a 0 to 100 score and the reasons. A rule can use it with `"max_risk": 49` or `"min_risk": 70`. The safe defaults do not, so nothing is blocked on risk until you add such a rule.
@@ -120,7 +122,7 @@ Secrets are read from files or environment variables and never from command-line
 
 ## Known limits that matter before real use
 
-- No TLS inspection, DLP or sandbox, so web policy sees host names only.
+- TLS inspection is basic (see above) and off by default; there is no DLP or sandbox. With inspection off, web policy sees host names only.
 - Posture is self-reported by the agent and can be forged by malware on the device.
 - Certificates for connectors and enforcement nodes last 7 days and have no automatic renewal.
 - Connector and enforcement-node state sync is a poll, not a push.

@@ -87,6 +87,22 @@ const tabs = {
       table(['Requested', 'User', 'App', 'Attempts', 'State', ''], all.map(row)));
     if (!all.length) view().appendChild(el('p', 'No requests.', 'muted'));
   },
+  Inspection: async () => {
+    const cfg = await api('GET', '/v1/inspection');
+    const ta = el('textarea'); ta.value = (cfg.exempt || []).join('\n'); ta.style.minHeight = '90px';
+    const save = (enabled) => async () => { const exempt = ta.value.split('\n').map((x) => x.trim()).filter(Boolean);
+      await api('PUT', '/v1/inspection', { enabled: enabled, exempt: exempt }); await tabs.Inspection(); };
+    const dl = btn('Download the inspection certificate', async () => {
+      const r = await fetch('/v1/inspection/ca.pem', { headers: { 'Authorization': 'Bearer ' + token } });
+      if (!r.ok) throw new Error('Enable inspection first.');
+      const blob = await r.blob(); const a = el('a'); a.setAttribute('href', URL.createObjectURL(blob)); a.setAttribute('download', 'inspection-ca.pem'); a.click(); });
+    const row = el('div', undefined, 'row');
+    row.append(cfg.enabled ? btn('Turn inspection off', save(false), 'danger') : btn('Turn inspection on', save(true), 'primary'), btn('Save exemptions', save(cfg.enabled)), dl);
+    show(el('h2', 'Web traffic inspection'),
+      el('p', cfg.enabled ? 'Inspection is ON: HTTPS to non-exempt sites is decrypted so rules can use URL paths and methods.' : 'Inspection is OFF: HTTPS passes through untouched and rules see host names only.', cfg.enabled ? 'warn' : 'muted'),
+      el('p', 'Devices must trust this tenant\'s inspection certificate (install it in the system or browser trust store, for example with your device management tool) or inspected sites will show certificate errors. Sites that refuse a replaced certificate (banking, health, some apps) belong on the exempt list. The decision log records inspection-handshake-failed for them.', 'muted'),
+      el('h2', 'Never decrypt these domains (one per line, subdomains included)'), ta, row);
+  },
   Apps: async () => {
     const segs = await api('GET', '/v1/segments');
     show(el('h2', 'Private applications'), table(['Name', 'Connector group', 'Class', 'Targets'], segs.map((s) => [s.id, s.group, s.class || '', (s.targets || []).map((t) => t.host + ':' + (t.ports || []).join('/')).join(', ')])),

@@ -98,6 +98,8 @@ type Record struct {
 	BytesUp  int64     `json:"bytes_up,omitempty"`
 	BytesDwn int64     `json:"bytes_down,omitempty"`
 	Event    string    `json:"event,omitempty"` // "open" or "close"
+	// Inspected is set when the web request was decrypted and checked per URL.
+	Inspected bool `json:"inspected,omitempty"`
 	// Inputs to the decision, so that a draft policy can be replayed against history.
 	Groups  []string     `json:"groups,omitempty"`
 	Posture *PostureSnap `json:"posture,omitempty"`
