@@ -830,3 +830,56 @@ func TestRecordsCarryDecisionInputs(t *testing.T) { // feeds the simulator
 		t.Fatalf("posture missing: %+v", rec)
 	}
 }
+
+type grantState struct {
+	*fakeState
+	granted atomic.Bool
+}
+
+func (g *grantState) Granted(tenant, user, app string, now time.Time) bool { return g.granted.Load() }
+
+func TestRequireApprovalFlow(t *testing.T) { // ZPA-027
+	r := newRig(t)
+	gs := &grantState{fakeState: r.st}
+	r.en.mu.Lock()
+	r.en.State = gs
+	r.en.mu.Unlock()
+	pol := &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny, Version: 9, Rules: []policy.Rule{{
+		ID: "jit", Priority: 1, Action: policy.Approve, Match: policy.Match{Groups: []string{"finance"}, Apps: []string{"seg-db"}}}}}
+	if err := pol.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	r.st.mu.Lock()
+	r.st.pol = pol
+	r.st.mu.Unlock()
+	r.startConnector("c1", r.allowApp)
+	conn, _ := r.agent("alice", "d1", true)
+
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil {
+		t.Fatal("access without approval")
+	}
+	rec := r.logs.find(func(x Record) bool { return x.Reason == "approval-required" && x.Action == "deny" && x.Rule == "jit" })
+	if rec == nil {
+		t.Fatal("the denial must say approval is required, so the control plane can open a request")
+	}
+	if r.app.conns.Load() != 0 {
+		t.Fatal("app contacted before approval")
+	}
+	gs.granted.Store(true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("approved access refused: %v", err)
+	}
+	roundTrip(t, s, []byte("x"))
+	if r.logs.find(func(x Record) bool { return x.Action == "allow" && x.Reason == "approved" && x.Rule == "jit" }) == nil {
+		t.Fatal("approved access not logged as such")
+	}
+	// the grant ends: the live session is closed at the next re-evaluation
+	gs.granted.Store(false)
+	if n := r.en.ReevalNow(); n != 1 {
+		t.Fatalf("expected the session to be closed when the grant ended, closed %d", n)
+	}
+	if _, err := s.Read(make([]byte, 1)); err == nil {
+		t.Fatal("session survived the end of the grant")
+	}
+}

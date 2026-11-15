@@ -390,6 +390,11 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		if e.API.Decisions != nil {
 			e.API.Decisions.Add(rec)
 		}
+		if e.API.Approvals != nil && rec.Kind == "private" && rec.Action == "deny" && rec.Reason == "approval-required" && rec.Event == "open" {
+			if req, created := e.API.Approvals.Add(rec.Tenant, rec.User, rec.App, rec.Rule, time.Now()); created && e.API.OnApprovalRequest != nil {
+				go e.API.OnApprovalRequest(req)
+			}
+		}
 	}
 	writeJSON(w, 200, map[string]int{"accepted": len(recs)})
 }

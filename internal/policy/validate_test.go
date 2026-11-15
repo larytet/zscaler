@@ -177,3 +177,28 @@ func TestHostMatchesAgainstReference(t *testing.T) {
 		}
 	}
 }
+
+func TestRequireApprovalValidation(t *testing.T) { // ZPA-027
+	ok := Rule{ID: "jit", Priority: 1, Action: Approve, Match: Match{Groups: []string{"eng"}, Apps: []string{"prod-db"}}}
+	if errs := Validate(&Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{ok}}, nil); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	noApps := ok
+	noApps.Match.Apps = nil
+	if errs := Validate(&Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{noApps}}, nil); len(errs) == 0 {
+		t.Fatal("require_approval without apps would gate everything: must be refused")
+	}
+	if errs := Validate(&Policy{Kind: Web, DefaultAction: Allow, Rules: []Rule{ok}}, nil); len(errs) == 0 {
+		t.Fatal("require_approval accepted in a web policy")
+	}
+	p, err := Parse([]byte(`{"kind":"private","default_action":"deny","rules":[{"id":"jit","priority":1,"action":"require_approval","match":{"groups":["eng"],"apps":["prod-db"]}}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := p.Evaluate(req("eng"))
+	r := req("eng")
+	r.App = "prod-db"
+	if d = p.Evaluate(r); d.Action != Approve || d.RuleID != "jit" {
+		t.Fatalf("%+v", d)
+	}
+}

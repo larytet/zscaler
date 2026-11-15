@@ -13,6 +13,7 @@ import (
 
 	"github.com/larytet/zscaler/internal/advice"
 	"github.com/larytet/zscaler/internal/alerts"
+	"github.com/larytet/zscaler/internal/approvals"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
@@ -32,10 +33,13 @@ type API struct {
 	Tokens         *pki.Tokens
 	BootstrapToken string
 	// Hooks let enforcement nodes react immediately to revocations.
-	Alerts         *alerts.Engine
-	Decisions      *decisions.Store
-	OnRevokeDevice func(tenant string, d store.Device)
-	OnDisableUser  func(tenant, subject string)
+	Alerts    *alerts.Engine
+	Decisions *decisions.Store
+	Approvals *approvals.Store
+	// OnApprovalRequest is called when a new access request is created.
+	OnApprovalRequest func(approvals.Request)
+	OnRevokeDevice    func(tenant string, d store.Device)
+	OnDisableUser     func(tenant, subject string)
 }
 
 type apiErr struct {
@@ -84,6 +88,10 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
+	m.HandleFunc("GET /v1/approvals", a.wrap(read, a.listApprovals))
+	m.HandleFunc("POST /v1/approvals/{id}/approve", a.wrap(write, a.approve))
+	m.HandleFunc("POST /v1/approvals/{id}/deny", a.wrap(write, a.denyRequest))
+	m.HandleFunc("POST /v1/approvals/{id}/end", a.wrap(write, a.endGrant))
 	m.HandleFunc("GET /v1/suggestions", a.wrap(read, a.getSuggestions))
 	m.HandleFunc("GET /v1/investigate", a.wrap(read, a.investigate))
 	m.HandleFunc("GET /v1/evidence", a.wrap(read, a.getEvidence))
@@ -776,4 +784,100 @@ func (a *API) getRisk(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, e
 		out = []risk.Score{}
 	}
 	return out, nil
+}
+
+func (a *API) listApprovals(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	if a.Approvals == nil {
+		return []approvals.Request{}, nil
+	}
+	return a.Approvals.List(c.tenant, approvals.State(r.URL.Query().Get("state"))), nil
+}
+
+func (a *API) approvalID(r *http.Request) (int, error) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || a.Approvals == nil {
+		return 0, fail(404, "not_found", "not found")
+	}
+	return id, nil
+}
+
+// approve grants access for 1 to 480 minutes (default 60).
+func (a *API) approve(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id, err := a.approvalID(r)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Minutes int `json:"minutes"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+	}
+	if in.Minutes == 0 {
+		in.Minutes = 60
+	}
+	if in.Minutes < 1 || in.Minutes > 480 {
+		return nil, fail(400, "invalid", "minutes must be between 1 and 480")
+	}
+	now := time.Now()
+	until := now.Add(time.Duration(in.Minutes) * time.Minute)
+	req, err := a.Approvals.Decide(c.tenant, id, approvals.Approved, c.actor, until, now)
+	if errors.Is(err, approvals.ErrNotFound) {
+		return nil, fail(404, "not_found", "not found")
+	}
+	if errors.Is(err, approvals.ErrDecided) {
+		return nil, fail(409, "already_decided", "this request was already decided")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := a.Store.PutGrant(c.tenant, store.Grant{User: req.User, App: req.App, Expires: until, By: c.actor}); err != nil {
+		return nil, err
+	}
+	a.log(c, "access.approve", req.User+"@"+req.App, nil, map[string]any{"minutes": in.Minutes})
+	return req, nil
+}
+
+func (a *API) denyRequest(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id, err := a.approvalID(r)
+	if err != nil {
+		return nil, err
+	}
+	req, err := a.Approvals.Decide(c.tenant, id, approvals.Denied, c.actor, time.Time{}, time.Now())
+	if errors.Is(err, approvals.ErrNotFound) {
+		return nil, fail(404, "not_found", "not found")
+	}
+	if errors.Is(err, approvals.ErrDecided) {
+		return nil, fail(409, "already_decided", "this request was already decided")
+	}
+	if err != nil {
+		return nil, err
+	}
+	a.log(c, "access.deny", req.User+"@"+req.App, nil, nil)
+	return req, nil
+}
+
+// endGrant ends an approved grant early. Live sessions end at the next state sync.
+func (a *API) endGrant(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id, err := a.approvalID(r)
+	if err != nil {
+		return nil, err
+	}
+	var found *approvals.Request
+	for _, q := range a.Approvals.List(c.tenant, approvals.Approved) {
+		if q.ID == id {
+			q := q
+			found = &q
+		}
+	}
+	if found == nil {
+		return nil, fail(404, "not_found", "no approved request with that id")
+	}
+	if err := a.Store.RevokeGrant(c.tenant, found.User, found.App); err != nil {
+		return nil, err
+	}
+	a.log(c, "access.end", found.User+"@"+found.App, nil, nil)
+	return map[string]any{"ended": id}, nil
 }

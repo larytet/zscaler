@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/policy"
@@ -187,5 +188,39 @@ func TestRestrictedGroupSurvivesIdPRefresh(t *testing.T) { // ZPA-072
 	s.SetRestricted("a", "alice", false, "")
 	if u, _ := s.User("a", "alice"); has(u) {
 		t.Fatal("unrestrict did not work")
+	}
+}
+
+func TestGrantsExpireAndReachSnapshot(t *testing.T) { // ZPA-027
+	s, _, _ := twoTenants(t)
+	now := time.Now()
+	s.PutGrant("a", Grant{User: "alice", App: "erp", Expires: now.Add(time.Hour), By: "owner"})
+	s.PutGrant("a", Grant{User: "bob", App: "erp", Expires: now.Add(-time.Minute), By: "owner"}) // already expired
+	if !s.Granted("a", "alice", "erp", now) {
+		t.Fatal("grant not found")
+	}
+	if s.Granted("a", "alice", "wiki", now) || s.Granted("a", "bob", "erp", now) {
+		t.Fatal("grant matched the wrong app or an expired one")
+	}
+	if s.Granted("b", "alice", "erp", now) {
+		t.Fatal("grant leaked to another tenant")
+	}
+	if s.Granted("a", "alice", "erp", now.Add(2*time.Hour)) {
+		t.Fatal("grant outlived its expiry")
+	}
+	snap := s.Snapshot().Tenants["a"]
+	if len(snap.Grants) != 1 || snap.Grants[0].User != "alice" {
+		t.Fatalf("only unexpired grants belong in the snapshot: %+v", snap.Grants)
+	}
+	if len(s.Snapshot().Tenants["b"].Grants) != 0 {
+		t.Fatal("grant in another tenant's snapshot")
+	}
+	s.PutGrant("a", Grant{User: "alice", App: "erp", Expires: now.Add(10 * time.Minute)}) // replaces
+	if len(s.Snapshot().Tenants["a"].Grants) != 1 {
+		t.Fatal("a second grant for the same user and app must replace the first")
+	}
+	s.RevokeGrant("a", "alice", "erp")
+	if s.Granted("a", "alice", "erp", now) {
+		t.Fatal("revoke did not end the grant")
 	}
 }

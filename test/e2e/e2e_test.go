@@ -947,3 +947,71 @@ func TestScn007RestrictUser(t *testing.T) {
 	s.must("POST", "/v1/users/u1/unrestrict", nil, s.token)
 	eventually(t, "access to return after the restriction is lifted", 15*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
 }
+
+// SCN-008 (ZPA-027): just-in-time access. Denied, an admin approves, access works, the admin ends it.
+func TestScn008JustInTimeAccess(t *testing.T) {
+	s := newStack(t)
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/private", map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "jit-erp", "priority": 10, "action": "require_approval",
+		"match": map[string]any{"groups": []string{"all-staff"}, "apps": []string{"erp"}}}}}, s.token)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	// the first attempt is refused and opens a request
+	var reqID int
+	eventually(t, "an access request to appear", 25*time.Second, func() bool {
+		s.reachable(a.socks(), "erp.ztx")
+		code, b := s.api("GET", "/v1/approvals?state=pending", nil, s.token)
+		var list []struct {
+			ID   int
+			User string
+			App  string
+		}
+		json.Unmarshal(b, &list)
+		if code == 200 && len(list) == 1 && list[0].App == "erp" && list[0].User == "u1" {
+			reqID = list[0].ID
+			return true
+		}
+		return false
+	})
+	if s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("access before approval")
+	}
+	s.must("POST", fmt.Sprintf("/v1/approvals/%d/approve", reqID), map[string]int{"minutes": 5}, s.token)
+	start := time.Now()
+	eventually(t, "access after approval", 15*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	t.Logf("SCN-008 access worked %v after approval", time.Since(start).Round(100*time.Millisecond))
+	c, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	echoOnce(t, c, "approved")
+	// the admin ends the grant early: the live session ends and new ones are refused
+	s.must("POST", fmt.Sprintf("/v1/approvals/%d/end", reqID), nil, s.token)
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	endStart := time.Now()
+	for {
+		if _, err := c.Write([]byte("x")); err != nil {
+			break
+		}
+		if _, err := c.Read(make([]byte, 1)); err != nil {
+			break
+		}
+	}
+	if d := time.Since(endStart); d > 8*time.Second {
+		t.Fatalf("session survived %v after the grant was ended", d)
+	}
+	if s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("access after the grant ended")
+	}
+	approved := false
+	for _, d := range s.decisions() {
+		if d["rule"] == "jit-erp" && d["reason"] == "approved" && d["action"] == "allow" {
+			approved = true
+		}
+	}
+	if !approved {
+		t.Fatal("the decision log does not show the approved access")
+	}
+}

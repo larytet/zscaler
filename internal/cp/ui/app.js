@@ -74,6 +74,19 @@ const tabs = {
       x.revoked ? '' : btn('Revoke', async () => { if (confirm('Revoke device ' + x.id + '?')) { await api('POST', '/v1/devices/' + encodeURIComponent(x.id) + '/revoke'); await reload(); } }, 'danger')]));
     show(el('h2', 'People'), u, el('h2', 'Devices'), d);
   },
+  Approvals: async () => {
+    const all = await api('GET', '/v1/approvals');
+    const reload = () => tabs.Approvals().catch(failure);
+    const row = (r) => [when(r.requested), r.user, r.app, r.attempts, r.state === 'approved' ? 'approved until ' + when(r.until) : r.state,
+      r.state === 'pending' ? (() => { const d = el('span');
+        d.appendChild(btn('Approve 1 hour', async () => { await api('POST', '/v1/approvals/' + r.id + '/approve', { minutes: 60 }); await reload(); }, 'primary'));
+        d.appendChild(btn('Approve 8 hours', async () => { await api('POST', '/v1/approvals/' + r.id + '/approve', { minutes: 480 }); await reload(); }));
+        d.appendChild(btn('Deny', async () => { await api('POST', '/v1/approvals/' + r.id + '/deny'); await reload(); }, 'danger')); return d; })()
+        : (r.state === 'approved' ? btn('End now', async () => { await api('POST', '/v1/approvals/' + r.id + '/end'); await reload(); }, 'danger') : '')];
+    show(el('h2', 'Access requests'), el('p', 'People appear here when a rule that requires approval blocks them. Approved access ends on its own.', 'muted'),
+      table(['Requested', 'User', 'App', 'Attempts', 'State', ''], all.map(row)));
+    if (!all.length) view().appendChild(el('p', 'No requests.', 'muted'));
+  },
   Apps: async () => {
     const segs = await api('GET', '/v1/segments');
     show(el('h2', 'Private applications'), table(['Name', 'Connector group', 'Class', 'Targets'], segs.map((s) => [s.id, s.group, s.class || '', (s.targets || []).map((t) => t.host + ':' + (t.ports || []).join('/')).join(', ')])),

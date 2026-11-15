@@ -54,6 +54,22 @@ type Staler interface {
 	Stale() bool
 }
 
+// Granter is an optional State extension: just-in-time grants approved by an admin.
+type Granter interface {
+	Granted(tenant, user, app string, now time.Time) bool
+}
+
+// resolve turns a require_approval decision into allow (a grant exists) or deny.
+func resolve(st State, tenant, user, app string, d policy.Decision, now time.Time) policy.Decision {
+	if d.Action != policy.Approve {
+		return d
+	}
+	if g, ok := st.(Granter); ok && g.Granted(tenant, user, app, now) {
+		return policy.Decision{Action: policy.Allow, RuleID: d.RuleID, Reason: "approved"}
+	}
+	return policy.Decision{Action: policy.Deny, RuleID: d.RuleID, Reason: "approval-required"}
+}
+
 // Revoked reports whether a presented certificate must be refused.
 func Revoked(st State, rev *pki.Revocations, id pki.Identity) bool {
 	if rev != nil && rev.IsRevoked(id.Serial) {
@@ -136,6 +152,7 @@ type connector struct {
 }
 
 type session struct {
+	app                  string
 	tenant, device, user string
 	a, b                 io.Closer
 	req                  func() policy.Request
@@ -416,7 +433,7 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		return policy.Request{Kind: policy.Private, User: u, App: rq.App, Now: time.Now(),
 			Device: policy.Device{ID: id.Device, Revoked: Revoked(e.State, e.Rev, id), Posture: ds.get()}}
 	}
-	d := pol.Evaluate(mk())
+	d := resolve(e.State, id.Tenant, id.Subject, rq.App, pol.Evaluate(mk()), time.Now())
 	rec.Version, rec.Rule, rec.Reason = pol.Version, d.RuleID, d.Reason
 	if d.Action != policy.Allow {
 		deny("policy", d.Reason)
@@ -443,7 +460,7 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 	rec.Action = "allow"
 	e.logRec(rec)
 	st.Accept()
-	s := &session{tenant: id.Tenant, device: id.Device, user: id.Subject, a: st, b: up,
+	s := &session{app: rq.App, tenant: id.Tenant, device: id.Device, user: id.Subject, a: st, b: up,
 		req: mk, pol: func() *policy.Policy { return e.State.Policy(id.Tenant, policy.Private) }}
 	e.mu.Lock()
 	e.sessions[s] = struct{}{}
@@ -554,7 +571,7 @@ func (e *EN) ReevalNow() int {
 	n := 0
 	for _, s := range all {
 		p := s.pol()
-		if p == nil || p.Evaluate(s.req()).Action != policy.Allow {
+		if p == nil || resolve(e.State, s.tenant, s.user, s.app, p.Evaluate(s.req()), time.Now()).Action != policy.Allow {
 			s.a.Close()
 			s.b.Close()
 			n++

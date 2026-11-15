@@ -9,10 +9,13 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"github.com/larytet/zscaler/internal/approvals"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -531,5 +534,82 @@ func TestRiskScoresFlowToStateAndPolicy(t *testing.T) { // ARCH-007
 	}
 	if _, b, _ = e.call("GET", "/v1/risk", e.adminB, nil); strings.Contains(string(b), "u1") {
 		t.Fatalf("tenant isolation: %s", b)
+	}
+}
+
+func TestApprovalEndpoints(t *testing.T) { // ZPA-027
+	e := newEnrolEnv(t)
+	e.api.Approvals = approvals.New()
+	var notified atomic.Int64
+	e.api.OnApprovalRequest = func(approvals.Request) { notified.Add(1) }
+	rec := broker.Record{Tenant: "a", Kind: "private", Event: "open", Action: "deny", Reason: "approval-required", Rule: "jit", User: "alice", App: "erp", TS: time.Now()}
+	other := rec
+	other.Reason = "default" // an ordinary denial must not open a request
+	if c, _ := e.post("/ingest/records", []broker.Record{rec, rec, rec, other}, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	time.Sleep(100 * time.Millisecond)
+	code, b, _ := e.call("GET", "/v1/approvals?state=pending", e.adminA, nil)
+	var list []approvals.Request
+	json.Unmarshal(b, &list)
+	if code != 200 || len(list) != 1 || list[0].Attempts != 3 || list[0].User != "alice" || notified.Load() != 1 {
+		t.Fatalf("%d %s notified=%d", code, b, notified.Load())
+	}
+	id := fmt.Sprint(list[0].ID)
+	if _, b, _ := e.call("GET", "/v1/approvals", e.adminB, nil); strings.Contains(string(b), "alice") {
+		t.Fatalf("tenant b sees tenant a's requests: %s", b)
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/"+id+"/approve", e.adminB, nil); c != 404 {
+		t.Fatalf("tenant b approved tenant a's request: %d", c)
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("POST", "/v1/approvals/"+id+"/approve", viewer, nil); c != 403 {
+		t.Fatalf("viewer approved: %d", c)
+	}
+	for _, bad := range []int{-5, 481, 100000} { // 0 means "use the default", so it is not an error
+		if c, _, _ := e.call("POST", "/v1/approvals/"+id+"/approve", e.adminA, map[string]int{"minutes": bad}); c != 400 {
+			t.Errorf("minutes=%d accepted: %d", bad, c)
+		}
+	}
+	if e.api.Store.Granted("a", "alice", "erp", time.Now()) {
+		t.Fatal("a rejected approval created a grant")
+	}
+	if c, b, _ := e.call("POST", "/v1/approvals/"+id+"/approve", e.adminA, map[string]int{"minutes": 30}); c != 200 {
+		t.Fatalf("%d %s", c, b)
+	}
+	if !e.api.Store.Granted("a", "alice", "erp", time.Now()) || e.api.Store.Granted("a", "alice", "erp", time.Now().Add(31*time.Minute)) {
+		t.Fatal("grant missing or too long")
+	}
+	if e.api.Store.Granted("b", "alice", "erp", time.Now()) {
+		t.Fatal("grant leaked to another tenant")
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/"+id+"/approve", e.adminA, nil); c != 409 {
+		t.Fatalf("approved twice: %d", c)
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/"+id+"/deny", e.adminA, nil); c != 409 {
+		t.Fatalf("denied after approving: %d", c)
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/"+id+"/end", e.adminA, nil); c != 200 || e.api.Store.Granted("a", "alice", "erp", time.Now()) {
+		t.Fatal("end did not remove the grant")
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/999/approve", e.adminA, nil); c != 404 {
+		t.Fatalf("unknown id: %d", c)
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/abc/approve", e.adminA, nil); c != 404 {
+		t.Fatalf("bad id: %d", c)
+	}
+	_, b, _ = e.call("GET", "/v1/audit", e.adminA, nil)
+	if !strings.Contains(string(b), "access.approve") || !strings.Contains(string(b), "access.end") {
+		t.Fatalf("not audited: %s", b)
+	}
+	// a second request can be denied
+	e.post("/ingest/records", []broker.Record{rec}, enCert(t, e))
+	_, b, _ = e.call("GET", "/v1/approvals?state=pending", e.adminA, nil)
+	json.Unmarshal(b, &list)
+	if len(list) != 1 {
+		t.Fatalf("a new attempt after a decision should open a new request: %s", b)
+	}
+	if c, _, _ := e.call("POST", "/v1/approvals/"+fmt.Sprint(list[0].ID)+"/deny", e.adminA, nil); c != 200 || e.api.Store.Granted("a", "alice", "erp", time.Now()) {
+		t.Fatal("deny must not create a grant")
 	}
 }

@@ -28,6 +28,9 @@ const (
 	Allow Action = "allow"
 	Deny  Action = "deny"
 	Warn  Action = "warn"
+	// Approve means: allow only while an admin-approved, time-limited grant exists
+	// for this user and app (just-in-time access). Private policies only.
+	Approve Action = "require_approval"
 )
 
 // Posture is a device posture report that has already been signature-verified.

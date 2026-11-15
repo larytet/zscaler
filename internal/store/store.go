@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/policy"
@@ -59,6 +60,7 @@ type Tenant struct {
 	Users       map[string]policy.User     `json:"users"`
 	Restricted  map[string]string          `json:"restricted,omitempty"` // subject -> reason
 	risk        map[string]int             `json:"-"`                    // computed, in memory only
+	Grants      []Grant                    `json:"grants,omitempty"`
 	Devices     map[string]Device          `json:"devices"`
 }
 
@@ -463,6 +465,15 @@ type TenantSnap struct {
 	Users          []policy.User
 	Policies       map[policy.Kind]*policy.Policy
 	RevokedDevices []string
+	Grants         []Grant // only unexpired ones
+}
+
+// Grant is an admin-approved, time-limited access (just-in-time).
+type Grant struct {
+	User    string    `json:"user"`
+	App     string    `json:"app"`
+	Expires time.Time `json:"expires"`
+	By      string    `json:"by"`
 }
 
 type Snapshot struct {
@@ -487,6 +498,12 @@ func (s *Store) Snapshot() *Snapshot {
 		for _, d := range t.Devices {
 			if d.Revoked {
 				ts.RevokedDevices = append(ts.RevokedDevices, d.ID)
+			}
+		}
+		now := time.Now()
+		for _, g := range t.Grants {
+			if g.Expires.After(now) {
+				ts.Grants = append(ts.Grants, g)
 			}
 		}
 		out.Tenants[id] = ts
@@ -549,4 +566,58 @@ func (s *Store) SetRisk(tenant string, scores map[string]int) {
 	if t, err := s.tenant(tenant); err == nil {
 		t.risk = scores
 	}
+}
+
+// PutGrant records a just-in-time grant, replacing an earlier one for the same user and app.
+// Expired grants are dropped as a side effect.
+func (s *Store) PutGrant(tenant string, g Grant) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	kept := t.Grants[:0]
+	for _, x := range t.Grants {
+		if x.Expires.After(now) && !(x.User == g.User && x.App == g.App) {
+			kept = append(kept, x)
+		}
+	}
+	t.Grants = append(kept, g)
+	return s.save()
+}
+
+// RevokeGrant ends a grant early.
+func (s *Store) RevokeGrant(tenant, user, app string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	kept := t.Grants[:0]
+	for _, x := range t.Grants {
+		if !(x.User == user && x.App == app) {
+			kept = append(kept, x)
+		}
+	}
+	t.Grants = kept
+	return s.save()
+}
+
+// Granted reports whether an unexpired grant exists (also makes Store a broker.Granter).
+func (s *Store) Granted(tenant, user, app string, now time.Time) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return false
+	}
+	for _, g := range t.Grants {
+		if g.User == user && g.App == app && g.Expires.After(now) {
+			return true
+		}
+	}
+	return false
 }

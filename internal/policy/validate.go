@@ -40,6 +40,13 @@ func Validate(p *Policy, known map[string]bool) []error {
 		prios[r.Priority] = true
 		switch r.Action {
 		case Allow, Deny:
+		case Approve:
+			if p.Kind != Private {
+				add("%s: require_approval is only valid for private policies", w)
+			}
+			if len(r.Match.Apps) == 0 {
+				add("%s: require_approval must name the apps it covers", w)
+			}
 		case Warn:
 			if p.Kind != Web {
 				add("%s: warn is only valid for web policies", w)

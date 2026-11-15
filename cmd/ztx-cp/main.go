@@ -12,10 +12,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/larytet/zscaler/internal/alerts"
+	"github.com/larytet/zscaler/internal/approvals"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/cli"
 	"github.com/larytet/zscaler/internal/cp"
@@ -85,11 +87,17 @@ func main() {
 			eng.Tick()
 		}
 	}()
-	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New()}
+	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New(), Approvals: approvals.New()}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent, PolicyKey: signer}
 
 	if notifier != nil {
 		go weeklyDigest(api, st, notifier)
+		api.OnApprovalRequest = func(r approvals.Request) {
+			body := r.User + " asked for access to " + r.App + ".\r\n\r\nApprove or deny it in the console, or with POST /v1/approvals/" + strconv.Itoa(r.ID) + "/approve.\r\n"
+			if err := notifier.SendText(r.Tenant, "[Access request] "+r.User+" wants "+r.App, body); err != nil {
+				log.Printf("approval email: %v", err)
+			}
+		}
 	}
 	go func() {
 		for range time.Tick(30 * time.Second) {

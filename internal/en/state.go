@@ -29,6 +29,7 @@ type tenantView struct {
 	users   map[string]policy.User
 	pols    map[policy.Kind]*policy.Policy
 	revoked map[string]bool
+	grants  map[string]time.Time // user|app -> expiry
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -66,7 +67,7 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 	nv := &view{tenants: map[string]*tenantView{}}
 	for id, t := range snap.Tenants {
 		tv := &tenantView{segs: map[string]broker.Segment{}, users: map[string]policy.User{},
-			pols: map[policy.Kind]*policy.Policy{}, revoked: map[string]bool{}}
+			pols: map[policy.Kind]*policy.Policy{}, revoked: map[string]bool{}, grants: map[string]time.Time{}}
 		for _, g := range t.Segments {
 			tv.segs[g.ID] = g
 		}
@@ -75,6 +76,9 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		}
 		for _, d := range t.RevokedDevices {
 			tv.revoked[d] = true
+		}
+		for _, g := range t.Grants {
+			tv.grants[g.User+"|"+g.App] = g.Expires
 		}
 		for k, p := range t.Policies {
 			if ot := old.tenants[id]; ot != nil && ot.pols[k] != nil && p.Version < ot.pols[k].Version {
@@ -139,6 +143,16 @@ func (s *SyncState) User(tenant, sub string) (policy.User, bool) {
 func (s *SyncState) DeviceRevoked(tenant, device string) bool {
 	if t := s.t(tenant); t != nil {
 		return t.revoked[device]
+	}
+	return false
+}
+
+// Granted implements broker.Granter from the signed snapshot.
+func (s *SyncState) Granted(tenant, user, app string, now time.Time) bool {
+	if t := s.t(tenant); t != nil {
+		if exp, ok := t.grants[user+"|"+app]; ok {
+			return exp.After(now)
+		}
 	}
 	return false
 }
