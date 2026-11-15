@@ -8,6 +8,7 @@ A small-business zero-trust platform, aimed at functional parity with the Zscale
 
 | File | What it is |
 |---|---|
+| [USABILITY-RUNBOOK.md](USABILITY-RUNBOOK.md) | Script for the checks that need people (first-user time, alert clarity, workspace browser by hand) |
 | [STATUS.md](STATUS.md) | Current progress, known gaps, open decisions. Updated after every subtask |
 | [REQUIREMENTS.md](REQUIREMENTS.md) | The requirements (v0.5). Tagged `[V]` verified against a public source or `[I]` inferred |
 | [DESIGN.md](DESIGN.md) | Software design for RB1 |
