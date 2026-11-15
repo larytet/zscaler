@@ -13,7 +13,7 @@ Running log for RB1 (see TEST-PLAN.md T3.7 item 4). Machine: Linux 6.8, 12 threa
 | I1 | Policy engine, validation, unit and fuzz tests | done |
 | I2 | PKI, posture, mux, audit packages | done |
 | I3 | Enforcement node: broker and connector | done |
-| I4 | Web proxy and classification | pending |
+| I4 | Web proxy and classification | done |
 | I5 | Control plane (store, API, safe defaults), agent, IdP | pending |
 | I6 | End-to-end scenarios, alerts, README run instructions | pending |
 
