@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/larytet/zscaler/internal/clockhint"
 	"github.com/larytet/zscaler/internal/pki"
 )
 
@@ -120,7 +121,10 @@ func LoadOrEnrol(dir, cpURL string, cpCA []byte, endpoint, token, name string) (
 	cl := &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}}}
 	resp, err := cl.Post(strings.TrimSuffix(cpURL, "/")+endpoint, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, clockhint.Wrap(err, time.Now())
+	}
+	if sk, ok := clockhint.Skew(resp.Header, time.Now()); ok && clockhint.Wrong(sk) {
+		fmt.Fprintln(os.Stderr, "WARNING: "+strings.Replace(clockhint.Plain(sk), "This computer's", "This machine's", 1))
 	}
 	defer resp.Body.Close()
 	rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))

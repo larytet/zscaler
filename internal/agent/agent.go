@@ -13,6 +13,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/larytet/zscaler/internal/clockhint"
 	"github.com/larytet/zscaler/internal/pathprobe"
 	"github.com/larytet/zscaler/internal/pki"
 	"io"
@@ -67,6 +68,7 @@ type Agent struct {
 	key       *ecdsa.PrivateKey
 	cert      tls.Certificate
 	leaf      *x509.Certificate
+	clock     clockhint.Tracker // the clock difference seen in the control plane's answers
 	caPool    *x509.CertPool
 	conn      *broker.Conn
 	lastPos   *posture.Report
@@ -166,7 +168,7 @@ func (a *Agent) enrolClient(withCert bool) *http.Client {
 		cfg.Certificates = []tls.Certificate{a.cert}
 		a.mu.Unlock()
 	}
-	return &http.Client{Timeout: 20 * time.Second, Transport: &http.Transport{TLSClientConfig: cfg}}
+	return &http.Client{Timeout: 20 * time.Second, Transport: a.clock.Transport(&http.Transport{TLSClientConfig: cfg})}
 }
 
 func (a *Agent) post(withCert bool, path string, in any) (*certResp, error) {
@@ -484,6 +486,10 @@ func (a *Agent) SendPosture(c *broker.Conn) error {
 	a.addMeasurements(&h)
 	if !a.Cfg.DisablePathProbes {
 		h.Result = a.pathStages()
+	}
+	if sk, ok := a.clock.Current(); ok {
+		n := int(sk.Round(time.Second) / time.Second)
+		h.ClockSkewSec = &n
 	}
 	rep.Health = &h
 	rep.DeviceID, rep.TS, rep.Nonce, rep.AgentVersion = id, time.Now().UTC(), posture.NewNonce(), Version

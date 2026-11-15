@@ -10,11 +10,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/larytet/zscaler/internal/clockhint"
 	"github.com/larytet/zscaler/internal/cloudapps"
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/tenancy"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -331,13 +334,31 @@ type Poller struct {
 	MaxAge    time.Duration // how old a signature may be (default 15 minutes)
 
 	lastSeq int64
+	// Clock notes how far this node's clock is from the control plane's, from the answers it gets.
+	Clock         clockhint.Tracker
+	lastClockWarn time.Time
 }
 
 func (p *Poller) client() *http.Client {
 	if p.HTTP != nil {
 		return p.HTTP
 	}
-	return &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: p.TLS}}
+	return &http.Client{Timeout: 10 * time.Second, Transport: p.Clock.Transport(&http.Transport{TLSClientConfig: p.TLS})}
+}
+
+// clockNote says plainly, at most every ten minutes, that this node's clock is off, and returns the sentence
+// when it is (so an error caused by it can carry it).
+func (p *Poller) clockNote() string {
+	sk, ok := p.Clock.Current()
+	if !ok || !clockhint.Wrong(sk) {
+		return ""
+	}
+	msg := strings.Replace(clockhint.Plain(sk), "This computer's", "This node's", 1)
+	if time.Since(p.lastClockWarn) > 10*time.Minute {
+		p.lastClockWarn = time.Now()
+		log.Printf("WARNING: %s", msg)
+	}
+	return msg
 }
 
 func (p *Poller) Once() error {
@@ -346,6 +367,7 @@ func (p *Poller) Once() error {
 		return err
 	}
 	defer resp.Body.Close()
+	note := p.clockNote()
 	if resp.StatusCode != 200 {
 		return errors.New("sync: control plane returned " + resp.Status)
 	}
@@ -361,6 +383,9 @@ func (p *Poller) Once() error {
 		max = 15 * time.Minute
 	}
 	if err := env.Verify(p.PolicyPub, p.lastSeq, time.Now(), max); err != nil {
+		if note != "" {
+			return fmt.Errorf("%w\n%s", err, note)
+		}
 		return err
 	}
 	var snap store.Snapshot

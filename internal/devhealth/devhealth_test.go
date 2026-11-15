@@ -161,3 +161,22 @@ func TestPathStagesNameTheSlowHop(t *testing.T) { // AGT-018 (DEX-002)
 		t.Fatalf("%+v", x)
 	}
 }
+
+func TestAWrongDeviceClockIsAFindingInPlainWords(t *testing.T) { // AGT-045 (GAP-REQ-06)
+	n := func(v int) *int { return &v }
+	ahead := Entry{Tenant: "t", User: "alice", Device: "d1", Snapshot: Snapshot{ClockSkewSec: n(7 * 60)}}
+	f := Findings(ahead)
+	if len(f) != 1 || !strings.Contains(f[0].Message, "alice's device clock is about 7 minutes ahead of the real time") || !strings.Contains(f[0].Fix, "automatic date and time") {
+		t.Fatalf("%+v", f)
+	}
+	behind := Entry{User: "bob", Snapshot: Snapshot{ClockSkewSec: n(-3 * 3600)}}
+	if f := Findings(behind); len(f) != 1 || !strings.Contains(f[0].Message, "3 hours behind") {
+		t.Errorf("%+v", f)
+	}
+	// a clock that is close, or unknown, is not a finding and is not guessed at
+	for _, e := range []Entry{{Snapshot: Snapshot{ClockSkewSec: n(30)}}, {Snapshot: Snapshot{ClockSkewSec: n(-119)}}, {}} {
+		if f := Findings(e); len(f) != 0 {
+			t.Errorf("%+v gave %+v", e.Snapshot.ClockSkewSec, f)
+		}
+	}
+}

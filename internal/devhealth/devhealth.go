@@ -5,6 +5,7 @@ package devhealth
 
 import (
 	"fmt"
+	"github.com/larytet/zscaler/internal/clockhint"
 	"github.com/larytet/zscaler/internal/pathprobe"
 	"os"
 	"sort"
@@ -22,6 +23,9 @@ type Snapshot struct {
 	// Measured by the agent from its own traffic (DEX-001), in milliseconds.
 	ENConnectMs *int           `json:"en_connect_ms,omitempty"` // time to connect to the enforcement node
 	AppOpenMs   map[string]int `json:"app_open_ms,omitempty"`   // median time to open a session, per app
+	// ClockSkewSec is how far this device's clock is ahead of the control plane's (negative: behind), as
+	// the agent saw it in the Date header of the control plane's answers; nil when it has not seen one (GAP-REQ-06).
+	ClockSkewSec *int `json:"clock_skew_sec,omitempty"`
 	// Path stages (DEX-002, basic): Wi-Fi signal, router, name resolution and an optional anchor.
 	pathprobe.Result
 }
@@ -159,6 +163,13 @@ func (s *Store) List(tenant string, now time.Time) []Device {
 // Findings applies fixed thresholds: disk over 90 percent, memory over 90, load over 150.
 func Findings(e Entry) []Finding {
 	var f []Finding
+	if v := e.ClockSkewSec; v != nil && clockhint.Wrong(time.Duration(*v)*time.Second) {
+		dir := "ahead of"
+		if *v < 0 {
+			dir = "behind"
+		}
+		f = append(f, Finding{e.Device, e.User, fmt.Sprintf("%s's device clock is about %s %s the real time", e.User, clockhint.Span(time.Duration(abs(*v))*time.Second), dir), "Ask them to turn on automatic date and time. With a clock this far off, certificates, approvals and time-based rules stop working and the device may fail to connect at all."})
+	}
 	if v := e.DiskUsedPct; v != nil && *v >= 90 {
 		f = append(f, Finding{e.Device, e.User, fmt.Sprintf("%s's disk is %d%% full", e.User, *v), "Ask them to free space. A full disk breaks updates and can stop disk encryption and logging tools working properly."})
 	}
@@ -169,6 +180,13 @@ func Findings(e Entry) []Finding {
 		f = append(f, Finding{e.Device, e.User, fmt.Sprintf("%s's device is overloaded (load %d%% of capacity)", e.User, *v), "Slow apps here are likely the device, not the network or the app. Check what is running."})
 	}
 	return f
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func sortDevices(d []Device) {

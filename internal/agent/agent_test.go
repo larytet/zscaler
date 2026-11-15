@@ -528,3 +528,27 @@ func TestRenewLoopAutomaticLeadHandlesShortLifetimes(t *testing.T) { // AG-007, 
 		t.Fatalf("renewing in a tight loop: %d certificates in 7 s", n)
 	}
 }
+
+func TestAgentNotesTheControlPlanesClockAndReportsTheDifference(t *testing.T) { // AGT-045 (GAP-REQ-06)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Date", time.Now().Add(-11*time.Minute).UTC().Format(http.TimeFormat))
+	}))
+	defer srv.Close()
+	pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	a, err := New(t.TempDir(), Config{EnrolURL: srv.URL, EnrolCAPEM: string(pemCert)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.clock.Current(); ok {
+		t.Fatal("a skew before any answer")
+	}
+	resp, err := a.enrolClient(false).Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	sk, ok := a.clock.Current()
+	if !ok || sk < 10*time.Minute || sk > 12*time.Minute {
+		t.Fatalf("%v %v", sk, ok)
+	}
+}
