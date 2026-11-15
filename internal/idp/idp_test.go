@@ -144,3 +144,15 @@ func TestUnreachableIdP(t *testing.T) {
 		t.Fatal("token accepted with IdP down and no cached keys")
 	}
 }
+
+func TestJWKSOffCurveKeyIgnored(t *testing.T) {
+	s, v := setup(t)
+	tok := s.Sign("k1", s.Good("u1", "a@x", "n"))
+	s.PublishBadECKey("bad") // an EC key whose point is not on the curve
+	if _, err := v.Verify(tok, "n"); err != nil {
+		t.Fatalf("a bad extra key must not break good ones: %v", err)
+	}
+	if _, err := v.Verify(s.SignUnadvertised("bad", s.Good("u1", "a@x", "n")), "n"); err == nil {
+		t.Fatal("token for an off-curve key accepted")
+	}
+}

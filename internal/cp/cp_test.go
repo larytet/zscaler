@@ -238,7 +238,7 @@ func TestDryRun(t *testing.T) { // CP-006
 	if c != 200 || d.Action != policy.Allow || d.RuleID != "r" {
 		t.Fatalf("%d %s", c, b)
 	}
-	c, b, _ = e.call("POST", "/v1/policies/private/dry-run", e.adminA, map[string]any{"policy": draft, "groups": []string{"hr"}, "app": "erp"})
+	_, b, _ = e.call("POST", "/v1/policies/private/dry-run", e.adminA, map[string]any{"policy": draft, "groups": []string{"hr"}, "app": "erp"})
 	json.Unmarshal(b, &d)
 	if d.Action != policy.Deny {
 		t.Fatalf("%s", b)

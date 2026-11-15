@@ -16,7 +16,7 @@ func TestForwarderRetriesAndKeepsOrder(t *testing.T) {
 	var got []broker.Record
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if fail.Load() {
-			http.Error(w, "down", 503)
+			http.Error(w, "down", http.StatusServiceUnavailable)
 			return
 		}
 		var b []broker.Record

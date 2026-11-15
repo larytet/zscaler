@@ -241,8 +241,11 @@ func (v *Verifier) refresh() error {
 			}
 		case "EC":
 			x, y := dec(k.X), dec(k.Y)
-			if k.Crv == "P-256" && x != nil && y != nil && elliptic.P256().IsOnCurve(x, y) {
-				keys[k.Kid] = &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+			if k.Crv == "P-256" && x != nil && y != nil {
+				pk := &ecdsa.PublicKey{Curve: elliptic.P256(), X: x, Y: y}
+				if _, err := pk.ECDH(); err == nil { // validates that the point is on the curve
+					keys[k.Kid] = pk
+				}
 			}
 		}
 	}

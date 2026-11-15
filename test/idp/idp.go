@@ -31,10 +31,11 @@ type Server struct {
 	// SkipPKCECheck makes /token accept any code_verifier (to test that the client sends one).
 	SkipPKCECheck bool
 
-	codes map[string]authCode
-	mu    sync.Mutex
-	keys  map[string]*ecdsa.PrivateKey // advertised in JWKS
-	rsa   map[string]*rsa.PrivateKey
+	badKeys []string
+	codes   map[string]authCode
+	mu      sync.Mutex
+	keys    map[string]*ecdsa.PrivateKey // advertised in JWKS
+	rsa     map[string]*rsa.PrivateKey
 }
 
 var b64 = base64.RawURLEncoding
@@ -57,6 +58,10 @@ func New(clientID string) *Server {
 		for kid, k := range s.keys {
 			ks = append(ks, map[string]string{"kty": "EC", "crv": "P-256", "kid": kid,
 				"x": b64.EncodeToString(k.X.FillBytes(make([]byte, 32))), "y": b64.EncodeToString(k.Y.FillBytes(make([]byte, 32)))})
+		}
+		for _, kid := range s.badKeys {
+			ks = append(ks, map[string]string{"kty": "EC", "crv": "P-256", "kid": kid,
+				"x": b64.EncodeToString(make([]byte, 32)), "y": b64.EncodeToString(make([]byte, 32))}) // (0,0) is not on P-256
 		}
 		for kid, k := range s.rsa {
 			ks = append(ks, map[string]string{"kty": "RSA", "kid": kid, "n": b64.EncodeToString(k.N.Bytes()),
@@ -182,4 +187,11 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	json.NewEncoder(w).Encode(map[string]string{"id_token": s.Sign("k1", s.Good(s.Sub, s.Email, ac.nonce, s.Groups...)), "token_type": "Bearer"})
+}
+
+// PublishBadECKey advertises an EC key whose point is not on the curve.
+func (s *Server) PublishBadECKey(kid string) {
+	s.mu.Lock()
+	s.badKeys = append(s.badKeys, kid)
+	s.mu.Unlock()
 }
