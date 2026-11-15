@@ -18,6 +18,7 @@ import (
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/cli"
+	"github.com/larytet/zscaler/internal/versions"
 )
 
 // version is stamped by the release build (ztx-release); a build from the source tree says dev.
@@ -55,7 +56,9 @@ func main() {
 	allow.Store(&empty)
 	cl := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: id.TLS(cli.HostOf(*cpURL))}}
 	refresh := func() {
-		resp, err := cl.Get(strings.TrimSuffix(*cpURL, "/") + "/enrol/targets")
+		req, _ := http.NewRequest("GET", strings.TrimSuffix(*cpURL, "/")+"/enrol/targets", nil)
+		req.Header.Set(versions.Header, version)
+		resp, err := cl.Do(req)
 		if err != nil {
 			log.Printf("targets: %v", err)
 			return

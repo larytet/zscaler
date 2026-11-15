@@ -59,9 +59,13 @@ type API struct {
 	RootCACert *x509.Certificate
 	PolicyPub  *ecdsa.PublicKey
 	// Limit slows down clients that keep presenting bad credentials (GAP-REQ-04); nil means no limit.
-	Limit         *ratelimit.Limiter
-	AtRestSealed  bool // the CA key, signing key and store are encrypted with a master key
-	OnDisableUser func(tenant, subject string)
+	Limit *ratelimit.Limiter
+	// Version is this program's version, and MinAgentVersion the oldest agent allowed to start sessions; GET /v1/versions uses them.
+	Version         string
+	MinAgentVersion string
+	fleet           fleet
+	AtRestSealed    bool // the CA key, signing key and store are encrypted with a master key
+	OnDisableUser   func(tenant, subject string)
 }
 
 type apiErr struct {
@@ -140,6 +144,7 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "GET /v1/inspection/ca.pem", read, a.getInspectionCA)
 	a.route(m, "POST /v1/inspection/rotate", write, a.rotateInspection)
 	a.route(m, "GET /v1/keys", audit, a.keyStatus)
+	a.route(m, "GET /v1/versions", read, a.versionStatus)
 	a.route(m, "POST /v1/me/rotate", read, a.rotateOwnToken)
 	a.route(m, "GET /v1/approvals", read, a.listApprovals)
 	a.route(m, "POST /v1/approvals/{id}/approve", support, a.approve)

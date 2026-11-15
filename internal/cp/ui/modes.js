@@ -16,6 +16,7 @@ var Modes = (function () {
     { name: 'Policy', needs: 'read' },
     { name: 'Reports', needs: 'audit' },
     { name: 'Investigate', needs: 'read' },
+    { name: 'Versions', needs: 'read' },
   ];
 
   // visibleTabs: in the simple mode the three screens (users, apps, alerts), in the advanced mode all of

@@ -27,6 +27,7 @@ import (
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/signed"
 	"github.com/larytet/zscaler/internal/store"
+	"github.com/larytet/zscaler/internal/versions"
 )
 
 // DefaultSyncEvery is the default poll interval. With 5 s the worst case for a
@@ -334,6 +335,8 @@ type Poller struct {
 	MaxAge    time.Duration // how old a signature may be (default 15 minutes)
 
 	lastSeq int64
+	// Version is this node's version, sent with every poll so the control plane can list it.
+	Version string
 	// Clock notes how far this node's clock is from the control plane's, from the answers it gets.
 	Clock         clockhint.Tracker
 	lastClockWarn time.Time
@@ -362,7 +365,14 @@ func (p *Poller) clockNote() string {
 }
 
 func (p *Poller) Once() error {
-	resp, err := p.client().Get(p.URL + "/sync/state")
+	req, err := http.NewRequest("GET", p.URL+"/sync/state", nil)
+	if err != nil {
+		return err
+	}
+	if p.Version != "" {
+		req.Header.Set(versions.Header, p.Version)
+	}
+	resp, err := p.client().Do(req)
 	if err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/larytet/zscaler/internal/clockhint"
 	"github.com/larytet/zscaler/internal/pathprobe"
 	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/versions"
 	"io"
 	"net"
 	"net/http"
@@ -173,7 +174,13 @@ func (a *Agent) enrolClient(withCert bool) *http.Client {
 
 func (a *Agent) post(withCert bool, path string, in any) (*certResp, error) {
 	b, _ := json.Marshal(in)
-	resp, err := a.enrolClient(withCert).Post(a.Cfg.EnrolURL+path, "application/json", bytes.NewReader(b))
+	req, err := http.NewRequest("POST", a.Cfg.EnrolURL+path, bytes.NewReader(b))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(versions.Header, Version)
+	resp, err := a.enrolClient(withCert).Do(req)
 	if err != nil {
 		return nil, err
 	}

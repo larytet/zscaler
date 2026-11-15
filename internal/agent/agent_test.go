@@ -552,3 +552,20 @@ func TestAgentNotesTheControlPlanesClockAndReportsTheDifference(t *testing.T) { 
 		t.Fatalf("%v %v", sk, ok)
 	}
 }
+
+func TestAgentAnnouncesItsVersion(t *testing.T) { // AGT-046 (GAP-REQ-08)
+	var got string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Ztx-Version")
+		w.Write([]byte("{}"))
+	}))
+	defer srv.Close()
+	pemCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	a, _ := New(t.TempDir(), Config{EnrolURL: srv.URL, EnrolCAPEM: string(pemCert)})
+	if _, err := a.post(false, "/enrol/x", map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	if got != Version {
+		t.Errorf("sent %q, want %q", got, Version)
+	}
+}

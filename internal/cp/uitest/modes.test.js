@@ -16,7 +16,7 @@ assert.strictEqual(labels(Modes.visibleTabs('advanced', owner)), names(Modes.vis
 for (const m of [undefined, null, '', 'expert', 'ADVANCED']) assert.strictEqual(names(Modes.visibleTabs(m, owner)), 'Overview,People,Apps', String(m));
 // roles: a viewer has no logs or audit; the audit screens are for those who may read them
 const viewer = ['read'];
-assert.strictEqual(names(Modes.visibleTabs('advanced', viewer)), 'Overview,People,Apps,Approvals,Inspection,Policy,Investigate');
+assert.strictEqual(names(Modes.visibleTabs('advanced', viewer)), 'Overview,People,Apps,Approvals,Inspection,Policy,Investigate,Versions');
 const auditor = ['read', 'logs', 'audit'];
 assert.ok(names(Modes.visibleTabs('advanced', auditor)).includes('Reports') && names(Modes.visibleTabs('advanced', auditor)).includes('Incidents'));
 assert.ok(!names(Modes.visibleTabs('advanced', viewer)).includes('Incidents') && !names(Modes.visibleTabs('advanced', viewer)).includes('Reports'));

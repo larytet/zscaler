@@ -171,6 +171,7 @@ func main() {
 		log.Fatal("--device-cert-ttl must be between 30s and 7 days")
 	}
 	api.RootCACert, api.PolicyPub, api.AtRestSealed = ca.Cert, &signer.PublicKey, mk != nil
+	api.Version, api.MinAgentVersion = version, *minAgent
 	if *failLimit > 0 {
 		ex, err := ratelimit.ParseExempt(*exempt)
 		if err != nil {

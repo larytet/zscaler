@@ -230,6 +230,7 @@ func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(401, "unauthenticated", "a valid device certificate is required"))
 		return
 	}
+	e.API.noteVersion(r, id)
 	var in struct {
 		PublicKey string `json:"public_key"`
 	}
@@ -322,6 +323,7 @@ func (e *Enrol) targets(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(401, "unauthenticated", "a valid connector certificate is required"))
 		return
 	}
+	e.API.noteVersion(r, id)
 	segs, err := e.API.Store.Segments(id.Tenant)
 	if err != nil {
 		writeErr(w, err)
@@ -390,6 +392,7 @@ func (e *Enrol) syncState(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(401, "unauthenticated", "an enforcement-node certificate is required"))
 		return
 	}
+	e.API.noteVersion(r, id)
 	if e.PolicyKey == nil {
 		writeErr(w, fail(500, "no_signing_key", "the control plane has no policy-signing key"))
 		return

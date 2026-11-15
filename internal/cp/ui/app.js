@@ -151,6 +151,16 @@ const tabs = {
     if (!(sug.device_problems || []).length && !(sug.rule_suggestions || []).length) s.appendChild(el('p', 'No suggestions.', 'muted'));
     show(s, el('h2', 'Insurance questionnaire evidence'), el('pre', ev));
   },
+  Versions: async () => {
+    const v = await api('GET', '/v1/versions');
+    const out = el('div'); out.appendChild(el('h2', 'Who runs which version'));
+    out.appendChild(el('p', 'Control plane: ' + (v.control_plane || 'unknown') + '. ' + v.supported + ' Upgrade in this order: ' + v.upgrade_order, 'muted'));
+    (v.warnings || []).forEach((w) => out.appendChild(el('div', w, 'card warn')));
+    if (!(v.warnings || []).length) out.appendChild(el('p', 'Nothing is outside the supported window.', 'ok'));
+    out.appendChild(table(['What', 'Name', 'Version', 'Status', 'Last seen'], (v.components || []).map((c) => [c.role, c.name + (c.user ? ' (' + c.user + ')' : ''), c.version, c.status + (c.message ? ': ' + c.message : ''), when(c.last_seen)])));
+    out.appendChild(el('p', v.not_listed, 'muted'));
+    show(out);
+  },
   Investigate: async () => {
     const u = el('input'), out = el('div');
     const go = async () => {

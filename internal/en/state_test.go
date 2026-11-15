@@ -463,3 +463,17 @@ func TestNodeSaysPlainlyWhenItsClockIsOff(t *testing.T) { // AGT-045 (GAP-REQ-06
 		t.Error("a right clock produced a note")
 	}
 }
+
+func TestNodeAnnouncesItsVersionWithEveryPoll(t *testing.T) { // AGT-046 (GAP-REQ-08)
+	var got string
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("X-Ztx-Version")
+		http.Error(w, "no", 500)
+	}))
+	defer srv.Close()
+	p := &Poller{URL: srv.URL, TLS: &tls.Config{InsecureSkipVerify: true}, Version: "1.4.2"}
+	p.Once() // refused on purpose; only the request matters
+	if got != "1.4.2" {
+		t.Errorf("sent %q", got)
+	}
+}
