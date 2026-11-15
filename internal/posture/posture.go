@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/policy"
 )
 
@@ -28,6 +29,8 @@ type Report struct {
 	FirewallOn    *bool     `json:"firewall_on"`
 	ScreenLock    *bool     `json:"screen_lock"`
 	AgentVersion  string    `json:"agent_version"`
+	// Health is optional device health (CPU, memory, disk), signed along with the posture.
+	Health *devhealth.Snapshot `json:"health,omitempty"`
 }
 
 // ToPolicy converts a verified report for the policy engine.

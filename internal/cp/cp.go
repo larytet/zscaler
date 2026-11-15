@@ -17,6 +17,7 @@ import (
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/digest"
 	"github.com/larytet/zscaler/internal/evidence"
 	"github.com/larytet/zscaler/internal/pki"
@@ -36,6 +37,7 @@ type API struct {
 	Alerts    *alerts.Engine
 	Decisions *decisions.Store
 	Approvals *approvals.Store
+	Health    *devhealth.Store
 	// OnApprovalRequest is called when a new access request is created.
 	OnApprovalRequest func(approvals.Request)
 	OnRevokeDevice    func(tenant string, d store.Device)
@@ -88,6 +90,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
+	m.HandleFunc("GET /v1/health", a.wrap(read, a.getHealth))
 	m.HandleFunc("PUT /v1/inspection", a.wrap(write, a.putInspection))
 	m.HandleFunc("GET /v1/inspection", a.wrap(read, a.getInspection))
 	m.HandleFunc("GET /v1/inspection/ca.pem", a.wrap(read, a.getInspectionCA))
@@ -937,4 +940,11 @@ func (a *API) getInspectionCA(w http.ResponseWriter, r *http.Request, c ctxInfo)
 	w.Header().Set("Content-Disposition", `attachment; filename="inspection-ca.pem"`)
 	io.WriteString(w, cfg.CACert)
 	return nil, nil
+}
+
+func (a *API) getHealth(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	if a.Health == nil {
+		return []devhealth.Device{}, nil
+	}
+	return a.Health.List(c.tenant, time.Now()), nil
 }

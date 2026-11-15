@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/mux"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
@@ -102,6 +103,8 @@ type Record struct {
 	Inspected bool `json:"inspected,omitempty"`
 	// DLP lists the data types found in a blocked or logged request body. Never the data.
 	DLP []string `json:"dlp,omitempty"`
+	// Health is set on records of Kind "health": the latest device health numbers.
+	Health *devhealth.Snapshot `json:"health,omitempty"`
 	// Inputs to the decision, so that a draft policy can be replayed against history.
 	Groups  []string     `json:"groups,omitempty"`
 	Posture *PostureSnap `json:"posture,omitempty"`
@@ -377,6 +380,9 @@ func (e *EN) onPosture(id pki.Identity, cert *x509.Certificate, ds *deviceState,
 		rec.Action, rec.Reason = "fail", strings.Join(failing, " and ")
 	}
 	e.logRec(rec)
+	if r.Health != nil {
+		e.logRec(Record{Tenant: id.Tenant, Kind: "health", User: id.Subject, Device: id.Device, Action: "info", Health: r.Health})
+	}
 }
 
 func (e *EN) logRec(r Record) {

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/posture"
 )
@@ -391,6 +392,8 @@ func (a *Agent) SendPosture(c *broker.Conn) error {
 	}
 	a.mu.Unlock()
 	rep := Collect(DefaultProbes())
+	h := devhealth.Collect()
+	rep.Health = &h
 	rep.DeviceID, rep.TS, rep.Nonce, rep.AgentVersion = id, time.Now().UTC(), posture.NewNonce(), Version
 	tok, err := posture.Sign(k, rep)
 	if err != nil {

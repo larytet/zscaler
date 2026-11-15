@@ -22,6 +22,7 @@ import (
 	"github.com/larytet/zscaler/internal/cli"
 	"github.com/larytet/zscaler/internal/cp"
 	"github.com/larytet/zscaler/internal/decisions"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -87,7 +88,7 @@ func main() {
 			eng.Tick()
 		}
 	}()
-	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New(), Approvals: approvals.New()}
+	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New(), Approvals: approvals.New(), Health: devhealth.New()}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent, PolicyKey: signer}
 
 	if notifier != nil {

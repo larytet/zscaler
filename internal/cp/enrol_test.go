@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/larytet/zscaler/internal/approvals"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -611,5 +612,26 @@ func TestApprovalEndpoints(t *testing.T) { // ZPA-027
 	}
 	if c, _, _ := e.call("POST", "/v1/approvals/"+fmt.Sprint(list[0].ID)+"/deny", e.adminA, nil); c != 200 || e.api.Store.Granted("a", "alice", "erp", time.Now()) {
 		t.Fatal("deny must not create a grant")
+	}
+}
+
+func TestHealthEndpoint(t *testing.T) { // DEX-003
+	e := newEnrolEnv(t)
+	e.api.Health = devhealth.New()
+	disk := 96
+	recs := []broker.Record{
+		{Tenant: "a", Kind: "health", User: "alice", Device: "d1", Health: &devhealth.Snapshot{DiskUsedPct: &disk}},
+		{Tenant: "b", Kind: "health", User: "eve", Device: "d9", Health: &devhealth.Snapshot{DiskUsedPct: &disk}},
+		{Tenant: "a", Kind: "health", User: "bob", Device: "d2"}, // no numbers: ignored
+	}
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	code, b, _ := e.call("GET", "/v1/health", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), "alice's disk is 96% full") || strings.Contains(string(b), "eve") || strings.Contains(string(b), `"bob"`) {
+		t.Fatalf("%d %s", code, b)
+	}
+	if _, b, _ = e.call("GET", "/v1/health", e.adminB, nil); strings.Contains(string(b), "alice") {
+		t.Fatalf("tenant isolation: %s", b)
 	}
 }

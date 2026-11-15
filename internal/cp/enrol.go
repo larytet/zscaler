@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/idp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
@@ -389,6 +390,9 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		}
 		if e.API.Decisions != nil {
 			e.API.Decisions.Add(rec)
+		}
+		if e.API.Health != nil && rec.Kind == "health" && rec.Health != nil {
+			e.API.Health.Put(devhealth.Entry{Tenant: rec.Tenant, User: rec.User, Device: rec.Device, At: time.Now(), Snapshot: *rec.Health})
 		}
 		if e.API.Approvals != nil && rec.Kind == "private" && rec.Action == "deny" && rec.Reason == "approval-required" && rec.Event == "open" {
 			if req, created := e.API.Approvals.Add(rec.Tenant, rec.User, rec.App, rec.Rule, time.Now()); created && e.API.OnApprovalRequest != nil {

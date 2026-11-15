@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/test/faults"
 	"io"
 	"net"
@@ -881,5 +882,49 @@ func TestRequireApprovalFlow(t *testing.T) { // ZPA-027
 	}
 	if _, err := s.Read(make([]byte, 1)); err == nil {
 		t.Fatal("session survived the end of the grant")
+	}
+}
+
+func TestHealthRidesInTheSignedPostureReport(t *testing.T) { // DEX-003
+	r := newRig(t)
+	cr := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+	conn, err := Dial(r.enAddr, cr.tls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	disk, mem := 93, 40
+	rep := posture.Report{DeviceID: "d1", TS: time.Now().UTC().Add(-time.Minute), Nonce: posture.NewNonce(), OS: "linux",
+		DiskEncrypted: bp(true), Health: &devhealth.Snapshot{DiskUsedPct: &disk, MemUsedPct: &mem}}
+	tok, _ := posture.Sign(cr.key, rep)
+	if err := conn.SendPosture(tok); err != nil {
+		t.Fatal(err)
+	}
+	rec := r.logs.find(func(x Record) bool { return x.Kind == "health" && x.Device == "d1" })
+	if rec == nil || rec.Health == nil || *rec.Health.DiskUsedPct != 93 || *rec.Health.MemUsedPct != 40 || rec.Health.CPULoadPct != nil {
+		t.Fatalf("%+v", rec)
+	}
+	// a report without health produces no health record (nothing is invented)
+	before := 0
+	r.logs.mu.Lock()
+	for _, x := range r.logs.r {
+		if x.Kind == "health" {
+			before++
+		}
+	}
+	r.logs.mu.Unlock()
+	rep2 := posture.Report{DeviceID: "d1", TS: time.Now().UTC(), Nonce: posture.NewNonce(), OS: "linux"}
+	tok2, _ := posture.Sign(cr.key, rep2)
+	conn.SendPosture(tok2)
+	after := 0
+	r.logs.mu.Lock()
+	for _, x := range r.logs.r {
+		if x.Kind == "health" {
+			after++
+		}
+	}
+	r.logs.mu.Unlock()
+	if after != before {
+		t.Fatal("a health record was emitted for a report that carried none")
 	}
 }

@@ -1155,3 +1155,42 @@ type bufferedConn struct {
 }
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }
+
+// DEX-003: the real agent measures this machine and the numbers reach the admin API.
+func TestDex003DeviceHealthReported(t *testing.T) {
+	if _, err := os.Stat("/proc/loadavg"); err != nil {
+		t.Skip("health collection is implemented for Linux only")
+	}
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	var got struct {
+		Device string
+		User   string
+		CPU    *int `json:"cpu_load_pct"`
+		Mem    *int `json:"mem_used_pct"`
+		Disk   *int `json:"disk_used_pct"`
+		Stale  bool
+	}
+	eventually(t, "a health report", 15*time.Second, func() bool {
+		code, b := s.api("GET", "/v1/health", nil, s.token)
+		var list []struct {
+			Device string
+			User   string
+			CPU    *int `json:"cpu_load_pct"`
+			Mem    *int `json:"mem_used_pct"`
+			Disk   *int `json:"disk_used_pct"`
+			Stale  bool
+		}
+		json.Unmarshal(b, &list)
+		if code == 200 && len(list) == 1 {
+			got = list[0]
+			return true
+		}
+		return false
+	})
+	if got.Mem == nil || got.Disk == nil || *got.Mem < 1 || *got.Mem > 100 || *got.Disk < 1 || *got.Disk > 100 || got.Stale || got.User != "u1" {
+		t.Fatalf("implausible or missing numbers from a real machine: %+v (mem %v disk %v)", got, got.Mem, got.Disk)
+	}
+}

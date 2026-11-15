@@ -33,7 +33,7 @@ type Store struct {
 func New() *Store { return &Store{data: map[string][]Entry{}} }
 
 func (s *Store) Add(r broker.Record) {
-	if r.Kind == "posture" || r.Kind == "connector" {
+	if r.Kind == "posture" || r.Kind == "connector" || r.Kind == "health" {
 		return // events feed alerts, they are not access decisions
 	}
 	s.mu.Lock()

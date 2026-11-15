@@ -58,7 +58,10 @@ const tabs = {
     show(el('h2', 'Access decisions'), row, out); await go();
   },
   People: async () => {
-    const [users, devices, risks] = await Promise.all([api('GET', '/v1/users'), api('GET', '/v1/devices'), api('GET', '/v1/risk')]);
+    const [users, devices, risks, health] = await Promise.all([api('GET', '/v1/users'), api('GET', '/v1/devices'), api('GET', '/v1/risk'), api('GET', '/v1/health')]);
+    const healthOf = {}; health.forEach((h) => { healthOf[h.device] = h; });
+    const pctText = (v) => (v === undefined || v === null ? '?' : v + '%');
+    const healthText = (id) => { const h = healthOf[id]; if (!h) return 'no report'; const t = 'CPU ' + pctText(h.cpu_load_pct) + ', memory ' + pctText(h.mem_used_pct) + ', disk ' + pctText(h.disk_used_pct) + (h.stale ? ' (old report)' : ''); return h.findings.length ? t + ' - ' + h.findings.map((f) => f.message).join('; ') : t; };
     const riskOf = {}; risks.forEach((r) => { riskOf[r.user] = r; });
     const reload = () => tabs.People().catch(failure);
     const isRestricted = (x) => (x.Groups || []).indexOf('restricted') >= 0;
@@ -70,7 +73,7 @@ const tabs = {
       return d; };
     const riskText = (x) => { const r = riskOf[x.Subject]; return r ? r.score + ' (' + r.reasons.join('; ') + ')' : '0'; };
     const u = table(['User', 'Email', 'Groups', 'State', 'Risk', ''], users.map((x) => [x.Subject, x.Email, (x.Groups || []).join(', '), x.Disabled ? 'disabled' : (isRestricted(x) ? 'restricted' : 'active'), riskText(x), actions(x)]));
-    const d = table(['Device', 'User', 'State', ''], devices.map((x) => [x.id, x.user, x.revoked ? 'revoked' : 'active',
+    const d = table(['Device', 'User', 'State', 'Health', ''], devices.map((x) => [x.id, x.user, x.revoked ? 'revoked' : 'active', healthText(x.id),
       x.revoked ? '' : btn('Revoke', async () => { if (confirm('Revoke device ' + x.id + '?')) { await api('POST', '/v1/devices/' + encodeURIComponent(x.id) + '/revoke'); await reload(); } }, 'danger')]));
     show(el('h2', 'People'), u, el('h2', 'Devices'), d);
   },
