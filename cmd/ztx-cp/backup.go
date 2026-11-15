@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/backup"
+	"github.com/larytet/zscaler/internal/cli"
+	"github.com/larytet/zscaler/internal/seal"
 )
 
 // runBackupCommand handles `ztx-cp backup`, `ztx-cp verify-backup` and `ztx-cp restore`. It reports whether
@@ -19,7 +21,11 @@ func runBackupCommand(args []string) bool {
 	data := fs.String("data", "cp-data", "control plane data directory")
 	file := fs.String("file", "", "the backup file")
 	force := fs.Bool("force", false, "restore: move an existing data directory aside and restore anyway")
+	keyFile := fs.String("master-key-file", "", "restore: file holding the master key if the data is encrypted (or ZTX_MASTER_KEY)")
 	switch args[0] {
+	case "gen-master-key":
+		fmt.Println(seal.Generate())
+		return true
 	case "backup", "verify-backup", "restore":
 	default:
 		return false
@@ -40,7 +46,9 @@ func runBackupCommand(args []string) bool {
 		check(err)
 		fmt.Printf("ok: %d files, made %s by version %s; every checksum matches\n", len(m.Files), m.Created.Format(time.RFC3339), m.Version)
 	case "restore":
-		m, moved, err := backup.Restore(*file, *data, *force, now)
+		key, err := masterKey(*keyFile)
+		check(err)
+		m, moved, err := backup.Restore(*file, *data, *force, now, key)
 		check(err)
 		fmt.Printf("restored %d files into %s (made %s).\n", len(m.Files), *data, m.Created.Format(time.RFC3339))
 		if moved != "" {
@@ -56,4 +64,13 @@ func check(err error) {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
+}
+
+// masterKey reads the master key from a file or ZTX_MASTER_KEY; no key at all is allowed and gives nil.
+func masterKey(file string) (*seal.Key, error) {
+	v, err := cli.Secret(file, "ZTX_MASTER_KEY")
+	if err != nil || v == "" {
+		return nil, err
+	}
+	return seal.ParseKey(v)
 }

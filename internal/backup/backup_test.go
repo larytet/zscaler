@@ -17,6 +17,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/seal"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -97,7 +98,7 @@ func TestBackupAndRestoreGiveBackTheSameControlPlane(t *testing.T) { // AGT-040 
 	}
 	// the "disaster": the data is gone
 	restored := filepath.Join(t.TempDir(), "new-cp-data")
-	if _, moved, err := Restore(out, restored, false, time.Now()); err != nil || moved != "" {
+	if _, moved, err := Restore(out, restored, false, time.Now(), nil); err != nil || moved != "" {
 		t.Fatalf("%v %q", err, moved)
 	}
 	// the same CA came back, so a device certificate issued before still verifies
@@ -143,13 +144,13 @@ func TestRestoreRefusesToOverwriteAndMovesAsideOnlyWhenForced(t *testing.T) { //
 	existing := filepath.Join(t.TempDir(), "live")
 	os.MkdirAll(existing, 0o700)
 	os.WriteFile(filepath.Join(existing, "store.json"), []byte(`{"tenants":{}}`), 0o600)
-	if _, _, err := Restore(out, existing, false, time.Now()); err == nil || !strings.Contains(err.Error(), "-force") {
+	if _, _, err := Restore(out, existing, false, time.Now(), nil); err == nil || !strings.Contains(err.Error(), "-force") {
 		t.Fatalf("an existing directory must be refused: %v", err)
 	}
 	if b, _ := os.ReadFile(filepath.Join(existing, "store.json")); string(b) != `{"tenants":{}}` {
 		t.Fatal("a refused restore changed the live data")
 	}
-	_, moved, err := Restore(out, existing, true, time.Now())
+	_, moved, err := Restore(out, existing, true, time.Now(), nil)
 	if err != nil || moved == "" {
 		t.Fatalf("%v %q", err, moved)
 	}
@@ -179,7 +180,7 @@ func TestDamagedOrAlteredBackupIsRefusedBeforeAnythingIsWritten(t *testing.T) { 
 		if _, err := Verify(p); err == nil {
 			t.Errorf("%s: verify accepted it", name)
 		}
-		if _, _, err := Restore(p, target, false, time.Now()); err == nil {
+		if _, _, err := Restore(p, target, false, time.Now(), nil); err == nil {
 			t.Errorf("%s: restore accepted it", name)
 		}
 		if _, err := os.Stat(target); err == nil {
@@ -283,7 +284,7 @@ func TestBackupCutsLogsAtTheLastCompleteLineAndRefusesBadInput(t *testing.T) { /
 		t.Fatal(err)
 	}
 	restored := filepath.Join(t.TempDir(), "r")
-	if _, _, err := Restore(out, restored, false, time.Now()); err != nil {
+	if _, _, err := Restore(out, restored, false, time.Now(), nil); err != nil {
 		t.Fatalf("the half line broke the restore: %v", err)
 	}
 	if n, err := audit.Verify(filepath.Join(restored, "audit.jsonl")); err != nil || n != 3 {
@@ -308,5 +309,137 @@ func TestBackupCutsLogsAtTheLastCompleteLineAndRefusesBadInput(t *testing.T) { /
 	}
 	if _, err := os.Stat(filepath.Join(os.TempDir(), "y.tmp")); err == nil {
 		t.Error("a temporary file was left")
+	}
+}
+
+// A data directory made with a master key: nothing private is in clear on disk, in the backup, or after a restore.
+func makeSealed(t *testing.T, k *seal.Key) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "cp-data")
+	os.MkdirAll(dir, 0o700)
+	if _, err := pki.LoadOrCreateCAKey(dir, "root", nil, k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pki.LoadOrCreateSignerKey(dir, k); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.OpenWithKey(filepath.Join(dir, "store.json"), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.CreateTenant("acme", "Acme")
+	if err := st.PutSecret("acme", store.Secret{Name: "crm", Host: "crm.example", Header: "Authorization", Value: "Bearer hunter2-secret-value"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetInspection("acme", true, nil); err != nil { // makes the tenant's inspection CA key
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func anyContains(t *testing.T, root, needle string) []string {
+	var hits []string
+	filepath.Walk(root, func(p string, i os.FileInfo, err error) error {
+		if err == nil && !i.IsDir() {
+			b, _ := os.ReadFile(p)
+			if strings.Contains(string(b), needle) {
+				hits = append(hits, p)
+			}
+		}
+		return nil
+	})
+	return hits
+}
+
+func TestSealedDataIsNotInClearOnDiskInTheBackupOrAfterARestore(t *testing.T) { // AGT-041 (GAP-REQ-02)
+	k, wrong := mustKey(t), mustKey(t)
+	dir := makeSealed(t, k)
+	for _, needle := range []string{"hunter2-secret-value", "PRIVATE KEY"} {
+		if h := anyContains(t, dir, needle); len(h) != 0 {
+			t.Fatalf("%q is in clear in %v", needle, h)
+		}
+	}
+	// the store and the keys open with the key, and not without it or with another
+	if _, err := store.OpenWithKey(filepath.Join(dir, "store.json"), k); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Open(filepath.Join(dir, "store.json")); err == nil || !strings.Contains(err.Error(), "master key") {
+		t.Errorf("a sealed store opened without a key, or the message does not say what to do: %v", err)
+	}
+	if _, err := store.OpenWithKey(filepath.Join(dir, "store.json"), wrong); err == nil {
+		t.Error("a sealed store opened with the wrong key")
+	}
+	if _, err := pki.LoadOrCreateCAKey(dir, "root", nil, nil); err == nil {
+		t.Error("a sealed CA key was replaced by a new one instead of refusing: that would orphan every certificate")
+	}
+	if _, err := pki.LoadOrCreateSignerKey(dir, wrong); err == nil {
+		t.Error("a sealed signing key opened with the wrong key")
+	}
+	ca1, _ := pki.LoadOrCreateCAKey(dir, "root", nil, k)
+	ca2, _ := pki.LoadOrCreateCAKey(dir, "root", nil, k)
+	if !ca1.Cert.Equal(ca2.Cert) {
+		t.Error("the CA changed between two loads")
+	}
+	// the backup copies the sealed files as they are (checked after the restore below: gzip would hide a leak here)
+	out := filepath.Join(t.TempDir(), "b.tgz")
+	if _, err := Create(dir, out, time.Now(), "t"); err != nil {
+		t.Fatal(err)
+	}
+	// restore: refused without the key or with the wrong one, nothing written; fine with the right one
+	target := filepath.Join(t.TempDir(), "new")
+	for name, key := range map[string]*seal.Key{"no key": nil, "wrong key": wrong} {
+		if _, _, err := Restore(out, target, false, time.Now(), key); err == nil {
+			t.Errorf("%s: restore accepted", name)
+		}
+		if _, err := os.Stat(target); err == nil {
+			t.Errorf("%s: something was written", name)
+		}
+	}
+	if _, _, err := Restore(out, target, false, time.Now(), k); err != nil {
+		t.Fatal(err)
+	}
+	if h := anyContains(t, target, "hunter2-secret-value"); len(h) != 0 {
+		t.Errorf("after the restore the secret is in clear in %v", h)
+	}
+	st, err := store.OpenWithKey(filepath.Join(target, "store.json"), k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := st.Secret("acme", "crm"); !ok || got.Value != "Bearer hunter2-secret-value" {
+		t.Errorf("the secret did not survive: %+v %v", got, ok)
+	}
+}
+
+func mustKey(t *testing.T) *seal.Key {
+	k, err := seal.ParseKey(seal.Generate())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return k
+}
+
+func TestPlainDataIsSealedOnceAndKeepsWorking(t *testing.T) { // AGT-041
+	dir, cert := makeData(t) // made in clear, as an installation from before this feature
+	if h := anyContains(t, dir, "PRIVATE KEY"); len(h) == 0 {
+		t.Fatal("the fixture should start in clear")
+	}
+	k := mustKey(t)
+	for _, f := range []string{"ca.key", "policy.key", "store.json"} {
+		if changed, err := seal.SealInPlace(filepath.Join(dir, f), k); err != nil || !changed {
+			t.Fatalf("%s: %v %v", f, changed, err)
+		}
+	}
+	if h := anyContains(t, dir, "PRIVATE KEY"); len(h) != 0 {
+		t.Errorf("still in clear: %v", h)
+	}
+	ca, err := pki.LoadOrCreateCAKey(dir, "root", nil, k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ca.Verify(cert, nil); err != nil {
+		t.Errorf("a certificate issued before the encryption no longer verifies: %v", err)
+	}
+	if _, err := store.OpenWithKey(filepath.Join(dir, "store.json"), k); err != nil {
+		t.Fatal(err)
 	}
 }

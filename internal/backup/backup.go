@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/audit"
+	"github.com/larytet/zscaler/internal/seal"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -243,9 +244,9 @@ func Verify(in string) (Manifest, error) { return walk(in, nil) }
 // Restore checks the file, then puts its content into dataDir. A directory that already holds data is
 // refused unless force is set; with force it is moved aside to <dir>.before-restore-<time>, never
 // overwritten, and the new one is built next to it and renamed into place, so a failure in the middle
-// leaves the old data where it was. The restored store and audit chain are checked before it returns.
-// Stop the control plane first.
-func Restore(in, dataDir string, force bool, now time.Time) (Manifest, string, error) {
+// leaves the old data where it was. The restored store and audit chain are checked before it returns;
+// a sealed store needs the master key to be checked, and a wrong key is refused. Stop the control plane first.
+func Restore(in, dataDir string, force bool, now time.Time, key *seal.Key) (Manifest, string, error) {
 	absData, err := filepath.Abs(dataDir)
 	if err != nil {
 		return Manifest{}, "", err
@@ -276,7 +277,7 @@ func Restore(in, dataDir string, force bool, now time.Time) (Manifest, string, e
 		cleanup()
 		return Manifest{}, "", err
 	}
-	if _, err := store.Open(filepath.Join(stage, "store.json")); err != nil {
+	if _, err := store.OpenWithKey(filepath.Join(stage, "store.json"), key); err != nil {
 		cleanup()
 		return Manifest{}, "", fmt.Errorf("backup: the restored store does not load: %w", err)
 	}

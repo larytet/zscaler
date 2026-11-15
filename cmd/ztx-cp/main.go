@@ -27,6 +27,7 @@ import (
 	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/seal"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -46,6 +47,7 @@ func main() {
 	bootFile := flag.String("bootstrap-token-file", "", "file holding the bootstrap token (or set ZTX_BOOTSTRAP_TOKEN)")
 	retentionDays := flag.Int("log-retention-days", 183, "how many days decision records are kept on disk (1 to 3650; the default is six months)")
 	devTTL := flag.Duration("device-cert-ttl", 0, "lifetime of device certificates (default 12h); a shorter life ends a revoked or disabled user's access sooner but renews more often. At least 30s, at most 7 days")
+	keyFile := flag.String("master-key-file", "", "file holding the master key that encrypts the CA key, the signing key and the store at rest (or set ZTX_MASTER_KEY); make one with `ztx-cp gen-master-key`, keep it off this disk, and keep a copy: without it the data cannot be read")
 	minAgent := flag.String("min-agent-version", "", "agents older than this refuse to start sessions")
 	smtpAddr := flag.String("smtp-addr", "", "SMTP server host:port for alert emails (empty disables email)")
 	smtpFrom := flag.String("smtp-from", "alerts@localhost", "From address for alert emails")
@@ -66,15 +68,32 @@ func main() {
 	if err != nil || boot == "" {
 		log.Fatal("a bootstrap token is required (--bootstrap-token-file or ZTX_BOOTSTRAP_TOKEN)")
 	}
-	ca, err := pki.LoadOrCreateCA(*data, "smb-ztx root", nil)
+	mk, err := masterKey(*keyFile)
 	if err != nil {
 		log.Fatal(err)
 	}
-	signer, err := pki.LoadOrCreateSigner(*data)
+	if mk != nil { // encrypt what is still in clear, once; a sealed file is only checked against this key
+		for _, f := range []string{"ca.key", "policy.key", "store.json"} {
+			changed, err := seal.SealInPlace(filepath.Join(*data, f), mk)
+			if err != nil {
+				log.Fatal(err)
+			}
+			if changed {
+				log.Printf("encrypted %s at rest with the master key (copies of the old clear file may remain on the disk: a disk image taken earlier still holds them)", f)
+			}
+		}
+	} else if b, err := os.ReadFile(filepath.Join(*data, "ca.key")); err != nil || !seal.IsSealed(b) {
+		log.Printf("WARNING: no master key: the CA key, the signing key and the tenant secrets are stored in clear in %s (see -master-key-file)", *data)
+	}
+	ca, err := pki.LoadOrCreateCAKey(*data, "smb-ztx root", nil, mk)
 	if err != nil {
 		log.Fatal(err)
 	}
-	st, err := store.Open(filepath.Join(*data, "store.json"))
+	signer, err := pki.LoadOrCreateSignerKey(*data, mk)
+	if err != nil {
+		log.Fatal(err)
+	}
+	st, err := store.OpenWithKey(filepath.Join(*data, "store.json"), mk)
 	if err != nil {
 		log.Fatal(err)
 	}

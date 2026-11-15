@@ -27,6 +27,7 @@ import (
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/privacy"
+	"github.com/larytet/zscaler/internal/seal"
 	"github.com/larytet/zscaler/internal/siem"
 	"github.com/larytet/zscaler/internal/tenancy"
 )
@@ -220,21 +221,26 @@ type Store struct {
 
 	mu   sync.RWMutex
 	path string
+	key  *seal.Key // master key; nil means the file is written in clear
 	d    file
 }
 
 // Open loads path if it exists. An empty path keeps the store in memory.
-func Open(path string) (*Store, error) {
-	s := &Store{path: path, d: file{Tenants: map[string]*Tenant{}, Admins: map[string]adminRec{}}}
+func Open(path string) (*Store, error) { return OpenWithKey(path, nil) }
+
+// OpenWithKey opens the store file sealed or plain. With a key every save writes it sealed, so the tenant
+// secrets, the inspection keys and the other private content never sit in clear on disk (GAP-REQ-02).
+func OpenWithKey(path string, k *seal.Key) (*Store, error) {
+	s := &Store{path: path, key: k, d: file{Tenants: map[string]*Tenant{}, Admins: map[string]adminRec{}}}
 	if path == "" {
 		return s, nil
 	}
-	b, err := os.ReadFile(path)
+	b, err := seal.Read(path, k)
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store %s: %w", path, err)
 	}
 	if err := json.Unmarshal(b, &s.d); err != nil {
 		return nil, fmt.Errorf("store %s: %w", path, err)
@@ -257,11 +263,7 @@ func (s *Store) save() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return seal.Write(s.path, b, s.key)
 }
 
 func hash(tok string) string { h := sha256.Sum256([]byte(tok)); return hex.EncodeToString(h[:]) }

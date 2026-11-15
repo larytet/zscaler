@@ -602,7 +602,7 @@ Requirements: ZIA-040 (now Must), ARCH-021, ZPA-074 (web side). (This part was f
 - **Domain fronting.** A request whose `Host` differs from the CONNECT target is refused (421).
 - **Failures are visible.** A device that does not trust the CA, or an app that pins its certificate, fails the handshake; the proxy logs `inspection-handshake-failed` so the admin can add the domain to the exempt list. If a tenant's CA cannot be loaded, inspection stays off for that tenant (an opaque tunnel, never a bad certificate).
 - **Not covered:** WebSockets and other upgrades, HTTP/2, certificate-pinned apps beyond exemptions, installing the CA on devices from the agent, and everything that should build on decryption (DLP, sandbox, capture, developer-tool coverage, handshake snooping).
-- **Risk to note:** the intercept CA key exists on every enforcement node and in the control-plane store file in clear. A compromise of either lets an attacker mint certificates that every device of that tenant trusts. A KMS or HSM and per-node sub-CAs are the fix.
+- **Risk to note:** the intercept CA key exists in memory on every enforcement node and in the control-plane store file (encrypted at rest when a master key is set, S42; in clear otherwise). A compromise of either lets an attacker mint certificates that every device of that tenant trusts. A KMS or HSM and per-node sub-CAs are the fix.
 
 ### D7.1 Inline DLP on inspected uploads (basic)
 

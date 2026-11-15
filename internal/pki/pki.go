@@ -14,12 +14,15 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/larytet/zscaler/internal/seal"
 )
 
 const (
@@ -299,12 +302,21 @@ func (t *Tokens) Stored() []string {
 
 // LoadOrCreateCA keeps the CA key and certificate in dir (ca.key, ca.pem, mode 0600).
 func LoadOrCreateCA(dir, name string, now Clock) (*CA, error) {
+	return LoadOrCreateCAKey(dir, name, now, nil)
+}
+
+// LoadOrCreateCAKey is LoadOrCreateCA with a master key: the CA key file is read sealed or plain and is
+// written sealed when k is not nil.
+func LoadOrCreateCAKey(dir, name string, now Clock, k *seal.Key) (*CA, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
 	kp, cp := filepath.Join(dir, "ca.key"), filepath.Join(dir, "ca.pem")
-	kb, err1 := os.ReadFile(kp)
+	kb, err1 := seal.Read(kp, k)
 	cb, err2 := os.ReadFile(cp)
+	if errors.Is(err1, seal.ErrNeedKey) || errors.Is(err1, seal.ErrWrongKey) {
+		return nil, fmt.Errorf("%s: %w", kp, err1)
+	}
 	if err1 == nil && err2 == nil {
 		kblk, _ := pem.Decode(kb)
 		cblk, _ := pem.Decode(cb)
@@ -331,7 +343,7 @@ func LoadOrCreateCA(dir, name string, now Clock) (*CA, error) {
 		return nil, err
 	}
 	kder, _ := x509.MarshalECPrivateKey(ca.Key)
-	if err := os.WriteFile(kp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder}), 0o600); err != nil {
+	if err := seal.Write(kp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder}), k); err != nil {
 		return nil, err
 	}
 	if err := os.WriteFile(cp, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Cert.Raw}), 0o600); err != nil {
@@ -367,8 +379,17 @@ func VerifierFromPEM(pemBytes []byte, now Clock) (*CA, error) {
 // LoadOrCreateSigner keeps the policy-signing key in dir (policy.key, mode 0600).
 // Enforcement nodes pin the matching public key at enrolment.
 func LoadOrCreateSigner(dir string) (*ecdsa.PrivateKey, error) {
+	return LoadOrCreateSignerKey(dir, nil)
+}
+
+// LoadOrCreateSignerKey is LoadOrCreateSigner with a master key, as LoadOrCreateCAKey.
+func LoadOrCreateSignerKey(dir string, k *seal.Key) (*ecdsa.PrivateKey, error) {
 	p := filepath.Join(dir, "policy.key")
-	if b, err := os.ReadFile(p); err == nil {
+	b, err := seal.Read(p, k)
+	if errors.Is(err, seal.ErrNeedKey) || errors.Is(err, seal.ErrWrongKey) {
+		return nil, fmt.Errorf("%s: %w", p, err)
+	}
+	if err == nil {
 		blk, _ := pem.Decode(b)
 		if blk == nil {
 			return nil, errors.New("pki: policy.key is unreadable")
@@ -378,12 +399,12 @@ func LoadOrCreateSigner(dir string) (*ecdsa.PrivateKey, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, err
 	}
-	der, _ := x509.MarshalECPrivateKey(k)
-	return k, os.WriteFile(p, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0o600)
+	der, _ := x509.MarshalECPrivateKey(priv)
+	return priv, seal.Write(p, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), k)
 }
 
 // PublicPEM encodes an ECDSA public key for distribution.
