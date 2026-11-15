@@ -360,3 +360,34 @@ Makefile targets             test, test-race, test-e2e, fuzz, bench, vuln
 ```
 
 CI stages: build, vet and staticcheck, L1 to L3 with race, L4 fast subset, then nightly: full L4, fuzz, soak, performance, vulnerability scan.
+
+---
+
+## T4. Workspace browser (requirements v0.6, DESIGN D8)
+
+Written with the design, before any implementation. IDs continue the plan's scheme. "Stub browser" means a small program standing in for Chromium that records its command line, environment and working files and exits on request; it lets the launcher be tested without a real browser. Items marked **manual** need a person and a real browser.
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| WBT-001 | L1 | P1 | Policy condition `workspace` true and false, with and without the action `isolate`, in web and private rules | Matches only the intended side; `isolate` outside the workspace is `deny` with reason `workspace-required` | WB-008 |
+| WBT-002 | L1 | P1 | Validation: `isolate` in a rule with no domains, categories or apps; unknown values | Rejected | WB-008 |
+| WBT-003 | L1 | P1 | Certificate role `workspace`: issued only to an enrolled workspace; verified; cannot be used where a connector or EN certificate is required, and a plain `device` certificate cannot claim it | Role is read from the certificate only | WB-004 |
+| WBT-004 | L3 | P1 | EN sets `Workspace` from the role for broker sessions and web requests; a `device` certificate sets it false whatever the client sends | Decision and log show `workspace` correctly | WB-004, WB-009 |
+| WBT-005 | L4 | P1 | A `sensitive` segment from a plain agent | Denied with a message saying how to get the workspace | WB-008 |
+| WBT-006 | L4 | P1 | The same segment from the workspace | Allowed; record shows `workspace: true` | WB-008 |
+| WBT-007 | L3 | P1 | Launcher with the stub browser: profile directory, proxy flag, QUIC and ECH switched off, no extension or debugging flags, no sync, environment contains no personal profile path | All present; none of the forbidden flags | WB-002, WB-003, WB-005 |
+| WBT-008 | L3 | P1 | Launcher refuses a request to start with extra browser flags (`--remote-debugging-port`, `--load-extension`, `--user-data-dir` elsewhere) | Refuses and says why | WB-005 |
+| WBT-009 | L3 | P1 | The per-launch proxy credential: requests without it, with a stale one, and from another process | Refused; the credential is not written to disk or logs | WB-003 |
+| WBT-010 | L3 | P1 | Sign-out, revoke, admin erase and idle timeout | Browser process ends and the profile directory is gone | WB-002 |
+| WBT-011 | L3 | P1 | Posture loop with a fake clock: pass, fail, unknown, stale | Fail, unknown and stale lock the workspace within one cycle; recovery needs a fresh pass | WB-007 |
+| WBT-012 | L3 | P2 | Control plane unreachable longer than the grace period | Workspace locks; before the grace period it keeps working | WB-011 |
+| WBT-013 | L4 | P1 | Revoke the device while a workspace session is open | Session ends within seconds; the profile is erased | WB-004 |
+| WBT-014 | L4 | P2 | Secret scan over launcher output and logs | No tokens, credentials or certificate keys | WB-009 |
+| WBT-015 | **manual** | P1 | Install on a clean Windows, macOS and Linux machine by someone who did not build it, from an invitation link | Under 5 minutes, no administrator rights where the OS allows; timed and written down | WB-001 |
+| WBT-016 | **manual** | P1 | With a real Chromium: personal bookmarks, passwords, sync and extensions are absent; a personal browser window on the same device is unaffected | Confirmed by observation | WB-002 |
+| WBT-017 | **manual** | P1 | With a real Chromium: inspected HTTPS works inside the workspace and the personal browser still shows the original certificates | Confirmed; the device's system trust store is unchanged (compare before and after) | WB-003 |
+| WBT-018 | **manual** | P1 | Clipboard, download, upload, print and drag-and-drop controls, per policy | Each blocked or allowed as configured; blocked events logged without content | WB-006 |
+| WBT-019 | **manual** | P2 | Screenshot and screen-share behaviour on each OS | Documented per OS; the console states what is active | WB-006, WB-013 |
+| WBT-020 | **manual** | P1 | The first-run screen and the admin console state the limits | Text matches WB-013 | WB-013 |
+
+Entry for implementation slice W1: WBT-001 to WBT-014 written as failing tests first. Exit for RB-WB: all P1 automated tests pass on three consecutive runs and WBT-015 to WBT-018 and WBT-020 have been done by at least two people who did not build the workspace. Until then the workspace browser is described everywhere as "not yet verified on real browsers".

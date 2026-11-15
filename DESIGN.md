@@ -539,6 +539,8 @@ The test plan carries the full matrix. Summary of which design part covers which
 
 ## D6. Should-have (S) requirements: coverage by RB1
 
+> **Superseded.** Requirements v0.5 promoted many of the items listed here to Must, and v0.6 decided the isolation question below (workspace browser, D8). This part is kept as a record of the RB1 design position. STATUS.md and ROADMAP.md are the current statement of what is built.
+
 REQUIREMENTS.md has 81 requirements marked (S). RB1 is built from the Must (M) set (D1.2). This part states, for every (S) item, whether the design covers it, so that nothing is silently dropped. The test plan (TEST-PLAN.md section on scope) already lists the same exclusions as out of scope.
 
 **Result: no (S) requirement is fully implemented in RB1.** Seven are partly supported by RB1 mechanisms, and the rest are deferred.
@@ -585,13 +587,13 @@ Browser isolation (ZIA-024, ZIA-022d, ZPA-055) is the highest-value deferred (S)
 
 ### D6.4 Open question added
 
-5. Whether the first isolation build is cloud-streamed or a workspace browser (D6.3).
+5. ~~Whether the first isolation build is cloud-streamed or a workspace browser (D6.3).~~ **Closed by requirements v0.6: a workspace browser (D8).** Cloud-streamed isolation is class C (ZIA-024b).
 
 ---
 
-## D6. TLS inspection (added after v1.0, requirements v0.5)
+## D7. TLS inspection (added after v1.0, requirements v0.5)
 
-Requirements: ZIA-040 (now Must), ARCH-021, ZPA-074 (web side). D3.5 above still describes the original no-decryption proxy, which remains the behaviour when inspection is off.
+Requirements: ZIA-040 (now Must), ARCH-021, ZPA-074 (web side). (This part was first numbered D6, which clashed with the older D6 above.) D3.5 above still describes the original no-decryption proxy, which remains the behaviour when inspection is off.
 
 - **Per-tenant intercept CA** (ARCH-021). Created when a tenant first enables inspection, never shared, never regenerated on re-enable (devices keep trusting it). The certificate is downloadable by the tenant's admins; the key travels to enforcement nodes inside the signed snapshot (D5.5).
 - **Decision flow for CONNECT.** The host-level web policy runs first, as before: deny and warn on the host still apply. If the request is allowed and the tenant has inspection on and the host is not on the exempt list, the proxy answers `200`, completes a TLS handshake with the device using a leaf certificate minted for the CONNECT host (cached, 12 hours), and serves the decrypted requests.
@@ -602,6 +604,69 @@ Requirements: ZIA-040 (now Must), ARCH-021, ZPA-074 (web side). D3.5 above still
 - **Not covered:** WebSockets and other upgrades, HTTP/2, certificate-pinned apps beyond exemptions, installing the CA on devices from the agent, and everything that should build on decryption (DLP, sandbox, capture, developer-tool coverage, handshake snooping).
 - **Risk to note:** the intercept CA key exists on every enforcement node and in the control-plane store file in clear. A compromise of either lets an attacker mint certificates that every device of that tenant trusts. A KMS or HSM and per-node sub-CAs are the fix.
 
-### D6.1 Inline DLP on inspected uploads (basic)
+### D7.1 Inline DLP on inspected uploads (basic)
 
 Requirement DATA-001 (basic), AI-003 (request side). Package `dlp` holds the detectors; a web rule's `dlp` condition names the data types it matches. The proxy scans a POST, PUT or PATCH body only when the tenant's web policy has at least one such rule, reads at most 1 MiB (larger bodies are forwarded as they came and the gap is logged), evaluates the policy with the findings, and puts the body back for forwarding. Findings are type names; the data itself is never returned, stored or logged. Detectors validate with a checksum where one exists (Luhn for cards, mod-97 for IBANs) and are written as single-pass scanners because a regular-expression version ran at 1.6 MB/s and the bodies are attacker-controlled; a hostile-input test bounds the worst case.
+
+---
+
+## D8. Workspace browser (requirements v0.6, WB-001..WB-013)
+
+Decision from the product owner, 2026-11-15: unmanaged devices and browser isolation are delivered by a **workspace browser** that runs on the user's own device. This replaces D6.3's open choice. What follows is the design position; items marked **PROTOTYPE** are not settled until a working launcher has been tried against a real browser (see the risks in D8.9).
+
+### D8.1 What we build, and what we do not
+
+We do **not** fork or write a browser. The workspace is a **launcher** (`ztx-workspace`, in the agent code base) that starts a Chromium-family browser with an isolated profile and fixed settings, plus a small **workspace extension** for in-page controls. Everything the launcher can enforce is limited to what the browser exposes through launch flags, profile settings, enterprise policy and extension APIs. WB-013 requires us to say so plainly.
+
+### D8.2 Components
+
+| Component | Does | Runs |
+|---|---|---|
+| Launcher | Enrols the workspace credential, prepares the profile, starts the browser, runs the posture loop, erases the profile | On the device, no administrator rights where possible |
+| Isolated profile | Separate user-data directory and (PROTOTYPE) separate trust store | `<state dir>/workspace/profile` |
+| Local workspace proxy | The agent's existing loopback HTTP proxy, with a per-launch random credential so other local programs cannot borrow the session | On the device, loopback only |
+| Workspace extension | Clipboard, download, upload, drag-and-drop and print controls, watermark, extension allow-list reporting | Inside the browser |
+| Enforcement node | Recognises workspace sessions, applies the `workspace` policy condition and the `isolate` action | Unchanged apart from policy |
+
+### D8.3 Identity: a workspace is a device role
+
+At workspace enrolment the control plane issues a short-lived device certificate with a new role, `workspace` (alongside `device`, `connector`, `en`). The role is in the certificate, so a plain browser or a plain agent cannot claim to be a workspace. The enforcement node sets `Request.Workspace = true` for connections made with such a certificate, for both private-app sessions (broker) and web requests (proxy). Revocation, expiry and renewal work as for any device certificate (D4.4).
+
+### D8.4 Policy
+
+- New rule condition `workspace` (true or false) in private and web policies.
+- The reserved action `isolate` (D6.3) becomes real: for a **web** rule it means "allow only inside the workspace"; outside it, the decision is `deny` with a block page that tells the user how to install the workspace browser (WB-008).
+- Segment class `sensitive` (new, next to `standard` and `admin`): the safe-defaults pack adds a rule that allows `sensitive` apps only when `workspace` is true.
+- Decision records gain `workspace: true|false`. The simulator replays `workspace` from the record.
+
+### D8.5 Forced path (WB-003)
+
+The launcher starts the browser with a fixed proxy (the local workspace proxy with its per-launch credential), with QUIC and encrypted client hello switched off so nothing bypasses the proxy, with proxy settings locked, and without the browser's own DNS-over-HTTPS. The local proxy relays to the enforcement node over mTLS exactly as the agent's HTTP proxy does today.
+
+**PROTOTYPE, trust of the inspection CA inside the workspace only (WB-003).** The personal device's system trust store must not change. Candidate approaches, in the order to try:
+1. Point the browser at a profile-private certificate store (on Linux by running it with a private home directory so its NSS database lives in the profile; equivalent isolation on macOS and Windows is unknown).
+2. Ship a bundled Chromium that reads a managed-policy directory inside the bundle and trust the CA by policy.
+3. Fallback: trust the proxy's leaf-certificate public key with the browser's SPKI allow-list flag. Weaker (it is a test flag, and the proxy's leaf key would have to be stable and shared with the launcher).
+
+### D8.6 Data controls (WB-006) and what is not possible
+
+Enforced by the workspace extension and browser policy: copy and paste in and out (content-script checks on clipboard events), downloads redirected to a workspace-only folder or blocked, uploads blocked per policy, printing disabled, drag-and-drop between pages and the desktop blocked, visible watermark. **Screenshot and screen-share blocking is not achievable with a stock browser** on Linux or macOS; on Windows it needs a native window (display affinity), which a stock Chromium does not give us. The requirement stays, marked "where the operating system and shell allow", and the console states per device which controls are active.
+
+### D8.7 Extensions and debugging (WB-005)
+
+Allow-list only. The launcher refuses to start the browser with extra extension flags, remote-debugging ports or developer mode, and checks the profile's extension list every posture cycle. **PROTOTYPE:** recent branded Chrome builds restrict loading an extension from the command line `[I: to be verified against current Chrome]`. If that blocks WB-001 (install without administrator rights), the workspace must ship a Chromium it controls, or require a one-time administrator install for the policy file. This decision changes WB-001 and must be taken before the extension is written.
+
+### D8.8 Posture and locking (WB-007, WB-011)
+
+The launcher reuses the agent's posture probes (D4.3) plus the browser's version, every 90 seconds. Below baseline: close the browser, erase the profile if configured, and refuse to restart until compliant. Losing contact with the control plane for longer than the grace period (default 5 minutes) locks the workspace the same way.
+
+### D8.9 Phasing and risks
+
+| Slice | Content | Tested with |
+|---|---|---|
+| W1 | Launcher with an isolated profile, forced proxy with per-launch credential, `workspace` certificate role, `workspace` condition and `isolate` action, decision records, profile erase, 90-second posture lock | A stub browser that records flags, environment and the profile directory, plus the real binaries |
+| W2 | Trust of the inspection CA inside the workspace (D8.5 prototype) | Real Chromium, by hand first |
+| W3 | Workspace extension with clipboard, download, upload, print controls and watermark | Real Chromium, browser automation |
+| W4 | Installers per OS, auto-update, minimum version | Clean machines, people |
+
+Risks: the Chrome extension-loading restriction (D8.7); no portable trust-store isolation (D8.5); screenshot blocking (D8.6); a browser the user can also reach through the operating system's own copy of Chrome, which the policy cannot stop (WB-013). A compromised operating system defeats every control here.
