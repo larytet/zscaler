@@ -1,8 +1,12 @@
 package webproxy
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
+	"fmt"
+	"html"
+	"io"
 	"net"
 	"net/http"
 	"strconv"
@@ -11,6 +15,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 )
@@ -116,10 +121,21 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	pol := p.State.Policy(id.Tenant, policy.Web)
 	d := policy.Decision{Action: policy.Deny, Reason: "no-policy"}
 	cats := p.Classifier.Categories(host)
+	var hits []string
 	if pol != nil {
+		if pol.UsesDLP() && q.Body != nil && q.Body != http.NoBody && (q.Method == "POST" || q.Method == "PUT" || q.Method == "PATCH") {
+			var skipped bool
+			hits, skipped = scanBody(q)
+			if skipped {
+				note := rec // visible in the log: the rule could not see this body
+				note.Action, note.Reason = "info", "dlp-skipped-too-large"
+				p.Log(note)
+			}
+		}
 		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-			Device: policy.Device{ID: id.Device}, Inspected: true, Path: q.URL.Path, Method: q.Method})
+			Device: policy.Device{ID: id.Device}, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits})
 		rec.Version = pol.Version
+		rec.DLP = hits
 	}
 	rec.Rule, rec.Reason = d.RuleID, d.Reason
 	ref := refID()
@@ -127,6 +143,10 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	case policy.Deny:
 		rec.Action = "deny"
 		p.Log(rec)
+		if len(hits) > 0 && d.RuleID != "" && ruleUsesDLP(pol, d.RuleID) {
+			dlpBlockPage(w, host, hits, ref)
+			return
+		}
 		blockPage(w, host, cats, ref)
 		return
 	case policy.Warn:
@@ -199,4 +219,54 @@ type closeNotify struct {
 func (c *closeNotify) Close() error {
 	c.once.Do(func() { close(c.done) })
 	return c.Conn.Close()
+}
+
+// MaxScanBytes is the largest request body that is scanned. A larger body is forwarded
+// unscanned and the proxy logs dlp-skipped-too-large, so the gap is visible.
+const MaxScanBytes = 1 << 20
+
+// scanBody reads at most MaxScanBytes of the request body, scans it, and puts the body
+// back so it can still be forwarded. skipped is true when the body was too large to scan.
+func scanBody(q *http.Request) (hits []string, skipped bool) {
+	if q.ContentLength > MaxScanBytes {
+		return nil, true
+	}
+	buf, err := io.ReadAll(io.LimitReader(q.Body, MaxScanBytes+1))
+	rest := q.Body
+	if len(buf) > MaxScanBytes {
+		// too large: do not scan a prefix and call it clean; forward everything as it came
+		q.Body = readCloser{io.MultiReader(bytes.NewReader(buf), rest), rest}
+		return nil, true
+	}
+	q.Body = io.NopCloser(bytes.NewReader(buf))
+	q.ContentLength = int64(len(buf))
+	if err != nil {
+		return nil, false
+	}
+	return dlp.Scan(buf), false
+}
+
+type readCloser struct {
+	io.Reader
+	c io.Closer
+}
+
+func (r readCloser) Close() error { return r.c.Close() }
+
+func ruleUsesDLP(p *policy.Policy, id string) bool {
+	for _, r := range p.Rules {
+		if r.ID == id {
+			return len(r.Match.DLP) > 0
+		}
+	}
+	return false
+}
+
+func dlpBlockPage(w http.ResponseWriter, host string, types []string, ref string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Upload blocked</h1>
+<p>What you sent to %s appears to contain sensitive data (%s) and your organisation does not allow that.</p>
+<p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
+		html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
 }

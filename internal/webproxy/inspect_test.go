@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -231,4 +232,118 @@ func TestInspectedWarnShowsAPageOverHTTPS(t *testing.T) {
 func (r *rig) leafKeyForTest() *ecdsa.PrivateKey {
 	r.keyOnce.Do(func() { r.key, _ = ecdsa.GenerateKey(elliptic.P256(), rand.Reader) })
 	return r.key
+}
+
+func dlpRig(t *testing.T) (*rig, *httptest.Server, *tls.Conn, *bufio.Reader, *received) {
+	r := newRig(t)
+	got := &received{}
+	o := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		b, _ := io.ReadAll(q.Body)
+		got.set(b)
+		fmt.Fprintf(w, "origin got %d bytes", len(b))
+	}))
+	t.Cleanup(o.Close)
+	r.exemptAdd(hostport(o.URL))
+	r.up.AddCert(o.Certificate())
+	enableInspection(r)
+	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 6, Rules: []policy.Rule{
+		{ID: "no-pii", Priority: 1, Action: policy.Deny, Match: policy.Match{DLP: []string{"credit-card", "us-ssn", "aws-access-key"}}}}}
+	if err := pol.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	r.st.set(func(s *state) { s.pol = pol })
+	roots := x509.NewCertPool()
+	roots.AddCert(r.tenCA.Cert)
+	c, br, err := r.tunnel(t, hostport(o.URL), roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, o, c, br, got
+}
+
+type received struct {
+	mu sync.Mutex
+	b  []byte
+}
+
+func (r *received) set(b []byte) { r.mu.Lock(); r.b = b; r.mu.Unlock() }
+func (r *received) get() []byte  { r.mu.Lock(); defer r.mu.Unlock(); return r.b }
+
+func TestDLPBlocksSensitiveUploadsAndPassesCleanOnes(t *testing.T) { // DATA-001 (basic), AI-003 (basic)
+	r, o, c, br, got := dlpRig(t)
+	host := hostport(o.URL)
+	secret := `{"name":"Alice","card":"4111 1111 1111 1111"}`
+	code, body := get(t, c, br, "POST", host, "/submit", secret)
+	if code != 403 || !strings.Contains(body, "credit-card") || strings.Contains(body, "4111") {
+		t.Fatalf("a card number was not blocked, or the block page echoed it: %d %q", code, body)
+	}
+	if len(got.get()) != 0 {
+		t.Fatal("the origin received a body that should have been blocked")
+	}
+	clean := `{"name":"Alice","note":"order 42 shipped on 2026-11-15"}`
+	if code, body := get(t, c, br, "POST", host, "/submit", clean); code != 200 || body != fmt.Sprintf("origin got %d bytes", len(clean)) || string(got.get()) != clean {
+		t.Fatalf("a clean upload must arrive intact: %d %q got=%q", code, body, got.get())
+	}
+	if code, _ := get(t, c, br, "POST", host, "/k", "aws_key=AKIAIOSFODNN7EXAMPLE"); code != 403 {
+		t.Fatalf("cloud key not blocked: %d", code)
+	}
+	if code, _ := get(t, c, br, "GET", host, "/card=4111111111111111", ""); code != 200 {
+		t.Fatalf("only request bodies are scanned: %d", code)
+	}
+	time.Sleep(50 * time.Millisecond)
+	rec := r.find(func(x broker_Record) bool { return x.Rule == "no-pii" && x.Action == "deny" })
+	if rec == nil || len(rec.DLP) != 1 || rec.DLP[0] != "credit-card" {
+		t.Fatalf("the log must name the data type: %+v", rec)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.logs {
+		if s := fmt.Sprint(l); strings.Contains(s, "4111") || strings.Contains(s, "AKIA") {
+			t.Fatalf("sensitive data reached the decision log: %s", s)
+		}
+	}
+}
+
+func TestDLPChunkedBodies(t *testing.T) {
+	_, o, c, br, got := dlpRig(t)
+	host := hostport(o.URL)
+	fmt.Fprintf(c, "POST /c HTTP/1.1\r\nHost: %s\r\nTransfer-Encoding: chunked\r\n\r\n8\r\ncard=411\r\n8\r\n11111111\r\n5\r\n11111\r\n0\r\n\r\n", host)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 403 || len(got.get()) != 0 {
+		t.Fatalf("a card split across chunks was not caught: %d", resp.StatusCode)
+	}
+}
+
+func TestDLPOversizeBodyIsForwardedAndTheGapIsLogged(t *testing.T) {
+	r, o, c, br, got := dlpRig(t)
+	host := hostport(o.URL)
+	big := strings.Repeat("x", MaxScanBytes+10) + " 4111111111111111"
+	code, body := get(t, c, br, "POST", host, "/big", big)
+	if code != 200 || body != fmt.Sprintf("origin got %d bytes", len(big)) || len(got.get()) != len(big) {
+		t.Fatalf("an oversize body must still arrive complete: %d %q (%d bytes)", code, body, len(got.get()))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if r.find(func(x broker_Record) bool { return x.Reason == "dlp-skipped-too-large" }) == nil {
+		t.Fatal("the unscanned body was not logged, so the gap would be invisible")
+	}
+}
+
+func TestNoScanningWhenNoRuleUsesDLP(t *testing.T) {
+	r := newRig(t)
+	o := inspectOrigin(t, r)
+	enableInspection(r) // the rig's default policy has no dlp rules
+	roots := x509.NewCertPool()
+	roots.AddCert(r.tenCA.Cert)
+	c, br, err := r.tunnel(t, hostport(o.URL), roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := get(t, c, br, "POST", hostport(o.URL), "/x", "4111111111111111"); code != 200 {
+		t.Fatalf("without a dlp rule nothing is blocked on content: %d", code)
+	}
 }

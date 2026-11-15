@@ -417,3 +417,31 @@ func TestPathRuleValidation(t *testing.T) {
 		t.Fatal("paths accepted in a private policy")
 	}
 }
+
+func TestDLPCondition(t *testing.T) { // DATA-001 (basic)
+	p := mk(t, Web, Rule{ID: "no-pii", Priority: 1, Action: Deny, Match: Match{DLP: []string{"credit-card", "us-ssn"}}})
+	ev := func(inspected bool, hits ...string) Action {
+		return p.Evaluate(Request{Kind: Web, Host: "x.test", Now: t0, Inspected: inspected, DLPHits: hits}).Action
+	}
+	if ev(true, "credit-card") != Deny || ev(true, "aws-access-key", "us-ssn") != Deny {
+		t.Fatal("a listed data type must match")
+	}
+	if ev(true, "aws-access-key") != Allow || ev(true) != Allow {
+		t.Fatal("an unlisted or absent data type must not match")
+	}
+	if !p.UsesDLP() {
+		t.Fatal("UsesDLP")
+	}
+	plain := mk(t, Web, Rule{ID: "x", Priority: 1, Action: Deny, Match: Match{Domains: []string{"x.test"}}})
+	if plain.UsesDLP() {
+		t.Fatal("scanning must be off when no rule asks for it")
+	}
+	for name, pol := range map[string]*Policy{
+		"unknown type":  {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Deny, Match: Match{DLP: []string{"made-up"}}}}},
+		"private rules": {Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Match: Match{Groups: []string{"g"}, DLP: []string{"credit-card"}}}}},
+	} {
+		if errs := Validate(pol, nil); len(errs) == 0 {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}
