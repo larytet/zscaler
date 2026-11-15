@@ -3597,6 +3597,56 @@
         ]
       }
     },
+    "/v1/users/{id}/offboard": {
+      "post": {
+        "operationId": "offboard",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Offboard",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
     "/v1/users/{id}/restrict": {
       "post": {
         "operationId": "restrictUser",

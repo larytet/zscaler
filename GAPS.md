@@ -65,7 +65,7 @@ These are written as proposals in REQUIREMENTS.md section 20. None is built. The
 | G21 | GAP-REQ-03 | Break-glass recovery when the last owner token is lost | proposed |
 | G22 | GAP-REQ-04 | Rate limits and lockout on admin, enrolment and sign-in | proposed |
 | G23 | GAP-REQ-05 | Key and certificate rotation and a compromise procedure | proposed |
-| G24 | GAP-REQ-07 | "Person left" in one action with a checklist | proposed |
+| G24 | GAP-REQ-07 | "Person left" in one action with a checklist | done: S40 (first, in the order the product owner chose: 07, 01, 02, 05, then the rest) |
 | G25 | GAP-REQ-06, 08, 09, 10, 11 | Clock accuracy, upgrades and version skew, console accessibility, IPv6, breach notification (should-level) | proposed |
 
 ## Not feasible without a new subsystem or an outside party (stays a gap)

@@ -100,6 +100,7 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "POST /v1/devices/{id}/revoke", support, a.revokeDevice)
 	a.route(m, "GET /v1/users", read, a.listUsers)
 	a.route(m, "POST /v1/users/{id}/disable", write, a.disableUser)
+	a.route(m, "POST /v1/users/{id}/offboard", write, a.offboard)
 	a.route(m, "POST /v1/users/{id}/restrict", support, a.restrictUser)
 	a.route(m, "POST /v1/users/{id}/unrestrict", support, a.unrestrictUser)
 	a.route(m, "GET /v1/audit", audit, a.listAudit)

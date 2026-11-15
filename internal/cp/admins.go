@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/larytet/zscaler/internal/approvals"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -129,4 +130,66 @@ func (a *API) me(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error)
 		}
 	}
 	return map[string]any{"name": c.actor, "role": c.role, "permissions": perms}, nil
+}
+
+// offboard is the "person left" action (GAP-REQ-07): one call ends the account, the devices, the access
+// grants and the open access requests, and answers with a checklist of what it ended and what it cannot
+// reach. The pieces are the same ones the separate disable and revoke calls use.
+func (a *API) offboard(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id := r.PathValue("id")
+	rep, err := a.Store.Offboard(c.tenant, id)
+	if err != nil {
+		return nil, err
+	}
+	if a.OnDisableUser != nil {
+		for _, s := range rep.Identifiers {
+			a.OnDisableUser(c.tenant, s) // close their sessions now
+		}
+		a.OnDisableUser(c.tenant, id)
+	}
+	if a.OnRevokeDevice != nil {
+		for _, d := range rep.Devices {
+			a.OnRevokeDevice(c.tenant, d)
+		}
+	}
+	denied := 0
+	if a.Approvals != nil {
+		ids := map[string]bool{}
+		for _, s := range rep.Identifiers {
+			ids[s] = true
+		}
+		now := a.Store.Time()
+		for _, q := range a.Approvals.List(c.tenant, approvals.Pending) {
+			if ids[strings.ToLower(q.User)] {
+				if _, err := a.Approvals.Decide(c.tenant, q.ID, approvals.Denied, c.actor, time.Time{}, now); err == nil {
+					denied++
+				}
+			}
+		}
+	}
+	type step struct {
+		Step   string `json:"step"`
+		Done   bool   `json:"done"`
+		Count  int    `json:"count,omitempty"`
+		Detail string `json:"detail"`
+	}
+	acct := "disabled; their sessions are closed"
+	if rep.WasDisabled {
+		acct = "was already disabled; sessions closed again"
+	}
+	steps := []step{
+		{"account", true, 0, acct},
+		{"devices", true, len(rep.Devices), "revoked and kept, so their certificates stay refused (devices already revoked are not counted)"},
+		{"access grants", true, rep.Grants, "temporary approved access ended"},
+		{"access requests", true, denied, "waiting requests refused"},
+		{"identity provider record", true, 0, map[bool]string{true: "the provisioned user was marked inactive here", false: "no provisioned user to change"}[rep.SCIMDeactived]},
+		{"AI agents", false, 0, "not covered: agent identities have no owner recorded, so none can be found from the person. Check the agent list (GET /v1/ai-agents) and remove what they set up."},
+		{"other services", false, 0, "not covered: this product cannot end their sign-in at the identity provider, other cloud services, shared passwords or keys. Disable them there too."},
+	}
+	a.log(c, "user.offboard", id, nil, map[string]any{"devices": len(rep.Devices), "grants": rep.Grants, "requests": denied})
+	return map[string]any{
+		"user":         id,
+		"steps":        steps,
+		"takes_effect": "New connections are refused at once. Enforcement nodes pick the change up at their next poll (every 2 seconds by default). A node that cannot reach the control plane keeps its last state until that state is stale.",
+	}, nil
 }
