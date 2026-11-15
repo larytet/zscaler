@@ -624,7 +624,7 @@ We do **not** fork or write a browser. The workspace is a **launcher** (`ztx-wor
 |---|---|---|
 | Launcher | Enrols the workspace credential, prepares the profile, starts the browser, runs the posture loop, erases the profile | On the device, no administrator rights where possible |
 | Isolated profile | Separate user-data directory and (PROTOTYPE) separate trust store | `<state dir>/workspace/profile` |
-| Local workspace proxy | The agent's existing loopback HTTP proxy, with a per-launch random credential so other local programs cannot borrow the session | On the device, loopback only |
+| Local workspace proxy | The agent's existing loopback proxies (SOCKS for `.ztx` apps, HTTP for the web) on ephemeral ports chosen at launch, served together with a proxy auto-config file. **A per-launch credential is not possible with command-line flags** (Chrome has no flag for proxy credentials); the workspace extension (W3) will supply one through the proxy-authentication event. Until then any program on the same device can use these ports for as long as the workspace runs, which is the same exposure the plain agent's proxies already have | On the device, loopback only |
 | Workspace extension | Clipboard, download, upload, drag-and-drop and print controls, watermark, extension allow-list reporting | Inside the browser |
 | Enforcement node | Recognises workspace sessions, applies the `workspace` policy condition and the `isolate` action | Unchanged apart from policy |
 
@@ -641,7 +641,7 @@ At workspace enrolment the control plane issues a short-lived device certificate
 
 ### D8.5 Forced path (WB-003)
 
-The launcher starts the browser with a fixed proxy (the local workspace proxy with its per-launch credential), with QUIC and encrypted client hello switched off so nothing bypasses the proxy, with proxy settings locked, and without the browser's own DNS-over-HTTPS. The local proxy relays to the enforcement node over mTLS exactly as the agent's HTTP proxy does today.
+The launcher starts the browser with a fixed proxy-auto-config address (the local workspace proxies on ephemeral ports), with QUIC and encrypted client hello switched off so nothing bypasses the proxy, with proxy settings locked, and without the browser's own DNS-over-HTTPS. The local proxy relays to the enforcement node over mTLS exactly as the agent's HTTP proxy does today.
 
 **PROTOTYPE, trust of the inspection CA inside the workspace only (WB-003).** The personal device's system trust store must not change. Candidate approaches, in the order to try:
 1. Point the browser at a profile-private certificate store (on Linux by running it with a private home directory so its NSS database lives in the profile; equivalent isolation on macOS and Windows is unknown).
@@ -664,7 +664,7 @@ The launcher reuses the agent's posture probes (D4.3) plus the browser's version
 
 | Slice | Content | Tested with |
 |---|---|---|
-| W1 | Launcher with an isolated profile, forced proxy with per-launch credential, `workspace` certificate role, `workspace` condition and `isolate` action, decision records, profile erase, 90-second posture lock | A stub browser that records flags, environment and the profile directory, plus the real binaries |
+| W1 | **Built.** Launcher with an isolated profile, forced proxy (ephemeral ports, no per-launch credential: see D8.2), `workspace` certificate role, `workspace` condition and `isolate` action, decision records, profile erase, 90-second posture lock | A stub browser that records flags, environment and the profile directory, plus the real binaries |
 | W2 | Trust of the inspection CA inside the workspace (D8.5 prototype) | Real Chromium, by hand first |
 | W3 | Workspace extension with clipboard, download, upload, print controls and watermark | Real Chromium, browser automation |
 | W4 | Installers per OS, auto-update, minimum version | Clean machines, people |

@@ -211,6 +211,16 @@ func (a *Agent) install(c *certResp) error {
 
 // Enrol logs the user in and obtains a device certificate.
 func (a *Agent) Enrol(ctx context.Context, openURL func(string) error) error {
+	return a.enrol(ctx, openURL, false)
+}
+
+// EnrolWorkspace is Enrol for the workspace browser: the control plane issues a credential
+// with the workspace role, which lives only a few hours.
+func (a *Agent) EnrolWorkspace(ctx context.Context, openURL func(string) error) error {
+	return a.enrol(ctx, openURL, true)
+}
+
+func (a *Agent) enrol(ctx context.Context, openURL func(string) error, workspace bool) error {
 	pub, err := a.pubB64()
 	if err != nil {
 		return err
@@ -219,7 +229,7 @@ func (a *Agent) Enrol(ctx context.Context, openURL func(string) error) error {
 	if err != nil {
 		return err
 	}
-	c, err := a.post(false, "/enrol/device", map[string]string{"tenant": a.Cfg.Tenant, "id_token": lr.IDToken, "nonce": lr.Nonce, "public_key": pub})
+	c, err := a.post(false, "/enrol/device", map[string]any{"tenant": a.Cfg.Tenant, "id_token": lr.IDToken, "nonce": lr.Nonce, "public_key": pub, "workspace": workspace})
 	if err != nil {
 		return err
 	}

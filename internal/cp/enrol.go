@@ -76,6 +76,9 @@ func (e *Enrol) Handler() http.Handler {
 	return m
 }
 
+// WorkspaceTTL is the lifetime of a workspace credential: short, because it runs on devices we do not manage.
+const WorkspaceTTL = 4 * time.Hour
+
 // InfraTTL is the lifetime of connector and enforcement-node certificates.
 // RB1 has no renewal for them: restart with a fresh token before expiry.
 const InfraTTL = 7 * 24 * time.Hour
@@ -131,6 +134,7 @@ func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
 		IDToken   string `json:"id_token"`
 		Nonce     string `json:"nonce"`
 		PublicKey string `json:"public_key"`
+		Workspace bool   `json:"workspace"` // enrol the workspace browser instead of an agent
 	}
 	if err := decode(r, &in); err != nil {
 		writeErr(w, err)
@@ -169,7 +173,11 @@ func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out, cert, err := e.issue(pub, pki.Identity{Tenant: in.Tenant, Subject: cl.Subject, Device: did, Role: pki.RoleDevice}, pki.DeviceTTL)
+	role, ttl := pki.RoleDevice, pki.DeviceTTL
+	if in.Workspace {
+		role, ttl = pki.RoleWorkspace, WorkspaceTTL
+	}
+	out, cert, err := e.issue(pub, pki.Identity{Tenant: in.Tenant, Subject: cl.Subject, Device: did, Role: role}, ttl)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -194,7 +202,7 @@ func (e *Enrol) peer(r *http.Request) (pki.Identity, *x509.Certificate, bool) {
 // IdP refresh token; tracked in STATUS.md.)
 func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 	id, _, ok := e.peer(r)
-	if !ok || id.Role != pki.RoleDevice {
+	if !ok || (id.Role != pki.RoleDevice && id.Role != pki.RoleWorkspace) {
 		writeErr(w, fail(401, "unauthenticated", "a valid device certificate is required"))
 		return
 	}
@@ -227,7 +235,11 @@ func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	out, cert, err := e.issue(pub, id, pki.DeviceTTL)
+	ttl := pki.DeviceTTL
+	if id.Role == pki.RoleWorkspace {
+		ttl = WorkspaceTTL // a workspace never gets a longer credential by renewing
+	}
+	out, cert, err := e.issue(pub, id, ttl)
 	if err != nil {
 		writeErr(w, err)
 		return

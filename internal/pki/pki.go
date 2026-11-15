@@ -32,6 +32,9 @@ const (
 	RoleDevice    = "device"
 	RoleConnector = "connector"
 	RoleEN        = "en"
+	// RoleWorkspace marks a credential issued to the workspace browser. The role is in the
+	// certificate, so a plain agent cannot claim to be a workspace.
+	RoleWorkspace = "workspace"
 )
 
 type Clock func() time.Time

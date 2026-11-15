@@ -747,3 +747,64 @@ func TestTokenKindsAreNotInterchangeable(t *testing.T) {
 		t.Errorf("EN token was burnt by a misdirected attempt: %d", code)
 	}
 }
+
+func TestWorkspaceEnrolmentAndRenewal(t *testing.T) { // WBT-003
+	e := newEnrolEnv(t)
+	k, pub := newKey(t)
+	tok := e.idp.Sign("k1", e.idp.Good("u1", "u1@example.com", "n1", "all-staff"))
+	code, b := e.post("/enrol/device", map[string]any{"tenant": "a", "id_token": tok, "nonce": "n1", "public_key": pub, "workspace": true}, nil)
+	var out certOut
+	json.Unmarshal(b, &out)
+	if code != 200 {
+		t.Fatalf("%d %s", code, b)
+	}
+	der, _ := base64.StdEncoding.DecodeString(out.Cert)
+	leaf, _ := x509.ParseCertificate(der)
+	id, err := e.ca.Verify(leaf, nil)
+	if err != nil || id.Role != pki.RoleWorkspace {
+		t.Fatalf("%+v %v", id, err)
+	}
+	if ttl := time.Until(leaf.NotAfter); ttl > WorkspaceTTL+time.Minute {
+		t.Fatalf("workspace credential lives %v, more than %v", ttl, WorkspaceTTL)
+	}
+	// renewal keeps the role and the short lifetime
+	code, b = e.post("/enrol/renew", map[string]string{"public_key": pub}, tlsCert(t, out, k))
+	var out2 certOut
+	json.Unmarshal(b, &out2)
+	der2, _ := base64.StdEncoding.DecodeString(out2.Cert)
+	leaf2, _ := x509.ParseCertificate(der2)
+	id2, _ := e.ca.Verify(leaf2, nil)
+	if code != 200 || id2.Role != pki.RoleWorkspace || time.Until(leaf2.NotAfter) > WorkspaceTTL+time.Minute {
+		t.Fatalf("%d %+v ttl %v", code, id2, time.Until(leaf2.NotAfter))
+	}
+	// an ordinary enrolment is not a workspace
+	_, pub2 := newKey(t)
+	tok2 := e.idp.Sign("k1", e.idp.Good("u1", "u1@example.com", "n2", "all-staff"))
+	_, b = e.post("/enrol/device", map[string]any{"tenant": "a", "id_token": tok2, "nonce": "n2", "public_key": pub2}, nil)
+	var out3 certOut
+	json.Unmarshal(b, &out3)
+	der3, _ := base64.StdEncoding.DecodeString(out3.Cert)
+	leaf3, _ := x509.ParseCertificate(der3)
+	if id3, _ := e.ca.Verify(leaf3, nil); id3.Role != pki.RoleDevice {
+		t.Fatalf("an ordinary enrolment produced role %q", id3.Role)
+	}
+	// a workspace certificate may not read connector targets or sync state
+	if c, _ := e.get("/enrol/targets", tlsCert(t, out, k)); c != 401 {
+		t.Fatalf("workspace read connector targets: %d", c)
+	}
+	// safe defaults: sensitive apps need the workspace, standard ones do not
+	priv, _ := SafeDefaults([]broker.Segment{{ID: "std", Class: "standard"}, {ID: "hr", Class: "sensitive"}})
+	if err := priv.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	u := policy.User{Groups: []string{"all-staff"}}
+	if d := priv.Evaluate(policy.Request{Kind: policy.Private, User: u, App: "hr"}); d.Action != policy.Deny || d.Reason != "workspace-required" {
+		t.Fatalf("%+v", d)
+	}
+	if d := priv.Evaluate(policy.Request{Kind: policy.Private, User: u, App: "hr", Workspace: true}); d.Action != policy.Allow {
+		t.Fatalf("%+v", d)
+	}
+	if c, _, _ := e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "s", "group": "g", "class": "sensitive", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}}); c != 200 {
+		t.Fatalf("segment class sensitive refused: %d", c)
+	}
+}

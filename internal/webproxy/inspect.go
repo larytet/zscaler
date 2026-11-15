@@ -107,7 +107,7 @@ func (p *Proxy) inspect(w http.ResponseWriter, r *http.Request, id pki.Identity,
 }
 
 func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.Identity, user policy.User, host, target string, base broker.Record) {
-	rec := base
+	rec := base // carries Workspace from the connection
 	rec.TS = time.Now().UTC()
 	rec.Inspected = true
 	rec.Event = "open"
@@ -133,7 +133,7 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 			}
 		}
 		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-			Device: policy.Device{ID: id.Device}, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits})
+			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits})
 		rec.Version = pol.Version
 		rec.DLP = hits
 	}

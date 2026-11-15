@@ -50,7 +50,7 @@ const tabs = {
       if (f.user.value) q.set('user', f.user.value); if (f.app.value) q.set('app', f.app.value); if (f.action.value) q.set('action', f.action.value);
       const rows = (await api('GET', '/v1/decisions?' + q)).reverse();
       clear(out);
-      out.appendChild(table(['Time', 'Kind', 'User', 'App or host', 'Result', 'Rule', 'Reason'], rows.map((r) => [when(r.ts), r.kind, r.user, r.app || r.target, r.action, r.rule, r.reason])));
+      out.appendChild(table(['Time', 'Kind', 'User', 'App or host', 'Result', 'Rule', 'Reason'], rows.map((r) => [when(r.ts), r.kind + (r.workspace ? ' (workspace)' : ''), r.user, r.app || r.target, r.action, r.rule, r.reason])));
       if (!rows.length) out.appendChild(el('p', 'Nothing matches.', 'muted'));
     };
     const row = el('div', undefined, 'row');

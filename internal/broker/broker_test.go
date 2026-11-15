@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/test/faults"
 	"io"
@@ -926,5 +927,54 @@ func TestHealthRidesInTheSignedPostureReport(t *testing.T) { // DEX-003
 	r.logs.mu.Unlock()
 	if after != before {
 		t.Fatal("a health record was emitted for a report that carried none")
+	}
+}
+
+func TestWorkspaceIsDecidedByTheCertificateRole(t *testing.T) { // WBT-003, WBT-004
+	r := newRig(t)
+	pol := &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny, Version: 11, Rules: []policy.Rule{{
+		ID: "sens", Priority: 1, Action: policy.Isolate, Match: policy.Match{Groups: []string{"finance"}, Apps: []string{"seg-db"}}}}}
+	if err := pol.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	r.st.mu.Lock()
+	r.st.pol = pol
+	r.st.mu.Unlock()
+	r.startConnector("c1", r.allowApp)
+
+	// a plain device certificate: refused, with the reason the console needs
+	plain, _ := r.agent("alice", "d1", true)
+	if _, err := plain.OpenApp("seg-db", "", r.app.port()); err == nil {
+		t.Fatal("a sensitive app was reachable from a plain agent")
+	}
+	if r.logs.find(func(x Record) bool { return x.Reason == "workspace-required" && !x.Workspace }) == nil {
+		t.Fatal("the denial must say workspace-required and workspace=false")
+	}
+	// a workspace certificate for the same person: allowed
+	cr := r.creds(r.ca, pki.RoleWorkspace, "alice", "w1")
+	ws, err := Dial(r.enAddr, cr.tls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	if err := r.sendPosture(ws, cr, "w1", true); err != nil {
+		t.Fatal(err)
+	}
+	s, err := ws.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("the workspace was refused: %v", err)
+	}
+	roundTrip(t, s, []byte("x"))
+	s.Close()
+	if r.logs.find(func(x Record) bool { return x.Action == "allow" && x.Workspace && x.Reason == "workspace" }) == nil {
+		t.Fatal("the allowed session must be logged with workspace=true")
+	}
+	// a client cannot talk its way into the role: the request carries no such field at all
+	var rq openReq
+	if err := json.Unmarshal([]byte(`{"t":"open","app":"seg-db","workspace":true,"port":1}`), &rq); err != nil {
+		t.Fatal(err)
+	}
+	if rq.App != "seg-db" {
+		t.Fatal("unexpected")
 	}
 }

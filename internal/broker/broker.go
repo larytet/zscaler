@@ -101,6 +101,8 @@ type Record struct {
 	Event    string    `json:"event,omitempty"` // "open" or "close"
 	// Inspected is set when the web request was decrypted and checked per URL.
 	Inspected bool `json:"inspected,omitempty"`
+	// Workspace is true when the request came from the workspace browser.
+	Workspace bool `json:"workspace,omitempty"`
 	// DLP lists the data types found in a blocked or logged request body. Never the data.
 	DLP []string `json:"dlp,omitempty"`
 	// Health is set on records of Kind "health": the latest device health numbers.
@@ -273,7 +275,7 @@ func (e *EN) handle(raw net.Conn) {
 	switch id.Role {
 	case pki.RoleConnector:
 		e.serveConnector(id, sess)
-	case pki.RoleDevice:
+	case pki.RoleDevice, pki.RoleWorkspace:
 		e.serveDevice(id, certs[0], sess)
 	default:
 		e.Logger.Info("unexpected role", "role", id.Role)
@@ -392,7 +394,7 @@ func (e *EN) logRec(r Record) {
 }
 
 func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) {
-	rec := Record{Tenant: id.Tenant, Kind: "private", User: id.Subject, Device: id.Device, App: rq.App, Event: "open"}
+	rec := Record{Tenant: id.Tenant, Kind: "private", User: id.Subject, Device: id.Device, App: rq.App, Event: "open", Workspace: id.Role == pki.RoleWorkspace}
 	deny := func(code, reason string) {
 		rec.Action, rec.Reason = "deny", reason
 		e.logRec(rec)
@@ -440,7 +442,7 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		if !ok {
 			u = policy.User{Disabled: true}
 		}
-		return policy.Request{Kind: policy.Private, User: u, App: rq.App, Now: time.Now(),
+		return policy.Request{Kind: policy.Private, User: u, App: rq.App, Now: time.Now(), Workspace: id.Role == pki.RoleWorkspace,
 			Device: policy.Device{ID: id.Device, Revoked: Revoked(e.State, e.Rev, id), Posture: ds.get()}}
 	}
 	d := resolve(e.State, id.Tenant, id.Subject, rq.App, pol.Evaluate(mk()), time.Now())

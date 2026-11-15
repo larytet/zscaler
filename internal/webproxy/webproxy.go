@@ -156,7 +156,7 @@ func (p *Proxy) identify(r *http.Request) (pki.Identity, policy.User, bool) {
 		return pki.Identity{}, policy.User{}, false
 	}
 	id, err := p.verifyCached(r.TLS.PeerCertificates[0])
-	if err != nil || id.Role != pki.RoleDevice || broker.Revoked(p.State, p.Rev, id) {
+	if err != nil || (id.Role != pki.RoleDevice && id.Role != pki.RoleWorkspace) || broker.Revoked(p.State, p.Rev, id) {
 		return id, policy.User{}, false
 	}
 	u, ok := p.State.User(id.Tenant, id.Subject)
@@ -182,7 +182,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ref := refID()
-	rec := broker.Record{TS: time.Now().UTC(), Tenant: id.Tenant, Kind: "web", User: id.Subject, Device: id.Device,
+	ws := id.Role == pki.RoleWorkspace
+	rec := broker.Record{Workspace: ws, TS: time.Now().UTC(), Tenant: id.Tenant, Kind: "web", User: id.Subject, Device: id.Device,
 		Target: net.JoinHostPort(host, strconv.Itoa(port)), EN: p.Name, Event: "open"}
 	cats := p.Classifier.Categories(host)
 	pol := p.State.Policy(id.Tenant, policy.Web)
@@ -190,7 +191,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pol == nil {
 		d = policy.Decision{Action: policy.Deny, Reason: "no-policy"}
 	} else {
-		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
+		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(), Workspace: ws,
 			Device: policy.Device{ID: id.Device}})
 		rec.Version = pol.Version
 	}

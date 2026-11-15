@@ -258,7 +258,7 @@ func (s *stack) writeAgentConfig() {
 		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
 		"en_name": "localhost", "socks_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["socks"]),
 		"http_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["status"]),
-		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"}, "posture_every_seconds": 1,
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki", "hr.ztx": "hr"}, "posture_every_seconds": 1,
 	}
 	b, _ := json.Marshal(cfg)
 	os.MkdirAll(s.agentDir(), 0o700)
@@ -590,7 +590,7 @@ func (s *stack) newAgent(t *testing.T, name string) *agentInst {
 		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
 		"en_name": "localhost", "socks_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["socks"]),
 		"http_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["status"]),
-		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"}, "posture_every_seconds": 1,
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki", "hr.ztx": "hr"}, "posture_every_seconds": 1,
 	}
 	b, _ := json.Marshal(cfg)
 	os.MkdirAll(a.dir, 0o700)
@@ -1277,5 +1277,212 @@ func TestScn010AIAgent(t *testing.T) {
 	}
 	if s.reachable(a.socks(), "erp.ztx") {
 		t.Fatal("a removed agent opened a new session")
+	}
+}
+
+// workspace helpers ---------------------------------------------------------------------
+
+type workspaceRun struct {
+	dir     string
+	cmd     *exec.Cmd
+	out     *lockedBuf
+	exited  chan error
+	profile string
+}
+
+// enrolWorkspace runs `ztx-agent enrol-workspace` and plays the browser, like enrolAgent.
+func (s *stack) enrolWorkspace(t *testing.T, name string) string {
+	dir := filepath.Join(s.dir, name)
+	cfg := map[string]any{"tenant": "t1", "issuer": s.idp.URL, "client_id": "cid", "enrol_url": s.enrolU, "enrol_ca_pem": string(s.caPEM),
+		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
+		"en_name": "localhost", "apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki", "hr.ztx": "hr"}}
+	b, _ := json.Marshal(cfg)
+	os.MkdirAll(dir, 0o700)
+	os.WriteFile(filepath.Join(dir, "config.json"), b, 0o600)
+	cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), "--dir", dir, "--no-browser", "enrol-workspace")
+	cmd.Env = append(os.Environ(), s.agentEnv()...)
+	out, _ := cmd.StdoutPipe()
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	sc := bufio.NewScanner(out)
+	for sc.Scan() {
+		if line := sc.Text(); strings.HasPrefix(line, "http") {
+			if resp, err := http.Get(line); err == nil {
+				resp.Body.Close()
+			}
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("enrol-workspace: %v\n%s", err, errb.String())
+	}
+	return dir
+}
+
+func buildStub(t *testing.T, bin string) string {
+	cmd := exec.Command("go", "build", "-o", filepath.Join(bin, "stubbrowser"), "./test/stubbrowser")
+	cmd.Dir = "../.."
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build stub: %v\n%s", err, out)
+	}
+	return filepath.Join(bin, "stubbrowser")
+}
+
+func (s *stack) startWorkspace(t *testing.T, dir, app string, extra ...string) *workspaceRun {
+	stub := buildStub(t, s.bin)
+	args := append([]string{"--dir", dir, "--browser", stub, "--posture-every", "1h", "--renew-every", "1s"}, extra...)
+	args = append(args, "workspace")
+	cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), args...)
+	cmd.Env = append(os.Environ(), append(s.agentEnv(), "STUB_APP="+app, "STUB_PORT="+fmt.Sprint(s.ports["echo"]))...)
+	out := &lockedBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	w := &workspaceRun{dir: dir, cmd: cmd, out: out, exited: make(chan error, 1), profile: filepath.Join(dir, "workspace-profile")}
+	go func() { w.exited <- cmd.Wait() }()
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		if t.Failed() {
+			t.Logf("--- workspace output ---\n%s", out.String())
+		}
+	})
+	return w
+}
+
+func (w *workspaceRun) result() string {
+	b, _ := os.ReadFile(filepath.Join(w.profile, "stub-result.txt"))
+	return string(b)
+}
+
+func (w *workspaceRun) waitExit(t *testing.T, d time.Duration) error {
+	select {
+	case err := <-w.exited:
+		return err
+	case <-time.After(d):
+		t.Fatalf("the workspace did not exit within %v; output:\n%s", d, w.out.String())
+		return nil
+	}
+}
+
+func deviceIDFromCert(t *testing.T, dir string) string {
+	certPEM, err := os.ReadFile(filepath.Join(dir, "device.crt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	blk, _ := pem.Decode(certPEM)
+	leaf, _ := x509.ParseCertificate(blk.Bytes)
+	return strings.Split(leaf.Subject.CommonName, "/")[2]
+}
+
+func (s *stack) sensitiveHR(t *testing.T) {
+	s.must("POST", "/v1/segments", map[string]any{"id": "hr", "group": "site1", "class": "sensitive",
+		"targets": []map[string]any{{"host": "127.0.0.1", "ports": []int{s.ports["echo"]}}}}, s.token)
+	s.must("POST", "/v1/policies/safe-defaults", nil, s.token) // rebuilds the pack, now including the sensitive rule
+}
+
+// SCN-011 (WB-002, WB-003, WB-004, WB-008, WB-009): the workspace browser, through the real binaries.
+func TestScn011WorkspaceBrowser(t *testing.T) {
+	s := newStack(t)
+	s.sensitiveHR(t)
+
+	// a plain agent cannot reach the sensitive app, and the log says why
+	plain := s.newAgent(t, "plain")
+	s.runInst(plain)
+	eventually(t, "the plain agent to work on ordinary apps", 25*time.Second, func() bool { return s.reachable(plain.socks(), "erp.ztx") })
+	if s.reachable(plain.socks(), "hr.ztx") {
+		t.Fatal("a sensitive app was reachable from a plain agent")
+	}
+
+	// the workspace can
+	dir := s.enrolWorkspace(t, "ws")
+	w := s.startWorkspace(t, dir, "hr.ztx")
+	eventually(t, "the workspace page to reach the sensitive app", 25*time.Second, func() bool { return w.result() == "ok" })
+
+	// the browser was started as designed, in an isolated profile
+	args, _ := os.ReadFile(filepath.Join(w.profile, "stub-args.txt"))
+	flags := string(args)
+	for _, want := range []string{"--user-data-dir=" + w.profile, "--proxy-pac-url=http://127.0.0.1:", "--disable-quic", "--disable-sync", "--disable-extensions"} {
+		if !strings.Contains(flags, want) {
+			t.Errorf("the browser was not started with %q:\n%s", want, flags)
+		}
+	}
+	for _, bad := range []string{"remote-debugging", "load-extension", "disable-web-security"} {
+		if strings.Contains(flags, bad) {
+			t.Errorf("forbidden flag %q reached the browser", bad)
+		}
+	}
+	if st, err := os.Stat(w.profile); err != nil || st.Mode().Perm() != 0o700 {
+		t.Errorf("profile directory missing or not private: %v %v", err, st)
+	}
+
+	// decisions: the plain agent was refused for workspace-required, the workspace was allowed
+	eventually(t, "both decisions in the log", 10*time.Second, func() bool {
+		var denied, allowed bool
+		for _, d := range s.decisions() {
+			if d["app"] == "hr" && d["action"] == "deny" && d["reason"] == "workspace-required" && d["workspace"] != true {
+				denied = true
+			}
+			if d["app"] == "hr" && d["action"] == "allow" && d["workspace"] == true && d["rule"] == "sd-sensitive" {
+				allowed = true
+			}
+		}
+		return denied && allowed
+	})
+
+	// revoking the workspace device locks it: browser killed, profile erased, launcher exits
+	s.must("POST", "/v1/devices/"+deviceIDFromCert(t, dir)+"/revoke", nil, s.token)
+	err := w.waitExit(t, 20*time.Second)
+	if err == nil || !strings.Contains(w.out.String(), "workspace locked") {
+		t.Fatalf("expected the workspace to lock; err=%v output:\n%s", err, w.out.String())
+	}
+	if _, err := os.Stat(w.profile); err == nil {
+		t.Fatal("the profile was not erased when the workspace locked")
+	}
+	if out, _ := exec.Command("pgrep", "-f", "stubbrowser --user-data-dir="+w.profile).Output(); len(strings.TrimSpace(string(out))) > 0 {
+		t.Fatalf("the browser process survived the lock: %s", out)
+	}
+}
+
+// SCN-012 (WB-007): the workspace locks when the device falls below the baseline.
+func TestScn012WorkspaceLocksOnBadPosture(t *testing.T) {
+	s := newStack(t)
+	s.sensitiveHR(t)
+	dir := s.enrolWorkspace(t, "ws")
+	w := s.startWorkspace(t, dir, "hr.ztx", "--posture-every", "1s")
+	eventually(t, "the workspace to work while the device is healthy", 25*time.Second, func() bool { return w.result() == "ok" })
+	writeFake(t, s.fakeBin, "lsblk", "disk\npart") // disk encryption "turned off"
+	err := w.waitExit(t, 15*time.Second)
+	if err == nil || !strings.Contains(w.out.String(), "below the baseline") || !strings.Contains(w.out.String(), "disk encryption") {
+		t.Fatalf("expected a lock naming the failed check; err=%v output:\n%s", err, w.out.String())
+	}
+	if _, err := os.Stat(w.profile); err == nil {
+		t.Fatal("the profile was not erased")
+	}
+}
+
+// SCN-013 (WB-011): an unreachable control plane locks the workspace after the grace period, not before.
+func TestScn013WorkspaceGracePeriod(t *testing.T) {
+	s := newStack(t)
+	s.sensitiveHR(t)
+	dir := s.enrolWorkspace(t, "ws")
+	w := s.startWorkspace(t, dir, "hr.ztx", "--grace", "4s")
+	eventually(t, "the workspace to work", 25*time.Second, func() bool { return w.result() == "ok" })
+	s.procs[0].Process.Kill() // ztx-cp is the first process started
+	s.procs[0].Wait()
+	start := time.Now()
+	select {
+	case <-w.exited:
+		t.Fatalf("the workspace locked after %v, before the 4 s grace period ended", time.Since(start))
+	case <-time.After(2 * time.Second):
+	}
+	err := w.waitExit(t, 20*time.Second)
+	if err == nil || !strings.Contains(w.out.String(), "grace period") {
+		t.Fatalf("expected a grace-period lock; err=%v output:\n%s", err, w.out.String())
+	}
+	if d := time.Since(start); d < 3*time.Second {
+		t.Fatalf("locked too early: %v", d)
 	}
 }

@@ -31,6 +31,9 @@ const (
 	// Approve means: allow only while an admin-approved, time-limited grant exists
 	// for this user and app (just-in-time access). Private policies only.
 	Approve Action = "require_approval"
+	// Isolate means: allow only when the request comes from the workspace browser
+	// (requirements v0.6). From anywhere else it is denied with reason workspace-required.
+	Isolate Action = "isolate"
 )
 
 // Posture is a device posture report that has already been signature-verified.
@@ -69,6 +72,8 @@ type Request struct {
 	SrcIP      netip.Addr
 	Now        time.Time
 	// Set only for inspected web requests.
+	// Workspace is true when the connection used a workspace certificate.
+	Workspace bool
 	Inspected bool
 	Path      string
 	Method    string
@@ -111,8 +116,11 @@ type Match struct {
 	Network    *NetworkMatch `json:"network,omitempty"`
 	// Paths (URL path prefixes) and Methods apply only to inspected (decrypted) web
 	// traffic. On traffic that is not inspected a rule that names them never matches.
-	Paths   []string `json:"paths,omitempty"`
-	Methods []string `json:"methods,omitempty"`
+	// Workspace is true to match only requests from the workspace browser, false for only
+	// requests from anywhere else. Unset matches both.
+	Workspace *bool    `json:"workspace,omitempty"`
+	Paths     []string `json:"paths,omitempty"`
+	Methods   []string `json:"methods,omitempty"`
 	// DLP names data types (see package dlp). The rule matches when the decrypted request
 	// body contains any of them. Inspected web traffic only.
 	DLP []string `json:"dlp,omitempty"`
@@ -256,6 +264,12 @@ func (p *Policy) Evaluate(r Request) (d Decision) {
 	for _, i := range cand {
 		c := &p.compiled[i]
 		if c.matches(p.Kind, r) {
+			if c.Action == Isolate { // allowed only inside the workspace
+				if r.Workspace {
+					return Decision{Action: Allow, RuleID: c.ID, Reason: "workspace"}
+				}
+				return Decision{Action: Deny, RuleID: c.ID, Reason: "workspace-required"}
+			}
 			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
 		}
 	}
@@ -309,6 +323,9 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 		if !ok {
 			return false
 		}
+	}
+	if m.Workspace != nil && *m.Workspace != r.Workspace {
+		return false
 	}
 	if len(m.DLP) > 0 {
 		ok := false

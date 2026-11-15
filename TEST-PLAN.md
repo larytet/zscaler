@@ -377,7 +377,7 @@ Written with the design, before any implementation. IDs continue the plan's sche
 | WBT-006 | L4 | P1 | The same segment from the workspace | Allowed; record shows `workspace: true` | WB-008 |
 | WBT-007 | L3 | P1 | Launcher with the stub browser: profile directory, proxy flag, QUIC and ECH switched off, no extension or debugging flags, no sync, environment contains no personal profile path | All present; none of the forbidden flags | WB-002, WB-003, WB-005 |
 | WBT-008 | L3 | P1 | Launcher refuses a request to start with extra browser flags (`--remote-debugging-port`, `--load-extension`, `--user-data-dir` elsewhere) | Refuses and says why | WB-005 |
-| WBT-009 | L3 | P1 | The per-launch proxy credential: requests without it, with a stale one, and from another process | Refused; the credential is not written to disk or logs | WB-003 |
+| WBT-009 | L3 | P1 | **Changed in W1:** the per-launch proxy credential cannot be delivered by flags (DESIGN D8.2) and moves to W3 with the extension. W1 instead checks that the local proxies listen on loopback ephemeral ports only and stop when the workspace ends. The credential test (requests without it, stale, from another process) stays open for W3 | Loopback only; ports closed after exit. Credential test: not yet | WB-003 |
 | WBT-010 | L3 | P1 | Sign-out, revoke, admin erase and idle timeout | Browser process ends and the profile directory is gone | WB-002 |
 | WBT-011 | L3 | P1 | Posture loop with a fake clock: pass, fail, unknown, stale | Fail, unknown and stale lock the workspace within one cycle; recovery needs a fresh pass | WB-007 |
 | WBT-012 | L3 | P2 | Control plane unreachable longer than the grace period | Workspace locks; before the grace period it keeps working | WB-011 |

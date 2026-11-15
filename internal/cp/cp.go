@@ -243,8 +243,8 @@ func (a *API) putSegment(w http.ResponseWriter, r *http.Request, c ctxInfo) (any
 			}
 		}
 	}
-	if g.Class != "" && g.Class != "standard" && g.Class != "admin" {
-		return nil, fail(400, "invalid", "class must be standard or admin")
+	if g.Class != "" && g.Class != "standard" && g.Class != "admin" && g.Class != "sensitive" {
+		return nil, fail(400, "invalid", "class must be standard, admin or sensitive")
 	}
 	if err := a.Store.PutSegment(c.tenant, g); err != nil {
 		return nil, err
@@ -456,9 +456,11 @@ func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
 	private = &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny}
 	private.Rules = append(private.Rules, policy.Rule{ID: "sd-restricted", Priority: 1, Action: policy.Deny,
 		Reason: "Restricted users are blocked first", Match: policy.Match{Groups: []string{policy.RestrictedGroup}}})
-	var std, adm []string
+	var std, adm, sens []string
 	for _, s := range segs {
 		switch s.Class {
+		case "sensitive":
+			sens = append(sens, s.ID)
 		case "admin":
 			adm = append(adm, s.ID)
 		default:
@@ -469,6 +471,12 @@ func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
 		private.Rules = append(private.Rules, policy.Rule{ID: "sd-staff", Priority: 10, Action: policy.Allow,
 			Reason: "All staff reach standard apps from healthy devices",
 			Match:  policy.Match{Groups: []string{"all-staff"}, Apps: std, Posture: posture}})
+	}
+	if len(sens) > 0 {
+		// sensitive apps are reachable only from the workspace browser (WB-008)
+		private.Rules = append(private.Rules, policy.Rule{ID: "sd-sensitive", Priority: 15, Action: policy.Isolate,
+			Reason: "Sensitive apps are reachable only from the workspace browser",
+			Match:  policy.Match{Groups: []string{"all-staff"}, Apps: sens}})
 	}
 	if len(adm) > 0 {
 		private.Rules = append(private.Rules, policy.Rule{ID: "sd-admins", Priority: 20, Action: policy.Allow,

@@ -42,6 +42,10 @@ func Validate(p *Policy, known map[string]bool) []error {
 		prios[r.Priority] = true
 		switch r.Action {
 		case Allow, Deny:
+		case Isolate:
+			if len(r.Match.Apps)+len(r.Match.Domains)+len(r.Match.Categories) == 0 {
+				add("%s: isolate must name apps, domains or categories, or it would send everything to the workspace", w)
+			}
 		case Approve:
 			if p.Kind != Private {
 				add("%s: require_approval is only valid for private policies", w)
@@ -57,7 +61,7 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: unknown action %q", w, r.Action)
 		}
 		m := r.Match
-		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories)+len(m.Paths)+len(m.Methods)+len(m.DLP) == 0 && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
+		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories)+len(m.Paths)+len(m.Methods)+len(m.DLP) == 0 && m.Workspace == nil && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
 			add("%s: allow rule matches everything", w)
 		}
 		for _, a := range m.Apps {

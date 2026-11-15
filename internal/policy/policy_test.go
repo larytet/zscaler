@@ -445,3 +445,53 @@ func TestDLPCondition(t *testing.T) { // DATA-001 (basic)
 		}
 	}
 }
+
+func TestIsolateAndWorkspaceCondition(t *testing.T) { // WBT-001
+	p := mk(t, Private, Rule{ID: "sens", Priority: 1, Action: Isolate, Match: Match{Groups: []string{"g"}, Apps: []string{"hr-db"}}})
+	r := req("g")
+	r.App = "hr-db"
+	if d := p.Evaluate(r); d.Action != Deny || d.Reason != "workspace-required" || d.RuleID != "sens" {
+		t.Fatalf("outside the workspace: %+v", d)
+	}
+	r.Workspace = true
+	if d := p.Evaluate(r); d.Action != Allow || d.Reason != "workspace" {
+		t.Fatalf("inside the workspace: %+v", d)
+	}
+	r2 := req("g")
+	r2.App = "other"
+	if d := p.Evaluate(r2); d.RuleID == "sens" {
+		t.Fatal("the isolate rule matched an app it does not name")
+	}
+	web := mk(t, Web, Rule{ID: "risky", Priority: 1, Action: Isolate, Match: Match{Categories: []string{"uncategorised"}}})
+	wr := Request{Kind: Web, Host: "x.test", Categories: []string{"uncategorised"}, Now: t0}
+	if d := web.Evaluate(wr); d.Action != Deny || d.Reason != "workspace-required" {
+		t.Fatalf("%+v", d)
+	}
+	wr.Workspace = true
+	if d := web.Evaluate(wr); d.Action != Allow {
+		t.Fatalf("%+v", d)
+	}
+	yes, no := true, false
+	cond := mk(t, Private,
+		Rule{ID: "only-ws", Priority: 1, Action: Allow, Match: Match{Groups: []string{"g"}, Workspace: &yes}},
+		Rule{ID: "not-ws", Priority: 2, Action: Deny, Match: Match{Groups: []string{"g"}, Workspace: &no}})
+	a, b := req("g"), req("g")
+	b.Workspace = true
+	if cond.Evaluate(a).RuleID != "not-ws" || cond.Evaluate(b).RuleID != "only-ws" {
+		t.Fatal("the workspace condition did not split the two sides")
+	}
+}
+
+func TestIsolateValidation(t *testing.T) { // WBT-002
+	bare := &Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Isolate, Match: Match{Groups: []string{"g"}}}}}
+	if errs := Validate(bare, nil); len(errs) == 0 {
+		t.Fatal("an isolate rule that names no apps, domains or categories would send everything to the workspace")
+	}
+	ok := &Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Isolate, Match: Match{Apps: []string{"x"}}}}}
+	if errs := Validate(ok, nil); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+	if _, err := Parse([]byte(`{"kind":"web","rules":[{"id":"a","priority":1,"action":"isolate","match":{"categories":["c"]}}]}`)); err != nil {
+		t.Fatal(err)
+	}
+}
