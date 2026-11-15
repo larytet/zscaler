@@ -11,6 +11,8 @@ Written in parts, one subtask per commit:
 | T1 | Strategy, levels, environments, policy and unit tests | done |
 | T2 | Data plane, agent and end-to-end tests | done |
 | T3 | Security, resilience, performance tests, traceability, exit criteria | done |
+| T4, T5 | Workspace browser; agentic-AI security | done (see below) |
+| T7 | Real-environment tests on a Linux node with Kubernetes, driven by the requirements | plan written, suite in progress |
 
 ---
 
@@ -425,3 +427,104 @@ Written before the slices it covers. Priorities follow the requirements: Should 
 | AGT-021 | L2/L3 | P1 | Policy history (ADM-004): save three versions; list; diff; read one; roll back with a stale, missing and right If-Match; unknown version; another tenant; audit; the 50-version cap; restart; a policy saved before history | Versions listed with who saved them; diff names added, removed and changed rules and the default; rollback saves the old content as a new version and never rewrites history; refused without If-Match, for a version not kept, and across tenants | ADM-004 |
 
 Not covered in this plan until built: AGS-007 chat approval, AGS-008, AGS-010, AGS-011, AGS-012, AGS-014, AGS-015 (decision log chain), AGS-018.
+
+
+---
+
+## T7. Real-environment tests (a Linux node with Kubernetes)
+
+### T7.1 Why
+
+T1 to T5 run on one machine with everything on loopback, in-process fakes for the identity provider and the
+browser, and binaries started by the test. They prove the logic. They do not prove that the product works
+when its parts run where they would really run: a connector in a container inside a cluster, private apps as
+cluster services, real container networking, real process restarts and a real clock. T7 adds that, and every
+test in it is named after the requirements it checks, so the suite can be read against REQUIREMENTS.md.
+
+### T7.2 What the owner provides
+
+The tests need one Linux x86-64 **test node**, supplied by the person running them. The plan assumes only this:
+
+| Need | Detail |
+|---|---|
+| Access | `ssh <username>@<servername>` works with a key (no password prompt) |
+| Privilege | `sudo` works without a password on the node |
+| Tools on the node | `rsync`, `docker`, `kubectl` (cluster access, possibly through `sudo`), `curl`, `python3`. Go is not needed: binaries are built on the developer machine |
+| Cluster | A running Kubernetes cluster that `kubectl` on the node can reach (a single-node kind cluster is enough) |
+| Size | At least 4 CPUs and 8 GB of memory free; a few GB of disk |
+| Network | The node can reach its own cluster; outbound internet is optional (tests that need it say so and are skipped, with the reason printed, when it is missing) |
+
+The node is given to the suite through environment variables, never written into the repository:
+
+| Variable | Meaning |
+|---|---|
+| `ZTX_TEST_NODE` | `<username>@<servername>` |
+| `ZTX_TEST_KUBECTL` | the kubectl command on the node, default `sudo kubectl` |
+| `ZTX_TEST_DOCKER` | the docker command on the node, default `sudo docker` |
+| `ZTX_TEST_REGISTRY` | a registry the cluster can pull from, if one exists (default: load images into the cluster directly) |
+
+### T7.3 Layout
+
+- **Service side, as processes on the node:** the control plane, two enforcement nodes (for redundancy tests) and a
+  local test identity provider.
+- **Customer side, in the cluster:** the connector as a pod (the deployment the product is designed for), private
+  apps as pods and services (a TCP echo app, an HTTP app, a slow app), and an HTTPS origin with a certificate the
+  platform does not trust until told to.
+- **Endpoints:** agents as processes on the node with separate state directories, standing in for laptops.
+- **Driver:** a compiled Go test binary run on the node. It drives the admin API, the agent's local proxies and
+  `kubectl`, and checks results from the outside (what the origin received, what the logs and API show).
+
+### T7.4 Safety and clean-up rules (they apply to a shared cluster)
+
+1. Everything the suite creates lives in **one namespace named `ztx-real-<run id>`**, and the run id is random. No
+   other namespace, node or cluster-wide object is read for changes or written (no CRDs, cluster roles or
+   cluster-scoped objects).
+2. The suite refuses to start if that namespace already exists, and deletes it at the end, also when a test fails
+   or the run is interrupted. A `clean` command removes leftovers of earlier runs by their label
+   (`app.kubernetes.io/part-of=ztx-real-test`) and nothing else.
+3. Container images are tagged `ztx-real-<run id>` and removed at the end.
+4. Processes on the node run under the test user in a per-run directory and are stopped at the end.
+5. Pods have small resource requests and limits. Ports on the node are chosen at random.
+6. Keys, tokens and certificates are generated for the run and never stored in the repository.
+7. A failure is a failure: a test is skipped only for a prerequisite named in this plan, with the reason printed.
+
+### T7.5 How a run works
+
+`test/real/run.sh` does: build static linux/amd64 binaries and the compiled test binary on the developer machine;
+`rsync` them to a per-run directory on the node; run the test binary there; copy the log back; clean up. The
+results of a run are written to `RESULTS-REAL.md` with the date, the commit, the node's OS and core count (not its
+name), and the counts of passed, failed and skipped tests.
+
+### T7.6 Suite, by requirement
+
+Test IDs start with `REAL-`. Each row names the requirements it covers. Rows marked *planned* are written one
+family at a time (STATUS.md says which exist).
+
+| ID | Requirements | What is done | Expected |
+|---|---|---|---|
+| REAL-ENV-001 | T7.2, T7.4 | Check access, privilege, tools and cluster; create and delete the test namespace | Each prerequisite reported; namespace gone afterwards |
+| REAL-PA-001 | ZPA-001, ZPA-002, PA-001 | A user reaches an app in the cluster through the connector pod | Data round-trips; the app was reached only by the connector |
+| REAL-PA-002 | ZPA-003, PA-007 | The app's service has no external exposure; the connector pod has no listening port | Nothing on the node or cluster answers except through the platform |
+| REAL-PA-003 | ZPA-010, ZPA-011, PA-009, PA-010 | Two connector pods; one is deleted | Access continues through the other; the deleted one is replaced and reconnects |
+| REAL-PA-004 | ZPA-044, ARCH-003 | Two enforcement nodes; one is killed mid-session | New sessions use the other; established sessions on it end and the agent recovers |
+| REAL-PA-005 | PA-002, ZPA-020 | A user outside the allowed group tries the app | Denied; the app was not contacted |
+| REAL-PA-006 | PA-016, ZPA-021 | The segment's target is moved to another service | The new target works within the refresh time; the old one does not |
+| REAL-PA-007 | NFR-011, NFR-012 | A NetworkPolicy cuts the connector off from the enforcement node, then lifts | Access stops (fail closed), then returns without restarting anything |
+| REAL-AG-001 | AG-005, AG-006, ARCH-006 | Admin disables a user and revokes a device while sessions are open | Sessions close within seconds; other devices of the user are unaffected |
+| REAL-AG-002 | AG-007 | Short certificate lifetime on a real clock | The agent renews without a new login |
+| REAL-CP-001 | CP-007, ADM-004 | Policy change, then roll back | Takes effect within the sync time; the rollback restores the earlier behaviour |
+| REAL-CP-002 | CP-008, NFR-011 | Control plane stopped and started | Established and new sessions continue on cached state; changes resume on return |
+| REAL-ZIA-001 | ZIA-001, ZIA-012 | Web requests through the agent's proxy to a service in the cluster | Allowed and blocked by category and domain rules; block page names the reason |
+| REAL-ZIA-002 | ZIA-030, ZIA-040, ZIA-032 | TLS inspection of an HTTPS origin in the cluster | Certificate from the tenant CA; exempt domains untouched; path and method rules apply |
+| REAL-ZIA-003 | DATA-001, DATA-006 | Uploads with card numbers, listed values and indexed text | Blocked at the node; the origin never receives them |
+| REAL-ZIA-004 | ZIA-022b, AGS-001 | Capture and credential injection against an API in the cluster | Capture redacted and admin-only; the key reaches the origin and never the agent or logs |
+| REAL-AI-001 | AI-001, AGS-002, AGS-004 | An AI agent identity with the read-only pack and an operator | Reads allowed, writes denied, other destinations denied, no more than the operator may reach |
+| REAL-OPS-001 | ADM-005, FW-010, ADM-007 | Decision logs for all of the above | Every session has a record with user, device, rule and reason; no payload content |
+| REAL-PERF-001 | NFR-002, NFR-003 | Private-app set-up time and throughput through the connector pod | Reported against the design targets; misses are listed, not hidden |
+| REAL-SEC-001 | SEC-001..006, NFR-020 | Stolen certificate without key, foreign CA, old TLS, connector given a target outside its list | Refused in each case; no payload written to disk on the node |
+
+### T7.7 Pass criteria
+
+A run passes when every test that is not skipped for a stated prerequisite passes, `RESULTS-REAL.md` is updated,
+and the namespace and images are gone. The suite is run by the owner on a node they provide; the product's own
+developers do not claim a requirement as verified in a real environment until its REAL- test has passed there.
