@@ -31,7 +31,8 @@ import (
 	"github.com/larytet/zscaler/internal/posture"
 )
 
-const Version = "0.1.0"
+// Version is stamped at release time (ztx-release build); a build from the source tree says so.
+var Version = "0.1.0-dev"
 
 // Config is stored in config.json in the agent directory.
 type Config struct {

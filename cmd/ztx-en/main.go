@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"log/slog"
 	"net"
@@ -25,7 +26,11 @@ import (
 	"github.com/larytet/zscaler/internal/webproxy"
 )
 
+// version is stamped by the release build (ztx-release); a build from the source tree says dev.
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	cpURL := flag.String("cp", "https://127.0.0.1:8444", "control plane enrolment URL")
 	cpCA := flag.String("cp-ca", "cp-data/ca.pem", "CA certificate file (trust root)")
 	data := flag.String("data", "en-data", "data directory")
@@ -40,6 +45,10 @@ func main() {
 	every := flag.Duration("sync-every", en.DefaultSyncEvery, "state poll interval")
 	staleAfter := flag.Duration("stale-after", 15*time.Minute, "how long without hearing from the control plane before this node counts its state as stale (what then happens to new sessions is each tenant's choice, NFR-012)")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("ztx-en", version)
+		return
+	}
 
 	caPEM, err := os.ReadFile(*cpCA)
 	if err != nil {

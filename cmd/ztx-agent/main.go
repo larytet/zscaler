@@ -45,8 +45,13 @@ func main() {
 	grace := flag.Duration("grace", 5*time.Minute, "workspace: how long the control plane may be unreachable before the workspace locks")
 	needDisk := flag.Bool("require-disk-encryption", true, "workspace: lock when disk encryption is off or unknown")
 	needFW := flag.Bool("require-firewall", true, "workspace: lock when the firewall is off or unknown")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	noBrowser := flag.Bool("no-browser", false, "print the sign-in URL instead of opening a browser")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("ztx-agent", agent.Version)
+		return
+	}
 	if flag.NArg() < 1 || (flag.Arg(0) != "workspace" && flag.NArg() != 1) {
 		usage() // only the workspace command takes a further argument: a start address
 	}

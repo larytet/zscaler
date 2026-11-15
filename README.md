@@ -15,6 +15,7 @@ A small-business zero-trust platform, aimed at functional parity with the Zscale
 | [TEST-PLAN.md](TEST-PLAN.md) | Test plan for RB1 |
 | [ROADMAP.md](ROADMAP.md) | Features deferred beyond RB1, including newly-Must items |
 | [RESULTS.md](RESULTS.md) | Measured targets and misses |
+| [RELEASE.md](RELEASE.md) | How a release is built (reproducibly, with checksums, a bill of materials and a signature) and how to check one |
 | [SIEM-SCHEMA.md](SIEM-SCHEMA.md) | What log streaming sends (HTTPS and syslog) and how |
 | [GAPS.md](GAPS.md) | Gaps between the requirements and the code, with the work queue |
 | [COMPETITIVE-ANALYSIS.md](COMPETITIVE-ANALYSIS.md) | Cato Networks and Palo Alto Networks |
@@ -44,6 +45,8 @@ make e2e       # end-to-end scenarios with the real binaries (about 30 s)
 make fuzz      # 30 s per fuzz target
 go test -tags perf -v -run TestPerf ./internal/broker   # performance targets
 ```
+
+**Releases:** `VERSION=v0.2.0 RELEASE_KEY=release-key.key make release` writes `dist/` with the programs, `sbom.cdx.json`, `SHA256SUMS` and its signature; `ztx-release verify` checks one. See [RELEASE.md](RELEASE.md).
 
 ## HowTo: build in Docker and run the real-environment tests
 

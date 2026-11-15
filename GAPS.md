@@ -49,7 +49,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G12 | ZIA-032, SMB-022 | Automatic exemption of pinned applications, banking and health from TLS inspection, with admin override | **done (S33)**; the built-in pinned list is small and unverified; banking and health depend on a category list the platform does not ship |
 | G13 | NFR-023 | Administrator and vendor support access that is time-boxed (tokens that expire), logged and visible to the customer | **done (S34)**; permanent administrators still do not expire; no SSO or MFA |
 | G14 | SMB-002 | Safe-defaults pack that also turns inspection on with the managed exemptions, refuses uploads to file-sharing apps and executables | **done (S35)**; inspection stays opt-in because devices must trust its CA first; only the anonymous sharing services are refused by default |
-| G15 | NFR-024 | Reproducible, checksummed release build with an SBOM | queued |
+| G15 | NFR-024 | Reproducible, checksummed release build with an SBOM | **done (S36)**; no code-signing certificates, no notarisation, no installers; found and fixed: the agent did not compile for Windows |
 | G16 | INT-006 | An OpenAPI description of every admin API route, generated from the route table | queued |
 | G17 | NFR-030 | Data subject access and erasure: export what is held about a person, and delete it | queued |
 | G18 | ADM-001 | Console simple mode (users, apps, alerts) | queued, a console change |

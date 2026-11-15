@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -58,9 +57,8 @@ func Collect() Snapshot {
 	if dir == "" {
 		dir = "/"
 	}
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dir, &st); err == nil && st.Blocks > 0 {
-		s.DiskUsedPct = pct(int(100 * (st.Blocks - st.Bavail) / st.Blocks))
+	if used, ok := diskUsedPercent(dir); ok {
+		s.DiskUsedPct = pct(used)
 	}
 	return s
 }

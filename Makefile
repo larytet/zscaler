@@ -1,4 +1,4 @@
-.PHONY: build test race vet fuzz e2e vuln docker-build real
+.PHONY: build test race vet fuzz e2e vuln docker-build real release
 build:
 	go build -o bin/ ./cmd/...
 vet:
@@ -30,3 +30,9 @@ docker-build:
 # Real-environment tests on a Linux node with Kubernetes: ZTX_TEST_NODE=<username>@<servername> make real
 real:
 	test/real/run.sh run
+
+# A signed, reproducible release in dist/ (NFR-024): VERSION=v0.2.0 RELEASE_KEY=path/to/release-key.key make release
+VERSION ?= v0.0.0-dev
+RELEASE_KEY ?=
+release:
+	go run ./cmd/ztx-release build -out dist -version $(VERSION) $(if $(RELEASE_KEY),-key $(RELEASE_KEY))

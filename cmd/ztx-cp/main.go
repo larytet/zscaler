@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"flag"
+	"fmt"
 	"github.com/larytet/zscaler/internal/siem"
 	"log"
 	"net"
@@ -29,7 +30,11 @@ import (
 	"github.com/larytet/zscaler/internal/store"
 )
 
+// version is stamped by the release build (ztx-release); a build from the source tree says dev.
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	data := flag.String("data", "cp-data", "data directory (CA key, store, audit log)")
 	adminL := flag.String("admin-listen", "127.0.0.1:8443", "admin API listen address")
 	enrolL := flag.String("enrol-listen", "127.0.0.1:8444", "enrolment and sync listen address")
@@ -42,6 +47,10 @@ func main() {
 	smtpFrom := flag.String("smtp-from", "alerts@localhost", "From address for alert emails")
 	smtpUser := flag.String("smtp-user", "", "SMTP username (password from ZTX_SMTP_PASSWORD)")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("ztx-cp", version)
+		return
+	}
 
 	boot, err := cli.Secret(*bootFile, "ZTX_BOOTSTRAP_TOKEN")
 	if err != nil || boot == "" {

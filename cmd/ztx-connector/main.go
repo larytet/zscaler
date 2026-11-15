@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -19,7 +20,11 @@ import (
 	"github.com/larytet/zscaler/internal/cli"
 )
 
+// version is stamped by the release build (ztx-release); a build from the source tree says dev.
+var version = "dev"
+
 func main() {
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	cpURL := flag.String("cp", "https://127.0.0.1:8444", "control plane enrolment URL")
 	cpCA := flag.String("cp-ca", "cp-data/ca.pem", "CA certificate file (trust root)")
 	data := flag.String("data", "connector-data", "data directory")
@@ -29,6 +34,10 @@ func main() {
 	enName := flag.String("en-name", "localhost", "TLS server name of the enforcement nodes")
 	targetsEvery := flag.Duration("targets-every", 30*time.Second, "how often to refresh the target allow-list")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("ztx-connector", version)
+		return
+	}
 
 	caPEM, err := os.ReadFile(*cpCA)
 	if err != nil {
