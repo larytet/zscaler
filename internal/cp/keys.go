@@ -6,11 +6,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
+	"strconv"
 	"time"
 
+	"github.com/larytet/zscaler/internal/ratelimit"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -138,10 +141,28 @@ func (a *API) keyStatus(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 	return map[string]any{
 		"keys":                        items,
 		"master_key_in_use":           a.AtRestSealed,
+		"lockouts_last_24_hours":      a.Limit.Recent(24 * time.Hour),
 		"admin_tokens":                map[string]any{"count": len(ads), "not_replaced_in_180_days": old, "how_to_replace": "POST /v1/admins/{name}/rotate (an owner), or POST /v1/me/rotate for your own"},
 		"scim_token_how_to_replace":   "POST /v1/scim/token (the old token stops working at once)",
 		"master_key_how_to_replace":   "ztx-cp rekey -data D -master-key-file OLD -new-master-key-file NEW (stop the control plane first)",
 		"device_certificate_lifetime": "set by -device-cert-ttl (default 12 hours); devices renew on their own",
 		"warnings":                    warn,
 	}, nil
+}
+
+// blocked answers 429 with Retry-After, and reports true, when the client's address is locked out of the scope.
+func (a *API) blocked(w http.ResponseWriter, r *http.Request, scope string) bool {
+	b, left := a.Limit.Blocked(scope, ratelimit.ClientIP(r))
+	if !b {
+		return false
+	}
+	secs := int(left.Seconds()) + 1
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	writeErr(w, fail(429, "too_many_failures", fmt.Sprintf("too many failed attempts from this address; try again in %d seconds", secs)))
+	return true
+}
+
+// failedAttempt counts a refused credential against the client's address.
+func (a *API) failedAttempt(r *http.Request, scope string) {
+	a.Limit.Fail(scope, ratelimit.ClientIP(r))
 }

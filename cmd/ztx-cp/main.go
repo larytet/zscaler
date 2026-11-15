@@ -27,6 +27,7 @@ import (
 	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/ratelimit"
 	"github.com/larytet/zscaler/internal/seal"
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -48,6 +49,9 @@ func main() {
 	retentionDays := flag.Int("log-retention-days", 183, "how many days decision records are kept on disk (1 to 3650; the default is six months)")
 	devTTL := flag.Duration("device-cert-ttl", 0, "lifetime of device certificates (default 12h); a shorter life ends a revoked or disabled user's access sooner but renews more often. At least 30s, at most 7 days")
 	keyFile := flag.String("master-key-file", "", "file holding the master key that encrypts the CA key, the signing key and the store at rest (or set ZTX_MASTER_KEY); make one with `ztx-cp gen-master-key`, keep it off this disk, and keep a copy: without it the data cannot be read")
+	failLimit := flag.Int("auth-fail-limit", 10, "failed sign-ins (admin token, bootstrap token, enrolment token) from one address within a minute that lock that address out; 0 turns the limit off")
+	failLock := flag.Duration("auth-lock", 5*time.Minute, "how long the first lockout lasts; each repeat doubles it, up to an hour")
+	exempt := flag.String("auth-limit-exempt", "", "comma-separated addresses or networks that are never locked out (for example your office: 203.0.113.0/24). Behind a proxy every client shares the proxy's address, so list it here or one bad script locks everyone out")
 	minAgent := flag.String("min-agent-version", "", "agents older than this refuse to start sessions")
 	smtpAddr := flag.String("smtp-addr", "", "SMTP server host:port for alert emails (empty disables email)")
 	smtpFrom := flag.String("smtp-from", "alerts@localhost", "From address for alert emails")
@@ -167,6 +171,17 @@ func main() {
 		log.Fatal("--device-cert-ttl must be between 30s and 7 days")
 	}
 	api.RootCACert, api.PolicyPub, api.AtRestSealed = ca.Cert, &signer.PublicKey, mk != nil
+	if *failLimit > 0 {
+		ex, err := ratelimit.ParseExempt(*exempt)
+		if err != nil {
+			log.Fatalf("--auth-limit-exempt: %v", err)
+		}
+		api.Limit = ratelimit.New()
+		api.Limit.Max, api.Limit.Lock, api.Limit.Exempt = *failLimit, *failLock, ex
+		api.Limit.OnLock = func(scope, ip string, until time.Time, n int) {
+			log.Printf("SECURITY: %d failed %s sign-ins from %s: locked out until %s", n, scope, ip, until.Format(time.RFC3339))
+		}
+	}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent, PolicyKey: signer, DeviceTTL: *devTTL}
 
 	if notifier != nil {

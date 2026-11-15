@@ -142,6 +142,9 @@ func (e *Enrol) issue(pub any, id pki.Identity, ttl time.Duration, names ...stri
 
 // device: OIDC login result in, short-lived device certificate out.
 func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
+	if e.API.blocked(w, r, "enrol") {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	var in struct {
 		Tenant    string `json:"tenant"`
@@ -157,12 +160,14 @@ func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
 	v, err := e.verifier(in.Tenant)
 	if err != nil {
 		// do not reveal whether the tenant exists
+		e.API.failedAttempt(r, "enrol")
 		writeErr(w, fail(401, "unauthenticated", "enrolment failed"))
 		return
 	}
 	cl, err := v.Verify(in.IDToken, in.Nonce)
 	if err != nil {
 		e.API.log(ctxInfo{tenant: in.Tenant, actor: "anonymous"}, "enrol.device.failed", "", nil, nil)
+		e.API.failedAttempt(r, "enrol")
 		writeErr(w, fail(401, "unauthenticated", "enrolment failed"))
 		return
 	}
@@ -271,6 +276,9 @@ func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 // connector: one-time token in, connector certificate out. The tenant and
 // group come from the token, never from the request.
 func (e *Enrol) connector(w http.ResponseWriter, r *http.Request) {
+	if e.API.blocked(w, r, "enrol") {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	var in struct {
 		Token     string `json:"token"`
@@ -291,6 +299,7 @@ func (e *Enrol) connector(w http.ResponseWriter, r *http.Request) {
 		return t != "" && !strings.HasPrefix(g, ENTokenPrefix) && !strings.HasPrefix(g, ServiceTokenPrefix)
 	})
 	if err != nil {
+		e.API.failedAttempt(r, "enrol")
 		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
 		return
 	}
@@ -332,6 +341,9 @@ func (e *Enrol) targets(w http.ResponseWriter, r *http.Request) {
 const ENTokenPrefix = "en:"
 
 func (e *Enrol) enrolEN(w http.ResponseWriter, r *http.Request) {
+	if e.API.blocked(w, r, "enrol") {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	var in struct {
 		Token     string `json:"token"`
@@ -349,6 +361,7 @@ func (e *Enrol) enrolEN(w http.ResponseWriter, r *http.Request) {
 	}
 	_, group, err := e.API.Tokens.RedeemIf(in.Token, func(t, g string) bool { return t == "" && strings.HasPrefix(g, ENTokenPrefix) })
 	if err != nil {
+		e.API.failedAttempt(r, "enrol")
 		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
 		return
 	}
@@ -457,6 +470,9 @@ const ServiceTokenPrefix = "svc:"
 // the agent identity ("agent:<name>"). The identity, its operator and its app grants were
 // set up by an admin (see POST /v1/ai-agents); nothing here widens them.
 func (e *Enrol) enrolService(w http.ResponseWriter, r *http.Request) {
+	if e.API.blocked(w, r, "enrol") {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
 	var in struct {
 		Token     string `json:"token"`
@@ -473,6 +489,7 @@ func (e *Enrol) enrolService(w http.ResponseWriter, r *http.Request) {
 	}
 	tenant, group, err := e.API.Tokens.RedeemIf(in.Token, func(t, g string) bool { return t != "" && strings.HasPrefix(g, ServiceTokenPrefix) })
 	if err != nil {
+		e.API.failedAttempt(r, "enrol")
 		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
 		return
 	}

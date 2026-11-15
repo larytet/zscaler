@@ -31,6 +31,7 @@ import (
 	"github.com/larytet/zscaler/internal/incidents"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/ratelimit"
 	"github.com/larytet/zscaler/internal/risk"
 	"github.com/larytet/zscaler/internal/siem"
 	"github.com/larytet/zscaler/internal/simulate"
@@ -55,8 +56,10 @@ type API struct {
 	OnApprovalRequest func(approvals.Request)
 	OnRevokeDevice    func(tenant string, d store.Device)
 	// What GET /v1/keys reports about the platform's own keys; the program that starts the control plane sets them.
-	RootCACert    *x509.Certificate
-	PolicyPub     *ecdsa.PublicKey
+	RootCACert *x509.Certificate
+	PolicyPub  *ecdsa.PublicKey
+	// Limit slows down clients that keep presenting bad credentials (GAP-REQ-04); nil means no limit.
+	Limit         *ratelimit.Limiter
 	AtRestSealed  bool // the CA key, signing key and store are encrypted with a master key
 	OnDisableUser func(tenant, subject string)
 }
@@ -203,6 +206,9 @@ func writeErr(w http.ResponseWriter, err error) {
 
 func (a *API) wrap(min store.Perm, h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if a.blocked(w, r, "admin") {
+			return
+		}
 		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok {
 			writeErr(w, fail(401, "unauthenticated", "bearer token required"))
@@ -210,6 +216,7 @@ func (a *API) wrap(min store.Perm, h handler) http.HandlerFunc {
 		}
 		tenant, role, name, ok := a.Store.Auth(tok)
 		if !ok {
+			a.failedAttempt(r, "admin")
 			writeErr(w, fail(401, "unauthenticated", "invalid token"))
 			return
 		}
@@ -251,7 +258,11 @@ func (a *API) log(c ctxInfo, action, object string, before, after any) {
 
 func (a *API) createTenant(w http.ResponseWriter, r *http.Request) {
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if a.blocked(w, r, "bootstrap") {
+		return
+	}
 	if a.BootstrapToken == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(a.BootstrapToken)) != 1 {
+		a.failedAttempt(r, "bootstrap")
 		writeErr(w, fail(401, "unauthenticated", "bootstrap token required"))
 		return
 	}
@@ -624,7 +635,11 @@ func SafeDefaultsWith(segs []broker.Segment, o SafeDefaultsOpts) (private, web *
 // guarded by the bootstrap token, not a tenant admin token.
 func (a *API) enToken(w http.ResponseWriter, r *http.Request) {
 	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if a.blocked(w, r, "bootstrap") {
+		return
+	}
 	if a.BootstrapToken == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(a.BootstrapToken)) != 1 {
+		a.failedAttempt(r, "bootstrap")
 		writeErr(w, fail(401, "unauthenticated", "bootstrap token required"))
 		return
 	}
