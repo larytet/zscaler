@@ -410,8 +410,9 @@ func ruleUsesDLP(p *policy.Policy, id string) bool {
 func dlpBlockPage(w http.ResponseWriter, host string, types []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Upload blocked</h1>
-<p>What you sent to %s appears to contain sensitive data (%s) and your organisation does not allow that.</p>
+	fmt.Fprint(w, pageOpen("Blocked", "Upload blocked"))
+	defer fmt.Fprint(w, pageClose)
+	fmt.Fprintf(w, `<p>What you sent to %s appears to contain sensitive data (%s) and your organisation does not allow that.</p>
 %s`, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), pageTail(why, ref))
 }
 
@@ -459,8 +460,9 @@ func (p *Proxy) scanResponse(w http.ResponseWriter, resp *http.Response, pol *po
 func responseBlockPage(w http.ResponseWriter, host string, types []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Response blocked</h1>
-<p>What %s sent back appears to contain sensitive data (%s) and your organisation does not allow that to reach you.</p>
+	fmt.Fprint(w, pageOpen("Blocked", "Response blocked"))
+	defer fmt.Fprint(w, pageClose)
+	fmt.Fprintf(w, `<p>What %s sent back appears to contain sensitive data (%s) and your organisation does not allow that to reach you.</p>
 %s`, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), pageTail(why, ref))
 }
 
@@ -529,7 +531,8 @@ func (p *Proxy) checkDownload(w http.ResponseWriter, resp *http.Response, pol *p
 func fileBlockPage(w http.ResponseWriter, host, direction string, types []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>File blocked</h1>
-<p>A file you tried to %s with %s looks like a kind your organisation does not allow (%s).</p>
+	fmt.Fprint(w, pageOpen("Blocked", "File blocked"))
+	defer fmt.Fprint(w, pageClose)
+	fmt.Fprintf(w, `<p>A file you tried to %s with %s looks like a kind your organisation does not allow (%s).</p>
 %s`, direction, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), pageTail(why, ref))
 }

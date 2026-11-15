@@ -328,6 +328,20 @@ func reasonText(code string, cats []string) string {
 }
 
 // pageTail is what every block page ends with: the reason and the reference to quote.
+// The pages a person sees when the proxy stops them are one shape (GAP-REQ-09): a language, a title, one
+// heading inside a main region, a viewport so they read on a phone, text that follows the reader's font
+// size, and colours that keep their contrast in a light or a dark setting (a test computes it).
+const pageStyle = `body{font:1rem/1.5 system-ui,sans-serif;margin:0;padding:1rem;color:#1b1f24;background:#fff}` +
+	`main{max-width:40rem;margin:2rem auto}h1{font-size:1.5rem;line-height:1.25}a{color:#0a4fd6}` +
+	`@media (prefers-color-scheme:dark){body{color:#e6edf3;background:#0d1117}a{color:#79b0ff}}`
+
+func pageOpen(title, heading string) string {
+	return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>` +
+		html.EscapeString(title) + `</title><style>` + pageStyle + `</style></head><body><main><h1>` + html.EscapeString(heading) + `</h1>`
+}
+
+const pageClose = `</main></body></html>`
+
 func pageTail(why, ref string) string {
 	return fmt.Sprintf(`<p><b>Why:</b> %s</p>
 <p>If you need access, contact your IT administrator and quote reference <b>%s</b>. They can find it in the decision log.</p>`,
@@ -337,9 +351,10 @@ func pageTail(why, ref string) string {
 func blockPage(w http.ResponseWriter, host string, cats []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>This site is blocked</h1>
-<p>%s was blocked by your organisation's security policy%s.</p>
+	fmt.Fprint(w, pageOpen("Blocked", "This site is blocked"))
+	fmt.Fprintf(w, `<p>%s was blocked by your organisation's security policy%s.</p>
 %s`, html.EscapeString(host), categoryNote(cats), pageTail(why, ref))
+	fmt.Fprint(w, pageClose)
 }
 
 // categoryNote says which categories the site is in, when it has any: users and admins both want to see it.
@@ -355,8 +370,9 @@ func categoryNote(cats []string) string {
 func errorPage(w http.ResponseWriter, status int, title, why, ref string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
-	fmt.Fprintf(w, `<!doctype html><title>%s</title><h1>%s</h1>
-%s`, html.EscapeString(title), html.EscapeString(title), pageTail(why, ref))
+	fmt.Fprint(w, pageOpen(title, title))
+	fmt.Fprint(w, pageTail(why, ref))
+	fmt.Fprint(w, pageClose)
 }
 
 const warnTTL = 5 * time.Minute
@@ -422,8 +438,9 @@ func (p *Proxy) warnPage(w http.ResponseWriter, r *http.Request, id pki.Identity
 	u.RawQuery = q.Encode()
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<!doctype html><title>Warning</title><h1>Proceed with care</h1>
-<p>Your organisation asks you to take care with %s. Your visit is logged.</p>
+	fmt.Fprint(w, pageOpen("Warning", "Proceed with care"))
+	defer fmt.Fprint(w, pageClose)
+	fmt.Fprintf(w, `<p>Your organisation asks you to take care with %s. Your visit is logged.</p>
 <p><b>Why:</b> %s</p>
 <p><a href="%s">Continue anyway</a></p>
 <p>If you need to ask about this, quote reference <b>%s</b>. Your IT administrator can find it in the decision log.</p>`,

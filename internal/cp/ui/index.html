@@ -7,9 +7,10 @@
 <link rel="stylesheet" href="/ui/style.css">
 </head>
 <body>
+<a class="skip" href="#view">Skip to the content</a>
 <header>
   <h1>SMB-ZTX</h1>
-  <nav id="tabs"></nav>
+  <nav id="tabs" aria-label="Screens"></nav>
   <span id="who"></span>
 </header>
 <main>
@@ -22,7 +23,7 @@
     </form>
     <p id="loginerr" class="err" role="alert"></p>
   </section>
-  <section id="view" hidden></section>
+  <section id="view" tabindex="-1" aria-label="Content" hidden></section>
 </main>
 <script src="/ui/modes.js"></script>
 <script src="/ui/app.js"></script>

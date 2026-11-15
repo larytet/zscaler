@@ -25,17 +25,24 @@ async function api(method, path, body, raw) {
 
 function table(cols, rows) {
   const t = el('table'), h = el('tr');
-  cols.forEach((c) => h.appendChild(el('th', c)));
+  cols.forEach((c) => { const th = el('th'); th.setAttribute('scope', 'col'); if (c === '') th.appendChild(el('span', 'Actions', 'sr-only')); else th.textContent = c; h.appendChild(th); });
   t.appendChild(h);
   rows.forEach((r) => { const tr = el('tr'); r.forEach((c) => { const td = el('td'); if (c instanceof Node) td.appendChild(c); else td.textContent = c === undefined || c === null ? '' : String(c); tr.appendChild(td); }); t.appendChild(tr); });
-  return t;
+  // A table wider than the screen scrolls inside its own box, and that box can be reached and scrolled with the keyboard.
+  const wrap = el('div', undefined, 'scroll'); wrap.appendChild(t);
+  requestAnimationFrame(() => { if (wrap.scrollWidth > wrap.clientWidth) { wrap.tabIndex = 0; wrap.setAttribute('role', 'region'); wrap.setAttribute('aria-label', 'Table, scrolls sideways'); } });
+  return wrap;
 }
 function btn(label, fn, cls) { const b = el('button', label, cls); b.addEventListener('click', async () => { b.disabled = true; try { await fn(); } catch (e) { alert(e.message); } b.disabled = false; }); return b; }
 function field(label, input) { const l = el('label', label + ' '); l.appendChild(input); return l; }
 const when = (s) => { const d = new Date(s); return isNaN(d) ? '' : d.toLocaleString(); };
 const view = () => $('view');
-function show(...nodes) { const v = view(); clear(v); nodes.forEach((n) => v.appendChild(n)); }
-function failure(e) { show(el('p', e.message, 'err')); }
+function show(...nodes) {
+  const v = view(); clear(v); nodes.forEach((n) => v.appendChild(n));
+  // Move keyboard and screen reader focus to the new screen's heading, so a change of screen (or a reload after an action) is announced and focus is not lost.
+  const h = v.querySelector('h2'); if (h) { h.tabIndex = -1; h.focus({ preventScroll: true }); }
+}
+function failure(e) { const p = el('p', e.message, 'err'); p.setAttribute('role', 'alert'); show(p); }
 
 const tabs = {
   Overview: async () => {
@@ -109,7 +116,7 @@ const tabs = {
   },
   Inspection: async () => {
     const cfg = await api('GET', '/v1/inspection');
-    const ta = el('textarea'); ta.value = (cfg.exempt || []).join('\n'); ta.style.minHeight = '90px';
+    const ta = el('textarea'); ta.value = (cfg.exempt || []).join('\n'); ta.style.minHeight = '90px'; ta.setAttribute('aria-label', 'Domains that are never decrypted, one per line');
     const save = (enabled) => async () => { const exempt = ta.value.split('\n').map((x) => x.trim()).filter(Boolean);
       await api('PUT', '/v1/inspection', { enabled: enabled, exempt: exempt }); await tabs.Inspection(); };
     const dl = btn('Download the inspection certificate', async () => {
@@ -134,7 +141,7 @@ const tabs = {
       el('p', 'Apps are only reachable through the broker; their addresses are never sent to users. An app that no rule allows is out of reach for everyone.', 'muted'));
   },
   Policy: async () => {
-    const out = el('div'), ta = el('textarea'), res = el('pre');
+    const out = el('div'), ta = el('textarea'), res = el('pre'); ta.setAttribute('aria-label', 'Policy draft, as JSON'); res.setAttribute('aria-live', 'polite');
     const kind = el('select'); ['private', 'web'].forEach((k) => kind.appendChild(el('option', k)));
     const load = async () => { try { ta.value = JSON.stringify(await api('GET', '/v1/policies/' + kind.value), null, 2); } catch (e) { ta.value = e.message; } };
     kind.addEventListener('change', load);

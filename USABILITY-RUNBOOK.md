@@ -56,6 +56,17 @@ On each operating system, with a visible window:
 - **WBT-020 honest limits.** Read the first-run screen and the console text. Do they say, in plain words, that the workspace does not protect against a compromised operating system, a camera pointed at the screen, or a person retyping data (WB-013)? Currently the console text covers part of this; record what is missing.
 - **Lock behaviour.** While the workspace is open: revoke the device in the console (it should close within about 30 seconds and the profile folder should disappear); turn off disk encryption or the firewall (it should close within the check interval); disconnect the network for longer than the grace period (it should close after that).
 
+## A11Y-001: the console with assistive tools (GAP-REQ-09)
+
+Do this with a person who uses a screen reader or a keyboard only every day if you can. Use the lab demo (`go run ./cmd/ztx-demo`, it prints a token) in the browser they use.
+
+1. Sign in, then visit every screen, in the simple and in the advanced mode, using only the keyboard.
+2. Repeat with a screen reader (NVDA on Windows, VoiceOver on macOS, Orca on Linux). Can they tell which screen they are on, read each table, and do the actions (restrict, revoke, approve, the policy simulator)?
+3. Zoom the browser to 200 percent and to 400 percent. Is anything cut off or does it need sideways scrolling to read a line?
+4. Trigger a block page (`curl -x http://127.0.0.1:3129 http://example-bad.test/` shows its text; in a browser use the agent's proxy) and read it with the screen reader.
+
+Write down, for each problem: the screen, the tool and its version, what happened and what you expected.
+
 ## What to hand back
 
 Fill in `USABILITY-RESULTS.md` using the template below. The builder reads it, files each finding as a defect, and updates `STATUS.md`. Do not edit code during a run.
