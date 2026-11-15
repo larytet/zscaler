@@ -134,6 +134,9 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/evidence", a.wrap(audit, a.getEvidence))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
+	m.HandleFunc("PUT /v1/privacy", a.wrap(sensitive, a.putPrivacy))
+	m.HandleFunc("GET /v1/privacy", a.wrap(read, a.getPrivacy))
+	m.HandleFunc("GET /v1/privacy/reveal", a.wrap(admins, a.revealUser))
 	m.HandleFunc("PUT /v1/tenancy", a.wrap(write, a.putTenancy))
 	m.HandleFunc("GET /v1/tenancy", a.wrap(read, a.getTenancy))
 	m.HandleFunc("DELETE /v1/tenancy", a.wrap(write, a.deleteTenancy))
@@ -625,7 +628,12 @@ func (a *API) listDecisions(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 		return []decisions.Entry{}, nil
 	}
 	q := r.URL.Query()
-	f := decisions.Filter{User: q.Get("user"), App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind")}
+	f := decisions.Filter{App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind")}
+	var alt []string
+	f.User, alt = a.userFilter(c.tenant, q.Get("user"))
+	if len(alt) > 0 {
+		f.User = alt[0] // the live view holds real names: look for the person the pseudonym belongs to
+	}
 	if v := q.Get("since"); v != "" {
 		t, err := time.Parse(time.RFC3339, v)
 		if err != nil {
@@ -641,6 +649,7 @@ func (a *API) listDecisions(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 	if out == nil {
 		out = []decisions.Entry{}
 	}
+	a.redactEntries(out, c.tenant)
 	return out, nil
 }
 

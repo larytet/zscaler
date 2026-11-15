@@ -55,12 +55,16 @@ func (s *Store) Restore(perTenant int) int {
 	return n
 }
 
-func (s *Store) Add(r broker.Record) {
+func (s *Store) Add(r broker.Record) { s.AddFiltered(r, r) }
+
+// AddFiltered keeps r in the live view and archived (what goes to disk) in the archive. They differ when
+// the tenant's privacy mode hides user names in what is stored.
+func (s *Store) AddFiltered(r, archived broker.Record) {
 	s.mu.Lock()
 	a := s.archive
 	s.mu.Unlock()
 	if a != nil {
-		a.Append(r) // a failure to write is not a reason to lose the live view
+		a.Append(archived) // a failure to write is not a reason to lose the live view
 	}
 	s.addMemory(r)
 }

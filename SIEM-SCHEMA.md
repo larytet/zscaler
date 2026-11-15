@@ -60,6 +60,8 @@ Every event is one JSON object with these fields, and then the fields of its typ
 | `groups`, `posture` | The user's groups and the device's posture at the time of the decision |
 | `bytes_up`, `bytes_down` | On `close` events |
 
+With the tenant's privacy mode on (`PUT /v1/privacy`), `user` carries a stable pseudonym (`u-0123456789ab`) instead of the name, for events from that moment on; AI agents keep their names.
+
 Never present: request or response content, URL paths and query strings, captured exchanges (the `capture` kind is
 never streamed) and device health reports.
 

@@ -170,8 +170,9 @@ func dayOf(name string) (time.Time, bool) {
 type Query struct {
 	From, To                time.Time
 	User, App, Action, Kind string
-	Limit                   int    // default 100, at most 1000
-	Cursor                  string // from a previous result
+	Alt                     []string // other stored values of User that also match (the same person's real name, when the filter is a pseudonym)
+	Limit                   int      // default 100, at most 1000
+	Cursor                  string   // from a previous result
 }
 
 // Result is a page of records, oldest first.
@@ -257,7 +258,7 @@ func (a *Archive) Query(tenant string, q Query) (Result, error) {
 				var r broker.Record
 				if json.Unmarshal(line, &r) == nil && r.Tenant == tenant &&
 					(q.From.IsZero() || !r.TS.Before(q.From)) && !r.TS.After(to) &&
-					(q.User == "" || r.User == q.User) && (q.App == "" || r.App == q.App) &&
+					(q.User == "" || r.User == q.User || contains(q.Alt, r.User)) && (q.App == "" || r.App == q.App) &&
 					(q.Action == "" || r.Action == q.Action) && (q.Kind == "" || r.Kind == q.Kind) {
 					res.Records = append(res.Records, r)
 					if len(res.Records) == q.Limit {
@@ -330,4 +331,13 @@ func (a *Archive) Restore(max int) []broker.Record {
 // Describe is a one-line summary for logs.
 func (a *Archive) Describe() string {
 	return fmt.Sprintf("decision archive in %s, kept %d days", a.Dir, int(a.Retention/(24*time.Hour)))
+}
+
+func contains(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
+			return true
+		}
+	}
+	return false
 }

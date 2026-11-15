@@ -24,6 +24,7 @@ import (
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/privacy"
 	"github.com/larytet/zscaler/internal/siem"
 	"github.com/larytet/zscaler/internal/tenancy"
 )
@@ -169,6 +170,7 @@ type Tenant struct {
 	EDM         map[string]EDMSet               `json:"edm,omitempty"`
 	SIEM        *siem.Config                    `json:"siem,omitempty"`    // where this tenant\'s logs are streamed (INT-004)
 	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"` // tenancy restriction on SaaS sign-in (DATA-002a)
+	Privacy     *privacy.Config                 `json:"privacy,omitempty"` // log privacy mode (NFR-033)
 	Devices     map[string]Device               `json:"devices"`
 }
 
@@ -1291,5 +1293,39 @@ func (s *Store) Tenancy(tenant string) *tenancy.Config {
 	b, _ := json.Marshal(t.Tenancy)
 	var c tenancy.Config
 	json.Unmarshal(b, &c)
+	return &c
+}
+
+// SetPrivacy turns the log privacy mode on or off. The key is made the first time it is turned on and
+// kept when it is turned off, so pseudonyms already in stored logs can still be looked up.
+func (s *Store) SetPrivacy(tenant string, pseudonymise bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if t.Privacy == nil {
+		t.Privacy = &privacy.Config{}
+	}
+	if pseudonymise && t.Privacy.Key == "" {
+		t.Privacy.Key = privacy.NewKey()
+	}
+	if pseudonymise != t.Privacy.PseudonymiseUsers {
+		t.Privacy.Since = time.Now().UTC()
+	}
+	t.Privacy.PseudonymiseUsers = pseudonymise
+	return s.save()
+}
+
+// Privacy returns a copy of a tenant's privacy setting, or nil if it never had one.
+func (s *Store) Privacy(tenant string) *privacy.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil || t.Privacy == nil {
+		return nil
+	}
+	c := *t.Privacy
 	return &c
 }

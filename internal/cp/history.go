@@ -35,7 +35,8 @@ func (a *API) decisionHistory(w http.ResponseWriter, r *http.Request, c ctxInfo)
 		return nil, fail(503, "unavailable", "decision records are not being kept on disk by this control plane")
 	}
 	q := r.URL.Query()
-	dq := decisions.Query{User: q.Get("user"), App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind"), Cursor: q.Get("cursor")}
+	dq := decisions.Query{App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind"), Cursor: q.Get("cursor")}
+	dq.User, dq.Alt = a.userFilter(c.tenant, q.Get("user"))
 	var err error
 	if v := q.Get("from"); v != "" {
 		if dq.From, err = parseWhen(v, false); err != nil {
@@ -63,6 +64,9 @@ func (a *API) decisionHistory(w http.ResponseWriter, r *http.Request, c ctxInfo)
 	}
 	if err != nil {
 		return nil, err
+	}
+	for i := range res.Records {
+		res.Records[i] = a.redact(res.Records[i]) // also records stored before the mode was turned on
 	}
 	return map[string]any{"records": res.Records, "next_cursor": res.Next, "partial": res.Partial,
 		"oldest": res.Oldest, "retention_days": int(arch.Retention / (24 * time.Hour))}, nil
