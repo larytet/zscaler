@@ -28,6 +28,7 @@ cmd/ztx-agent      endpoint agent: OIDC login, posture, local SOCKS and HTTP pro
 internal/          policy, mux, pki, posture, idp, broker, webproxy, store, cp, en, agent, alerts, audit
 test/idp           in-process OIDC provider for tests
 test/e2e           end-to-end scenarios that start the real binaries
+test/real          real-environment tests on a Linux node with Kubernetes (TEST-PLAN.md T7)
 ```
 
 ## Build and test
@@ -41,6 +42,32 @@ make e2e       # end-to-end scenarios with the real binaries (about 30 s)
 make fuzz      # 30 s per fuzz target
 go test -tags perf -v -run TestPerf ./internal/broker   # performance targets
 ```
+
+## HowTo: build in Docker and run the real-environment tests
+
+**Build without installing Go.** All you need is Docker:
+
+```
+make docker-build            # binaries into bin/, built in a golang container (GOIMAGE=golang:<version> to change it)
+```
+
+**Run the real-environment tests** (TEST-PLAN.md section T7). They run the product's real binaries on a Linux machine
+with a Kubernetes cluster: the connector as a pod, private apps as cluster services, agents as processes on the node.
+You provide the machine; the requirements for it are in [test/real/README.md](test/real/README.md): ssh with a key,
+passwordless sudo, `rsync`, `docker`, `kubectl` and a reachable cluster. Go is **not** needed on the node: the code
+is built in a container there.
+
+```
+export ZTX_TEST_NODE=<username>@<servername>   # your machine; never committed
+test/real/run.sh setup       # once: pulls the Go build image onto the node
+test/real/run.sh run         # rsync, build in a container, run the REAL- tests on the node, record the result
+test/real/run.sh run 'PA'    # only tests whose name matches
+test/real/run.sh clean       # remove leftovers of earlier runs (by label) and nothing else
+```
+
+A run uses one namespace named `ztx-real-<run id>` and removes it at the end, also when a test fails. Results are
+appended to [RESULTS-REAL.md](RESULTS-REAL.md) with the date, commit, the node's operating system and core count.
+Only some of the planned tests exist yet; STATUS.md says which.
 
 ## Try it on one machine
 

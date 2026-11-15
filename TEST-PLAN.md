@@ -449,10 +449,10 @@ The tests need one Linux x86-64 **test node**, supplied by the person running th
 |---|---|
 | Access | `ssh <username>@<servername>` works with a key (no password prompt) |
 | Privilege | `sudo` works without a password on the node |
-| Tools on the node | `rsync`, `docker`, `kubectl` (cluster access, possibly through `sudo`), `curl`, `python3`. Go is not needed: binaries are built on the developer machine |
+| Tools on the node | `rsync`, `docker`, `kubectl` (cluster access, possibly through `sudo`), `curl`, `python3`. Go is **not** installed on the node: the code is built inside a Docker container (image `golang:<version named in go.mod>`, pulled once) |
 | Cluster | A running Kubernetes cluster that `kubectl` on the node can reach (a single-node kind cluster is enough) |
 | Size | At least 4 CPUs and 8 GB of memory free; a few GB of disk |
-| Network | The node can reach its own cluster; outbound internet is optional (tests that need it say so and are skipped, with the reason printed, when it is missing) |
+| Network | The node can reach its own cluster. Outbound internet is needed once, to pull the build image (unless it is already there), and by the tests that say they need it (those are skipped, with the reason printed, when it is missing) |
 
 The node is given to the suite through environment variables, never written into the repository:
 
@@ -462,6 +462,7 @@ The node is given to the suite through environment variables, never written into
 | `ZTX_TEST_KUBECTL` | the kubectl command on the node, default `sudo kubectl` |
 | `ZTX_TEST_DOCKER` | the docker command on the node, default `sudo docker` |
 | `ZTX_TEST_REGISTRY` | a registry the cluster can pull from, if one exists (default: load images into the cluster directly) |
+| `ZTX_BUILD_IMAGE` | the Go build image, default `golang:<version in go.mod>` |
 
 ### T7.3 Layout
 
@@ -490,8 +491,9 @@ The node is given to the suite through environment variables, never written into
 
 ### T7.5 How a run works
 
-`test/real/run.sh` does: build static linux/amd64 binaries and the compiled test binary on the developer machine;
-`rsync` them to a per-run directory on the node; run the test binary there; copy the log back; clean up. The
+`test/real/run.sh` does: `rsync` the source to a directory on the node; build the product's binaries and one compiled
+test binary inside a Docker container (static, CGO off, run as the node user so no file is owned by root, Go cache kept
+between runs); run the test binary on the node; copy the log back; record the result. The
 results of a run are written to `RESULTS-REAL.md` with the date, the commit, the node's OS and core count (not its
 name), and the counts of passed, failed and skipped tests.
 

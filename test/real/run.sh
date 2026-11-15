@@ -4,8 +4,9 @@
 #   ZTX_TEST_NODE=<username>@<servername> test/real/run.sh [run|clean] [go test -run pattern]
 #
 # The node needs ssh key access, passwordless sudo, rsync, docker and a reachable Kubernetes cluster.
-# Go is installed under ~/ztx-real/go on the node by `setup` if it is not there. Nothing about the
-# node is kept in the repository: it is given only through the environment.
+# Nothing is built with a Go installation on the node: the code is built inside a Docker container
+# (image golang:<version from go.mod>, or ZTX_BUILD_IMAGE), and the compiled test binary is run on
+# the node. Nothing about the node is kept in the repository: it is given only through the environment.
 set -eu
 cd "$(dirname "$0")/../.."
 : "${ZTX_TEST_NODE:?set ZTX_TEST_NODE to <username>@<servername> (see TEST-PLAN.md T7.2)}"
@@ -13,7 +14,8 @@ cmd="${1:-run}"; shift || true
 pattern="${1:-.}"
 ssh_="ssh -o BatchMode=yes -o ConnectTimeout=20 $ZTX_TEST_NODE"
 GOVER="$(sed -n 's/^toolchain go//p' go.mod)"
-remote_go='$HOME/ztx-real/go/bin/go'
+BUILD_IMAGE="${ZTX_BUILD_IMAGE:-golang:$GOVER}"
+DOCKER="${ZTX_TEST_DOCKER:-sudo docker}"
 
 case "$cmd" in
 clean)
@@ -21,16 +23,8 @@ clean)
   $ssh_ "${ZTX_TEST_KUBECTL:-sudo kubectl} delete namespace -l app.kubernetes.io/part-of=ztx-real-test --wait=true --timeout=180s || true"
   exit 0;;
 setup)
-  $ssh_ "set -e; mkdir -p ~/ztx-real; cd ~/ztx-real; [ -x go/bin/go ] && go/bin/go version && exit 0
-    curl -fsSL 'https://go.dev/dl/?mode=json&include=all' -o dl.json
-    SHA=\$(python3 -c \"import json
-for r in json.load(open('dl.json')):
-    if r['version']=='go$GOVER':
-        for f in r['files']:
-            if f['os']=='linux' and f['arch']=='amd64' and f['kind']=='archive': print(f['sha256'])\")
-    curl -fsSL https://go.dev/dl/go$GOVER.linux-amd64.tar.gz -o go.tgz
-    echo \"\$SHA  go.tgz\" | sha256sum -c -
-    rm -rf go && tar -xzf go.tgz && rm -f go.tgz dl.json && go/bin/go version"
+  # fetches the build image onto the node (once); there is no Go to install
+  $ssh_ "$DOCKER pull $BUILD_IMAGE"
   exit 0;;
 run) ;;
 *) echo "usage: $0 [run|clean|setup] [test name pattern]" >&2; exit 2;;
@@ -42,7 +36,10 @@ stamp="$(date +%Y%m%d-%H%M%S)"
 commit="$(git rev-parse --short HEAD)"
 log="test/real/last-run.log"
 set +e
-$ssh_ "cd ~/ztx-real/src && export PATH=\$HOME/ztx-real/go/bin:\$PATH GOTOOLCHAIN=local ZTX_TEST_KUBECTL='${ZTX_TEST_KUBECTL:-sudo kubectl}' ZTX_TEST_DOCKER='${ZTX_TEST_DOCKER:-sudo docker}' && go build -o ~/ztx-real/bin/ ./cmd/... && go test -tags real -count=1 -v -timeout 30m -run '$pattern' ./test/real" 2>&1 | tee "$log"
+# build in a container as the node user (so the files are not root-owned): the binaries for the
+# product and one compiled test binary. CGO is off so they are static.
+$ssh_ "mkdir -p ~/ztx-real/bin ~/ztx-real/cache && $DOCKER run --rm --user \$(id -u):\$(id -g) -e HOME=/tmp -e GOCACHE=/cache/build -e GOPATH=/cache/gopath -e GOTOOLCHAIN=local -e CGO_ENABLED=0 -v \$HOME/ztx-real/src:/src -v \$HOME/ztx-real/bin:/out -v \$HOME/ztx-real/cache:/cache -w /src $BUILD_IMAGE sh -c 'go build -o /out/ ./cmd/... && go test -c -tags real -o /out/real.test ./test/real'" 2>&1 | tee "$log" &&
+$ssh_ "cd ~/ztx-real && ZTX_BIN=\$HOME/ztx-real/bin ZTX_TEST_KUBECTL='${ZTX_TEST_KUBECTL:-sudo kubectl}' ZTX_TEST_DOCKER='$DOCKER' ./bin/real.test -test.v -test.count=1 -test.timeout 30m -test.run '$pattern'" 2>&1 | tee -a "$log"
 status=$?
 set -e
 pass=$(grep -c '^--- PASS' "$log" || true); fail=$(grep -c '^--- FAIL' "$log" || true); skip=$(grep -c '^--- SKIP' "$log" || true)
