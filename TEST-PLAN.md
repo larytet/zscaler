@@ -393,3 +393,29 @@ Written with the design, before any implementation. IDs continue the plan's sche
 | WBT-020 | **manual** | P1 | The launcher's start-up notice, the first-run screen and the admin console state the limits | v1: the launcher notice says proof of concept and lists the missing controls (automated by SCN-011); the first-run screen and console text are still to be written and checked by a person | WB-013 |
 
 **Deferred tests (not failing):** WBT-009 (credential part), WBT-015, WBT-018. WBT-019 (screenshots) is not deferred: it records that v1 does **not** block them. Entry for implementation slice W1: WBT-001 to WBT-014 written as failing tests first. Exit for the proof of concept (RB-WB v1): all P1 automated tests that are not deferred pass on three consecutive runs, and WBT-016, WBT-017, WBT-019 and WBT-020 have been done by at least two people who did not build the workspace. WBT-009 (credential), WBT-015 and WBT-018 are deferred and are not part of this exit. Until then the workspace browser is described everywhere as "not yet verified on real browsers".
+
+---
+
+## T5. Agentic-AI security (requirements v0.8, DESIGN D9)
+
+Written before the slices it covers. Priorities follow the requirements: Should items are P2 unless marked. "Agent" means an identity `agent:<name>` (I12b).
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| AGT-001 | L3 | P1 | A rule with `inject` on an allowed request to the secret's host | The origin receives the header with the secret; the agent's own header of that name is replaced | AGS-001 |
+| AGT-002 | L3 | P1 | The secret is bound to host A, the request goes to host B | Denied, nothing injected, the secret never sent to B | AGS-001 |
+| AGT-003 | L3 | P1 | The request is denied by policy | The secret is not injected and the origin is not contacted | AGS-001 |
+| AGT-004 | L4 | P1 | Secret scan over the agent's responses, the decision log, captures, block pages, the secrets list API and the audit log | The secret value appears nowhere | AGS-001 |
+| AGT-005 | L3 | P1 | Rule with `inject` on traffic that is not inspected | Denied with a reason that says inspection is needed | AGS-001 |
+| AGT-006 | L3 | P1 | Secrets API: create, list, replace, delete; viewer role; another tenant | List shows names and hosts only; writes need admin; tenants isolated; audited without the value | AGS-001 |
+| AGT-007 | L3 | P2 | Read-only pack: GET and HEAD allowed on listed domains, POST, PUT, PATCH and DELETE denied or sent to approval, other domains denied | Each case decided as stated, for agents only | AGS-002, AGS-003 |
+| AGT-008 | L3 | P2 | The same pack for a person | No effect on people | AGS-002 |
+| AGT-009 | L3 | P1 | Operator cap: the operator is disabled, restricted, or loses access to the app | The agent is denied at once | AGS-004 |
+| AGT-010 | L3 | P1 | An agent granted an app its operator may not reach | Denied, reason says the operator lacks access | AGS-004 |
+| AGT-011 | L3 | P2 | Shadow-AI report over a set of decisions | Counts per person and AI tool; people with no AI use absent; tenant isolated | AGS-016 |
+| AGT-012 | L3 | P2 | Rule-of-two lint: an agent that can read private apps, reach untrusted input and write out | Warning naming the three; an agent missing one leg gets none | AGS-017 |
+| AGT-013 | L4 | P2 | End to end with real binaries: an agent with an injected credential reaches a TLS origin, the origin sees the credential, the agent process never held it | As stated | AGS-001 |
+| AGT-014 | L3 | P2 | Per-agent volume cap | Pause and alert at the limit; owner can resume | AGS-009 |
+| AGT-015 | manual | P2 | An owner who is not a security expert reads the agent registry, the approval request and the rule-of-two warning | Understands each without help (add to USABILITY-RUNBOOK) | Principle 5 |
+
+Not covered in this plan until built: AGS-007 chat approval, AGS-008, AGS-010, AGS-011, AGS-012, AGS-014, AGS-015 (decision log chain), AGS-018.

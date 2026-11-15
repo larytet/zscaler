@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMB-ZTX Console Demo</title>
+<meta name="description" content="Clickable mock of a small-business zero-trust console with fictional data. Shows alerts, devices, contractors, AI agents, data protection and audit.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <span class="brand">SMB-ZTX demo</span>
+  <nav aria-label="Pages">
+    <a href="index.html" aria-current="page">Console demo</a>
+    <a href="how.html">How the security works</a>
+  </nav>
+</header>
+<div class="banner" role="note">
+  Mock with fictional data (Fernhill Accounting, 14 people). Nothing here connects to anything, and nothing is stored.
+  Badges: <span class="tag built">Built</span> works in the code (basic form) &middot;
+  <span class="tag proposed">Proposed</span> in the requirements (section 19) but not built.
+</div>
+
+<div class="layout">
+  <div class="side" role="tablist" aria-label="Console sections" id="tabs"></div>
+  <main id="view" tabindex="-1" aria-live="polite"></main>
+</div>
+<div id="toast" class="toast hidden" role="status"></div>
+<script src="console.js"></script>
+</body>
+</html>

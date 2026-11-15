@@ -682,3 +682,63 @@ The launcher reuses the agent's posture probes (D4.3) plus the browser's version
 | W4 | **Deferred.** Installers per OS, auto-update, minimum version | Clean machines, people |
 
 Risks: the Chrome extension-loading restriction (D8.7); no portable trust-store isolation (D8.5); screenshot blocking (D8.6); a browser the user can also reach through the operating system's own copy of Chrome, which the policy cannot stop (WB-013). A compromised operating system defeats every control here.
+
+---
+
+## D9. Agentic-AI security (requirements v0.8, section 19, AGS-001..AGS-018)
+
+Section 19 collects ideas for small businesses that let AI agents reach their systems. All its priorities are **proposals (S, C), not product decisions**; this part says what is already covered, what gets built first, and what is left. Nothing in section 19 is Must.
+
+### D9.1 Mapping to what exists
+
+| AGS | Idea | State today | Gap |
+|---|---|---|---|
+| 001 | Credential injection: the platform holds the secret and adds it after policy allows | Not built | Needs a secret store, a rule field, and injection in the inspecting proxy (D7). First build |
+| 002 | Read-only agent pack | Not built; method and path rules exist (D7), `require_approval` exists (I9e) | A policy template for the group `ai-agent`: reads allowed on listed domains, writes denied or sent to approval. Second build |
+| 003 | Default-deny egress per agent | Private apps: yes (default deny). Web: default allow for people | A per-agent web deny-except-listed rule, delivered by the pack in AGS-002 |
+| 004 | Agent never more powerful than its operator | Not built; the operator is recorded (I12b) only as text | An evaluation that also asks whether the operator may reach the app, and a real operator field |
+| 005 | Agent registry with last use, expiry, risk | Partly: `GET /v1/ai-agents` lists agent, operator, apps | Last use, expiry, risk; flag unused 30 days. Last use must be persisted, decision history is in memory |
+| 006 | Short-lived grants, one-click revoke | **Built** (I12b: grants of 1 to 1440 minutes, `DELETE /v1/ai-agents/{name}`, effective within seconds) | None. Patent note in 19.7 |
+| 007 | Approval by email, Slack or Teams, showing the exact action | Partly: approval requests and an email notice (I9e) | No reply-to-approve, no chat approvers, the request shows the app, not the exact call |
+| 008 | Approval-fatigue controls | Not built | Rate limit and grouping of approvals per person |
+| 009 | Volume caps and kill switch | Kill switch built (revoke); caps not built | Per-agent counters on the node; pause and alert at a limit |
+| 010 | Named actions instead of raw API access | Not built | A gateway layer for tool calls; large |
+| 011 | Agent-proposed access | Not built | Class C |
+| 012 | Mask instead of block | Not built; response DLP blocks the whole response (I16) | Span-returning detectors and a masking transform |
+| 013 | Prompt and upload DLP per AI tool | Covered in basic form (request DLP, I10b) | A clear per-tool allow, warn, block setting |
+| 014 | Intent-before, result-after audit | Result side only (decision records) | The agent must state intent: needs a protocol; not designed |
+| 015 | Hash-chained audit | Admin audit is hash-chained (I2b). Decision records are not | Chain the node's decision log and add a verifier. Patent note |
+| 016 | Shadow-AI report | Not built; web decisions exist with host names | A list of AI tool domains and a per-person report |
+| 017 | Rule-of-two configuration check | Not built | A deterministic lint over an agent's policy and grants; advice only |
+| 018 | Agent risk score | Partly: the risk score (I9d) already covers any identity, so an agent that is blocked repeatedly scores | Volume spikes and new-app signals |
+
+### D9.2 Order of work
+
+| Slice | Content | Why this order |
+|---|---|---|
+| A1 | AGS-001 credential injection | Marked "recommended first" in the requirements; removes the largest risk (an agent holding a key) |
+| A2 | AGS-002 and AGS-003 read-only agent pack with egress allow-list | Recommended first; mostly policy templates over existing features |
+| A3 | AGS-004 operator cap | Small, deterministic, closes "agent more powerful than its owner" |
+| A4 | AGS-016 shadow-AI report and AGS-017 rule-of-two lint | Read-only analysis over data we already hold |
+| A5 | AGS-009 per-agent caps, AGS-005 registry fields | Needs counters and persisted last-use |
+| later | AGS-007/008 chat approval and fatigue limits, AGS-010 named actions, AGS-012 masking, AGS-014 intent, AGS-015 chained decision log, AGS-018 volume signals, AGS-011 | Larger, or need a protocol or an outside integration |
+
+### D9.3 Design decisions for A1
+
+- **Secrets are tenant objects**: a name, the host they apply to, the header to set, and the value. They are written by an admin, never returned by any API (the list shows names and hosts only), and travel to enforcement nodes in the signed snapshot, as the intercept CA key does. They are therefore as sensitive as that key (D7): stored in clear in the control-plane store file, held in memory on every node.
+- **A web rule may say `inject: "<secret name>"`.** The proxy adds the header only after the rule allows the request, only for the host the secret is bound to, and replaces any header of that name the agent sent (an agent cannot pick a different credential). If the secret's host does not match the request host, nothing is injected and the request is denied: a rule cannot be used to send a credential to another site.
+- **Needs inspection**: injection happens on decrypted requests, so it applies only when inspection is on for the tenant and the host is not exempt. A rule with `inject` on traffic that cannot be inspected is refused at save time where that can be known, and denied at run time otherwise.
+- **The agent never sees the secret**: it is not in any response to the agent, not in the decision log, not in captures (the header is redacted by name, D7 capture), and not in block pages.
+
+### D9.4 Patent and prior-art risk register (from requirements 19.7)
+
+Counsel must read the claims before design freeze. Items that overlap what is already built or planned:
+
+| Patent (per 19.7) | Overlaps in this repository | State |
+|---|---|---|
+| US 12,688,261: authorising an agent's tool call with short-lived delegation artifacts per invocation | AGS-001, AGS-006, and the grants of I12b (time-limited grants, one per user and app, not per invocation) | Open, claims not read |
+| US 12,671,588: agent paused until human approval, risk-adaptive tightening, receipt lineage | AGS-007, AGS-015, `require_approval` (I9e), the risk score (I9d) | Open, claims not read |
+| US 12,732,509: execution boundary intercepts a proposed action, authority narrows at each delegation step | AGS-004, AGS-010 | Open, claims not read |
+| US 11,968,179: isolated browser streamed as image content | ZIA-024b only; the workspace browser sends no image stream | Outside claim 1 as worded, per 19.7 |
+
+Already-built features that touch the open items are not withdrawn by this table; it records the exposure so counsel sees it. No claim language was read for this register, and it is not a legal opinion.
