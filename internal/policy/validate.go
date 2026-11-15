@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"github.com/larytet/zscaler/internal/cloudapps"
 	"github.com/larytet/zscaler/internal/filetype"
 
 	"github.com/larytet/zscaler/internal/dlp"
@@ -109,6 +110,22 @@ func Validate(p *Policy, known map[string]bool) []error {
 		}
 		if (len(m.UploadFileTypes) > 0 || len(m.DownloadFileTypes) > 0) && p.Kind != Web {
 			add("%s: upload_file_types and download_file_types are only valid in web policies", w)
+		}
+		if (len(m.CloudApps) > 0 || len(m.CloudActions) > 0) && p.Kind != Web {
+			add("%s: cloud_apps and cloud_actions are only valid in web policies", w)
+		}
+		if len(m.CloudActions) > 0 && len(m.CloudApps) == 0 {
+			add("%s: cloud_actions need cloud_apps", w)
+		}
+		for _, a := range m.CloudApps {
+			if !cloudapps.ValidID(a) {
+				add("%s: %q is not a valid app id", w, a)
+			}
+		}
+		for _, a := range m.CloudActions {
+			if !cloudapps.IsAction(a) {
+				add("%s: unknown cloud action %q (known: %s)", w, a, strings.Join(cloudapps.Actions, ", "))
+			}
 		}
 		for _, list := range [][]string{m.UploadFileTypes, m.DownloadFileTypes} {
 			for _, ft := range list {

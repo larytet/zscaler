@@ -12,6 +12,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"fmt"
+	"github.com/larytet/zscaler/internal/cloudapps"
 	"html"
 	"io"
 	"net"
@@ -172,6 +173,20 @@ func refID() string {
 	return hex.EncodeToString(b)
 }
 
+// CloudAppSource is an optional State extension: the apps a tenant sees for cloud app control (ZIA-011).
+type CloudAppSource interface {
+	CloudCatalog(tenant string) *cloudapps.Catalog
+}
+
+var builtinCatalog = cloudapps.NewCatalog(nil)
+
+func (p *Proxy) catalog(tenant string) *cloudapps.Catalog {
+	if cs, ok := p.State.(CloudAppSource); ok {
+		return cs.CloudCatalog(tenant)
+	}
+	return builtinCatalog
+}
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.init()
 	id, user, ok := p.identify(r)
@@ -204,8 +219,14 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if pol == nil {
 		d = policy.Decision{Action: policy.Deny, Reason: "no-policy"}
 	} else {
-		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(), Workspace: ws,
-			Device: policy.Device{ID: id.Device}})
+		cat := p.catalog(id.Tenant)
+		req := policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(), Workspace: ws,
+			Device: policy.Device{ID: id.Device}, CloudApps: cat.AppsFor(host)}
+		if r.Method != http.MethodConnect && r.URL != nil { // a plain request: its method and path are in the clear
+			req.CloudActions = cat.ActionsFor(host, r.Method, r.URL.Path)
+			req.Method, req.Path = r.Method, r.URL.Path
+		}
+		d = pol.Evaluate(req)
 		rec.Version = pol.Version
 	}
 	rec.Rule, rec.Reason = d.RuleID, d.Reason

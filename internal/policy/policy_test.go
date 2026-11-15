@@ -646,3 +646,58 @@ func TestFileTypeRuleValidation(t *testing.T) { // AGT-025
 		}
 	}
 }
+
+func TestCloudAppRules(t *testing.T) { // AGT-031 (ZIA-011)
+	p := &Policy{Kind: Web, DefaultAction: Allow, Rules: []Rule{
+		{ID: "no-dropbox-up", Priority: 1, Action: Deny, Match: Match{CloudApps: []string{"dropbox"}, CloudActions: []string{"upload", "share"}}},
+		{ID: "no-pastebin", Priority: 2, Action: Deny, Match: Match{CloudApps: []string{"pastebin", "github-gist"}}},
+		{ID: "slack-post", Priority: 3, Action: Warn, Match: Match{CloudApps: []string{"slack", "teams"}, CloudActions: []string{"post"}}},
+	}}
+	if err := p.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	if errs := Validate(p, nil); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	req := func(mod func(*Request)) Request {
+		r := Request{Kind: Web, Host: "x.example", Now: t0, User: User{Email: "a@example.com"}}
+		mod(&r)
+		return r
+	}
+	cases := []struct {
+		name string
+		mod  func(*Request)
+		want Action
+		rule string
+	}{
+		{"an upload to the app", func(r *Request) { r.CloudApps = []string{"dropbox"}; r.CloudActions = []string{"dropbox:upload"} }, Deny, "no-dropbox-up"},
+		{"a share", func(r *Request) { r.CloudApps = []string{"dropbox"}; r.CloudActions = []string{"dropbox:share"} }, Deny, "no-dropbox-up"},
+		{"a download from the same app", func(r *Request) { r.CloudApps = []string{"dropbox"}; r.CloudActions = []string{"dropbox:download"} }, Allow, ""},
+		{"the app, no action known (a tunnel)", func(r *Request) { r.CloudApps = []string{"dropbox"} }, Allow, ""},
+		{"another app's upload", func(r *Request) { r.CloudApps = []string{"box"}; r.CloudActions = []string{"box:upload"} }, Allow, ""},
+		{"an app rule with no action: the whole app, in a tunnel", func(r *Request) { r.CloudApps = []string{"pastebin"} }, Deny, "no-pastebin"},
+		{"the second app of a list", func(r *Request) { r.CloudApps = []string{"github-gist"} }, Deny, "no-pastebin"},
+		{"a post in an app of the list", func(r *Request) { r.CloudApps = []string{"slack"}; r.CloudActions = []string{"slack:post"} }, Warn, "slack-post"},
+		{"an action of another app is not this app's", func(r *Request) { r.CloudApps = []string{"slack"}; r.CloudActions = []string{"dropbox:post"} }, Allow, ""},
+		{"nothing known", func(r *Request) {}, Allow, ""},
+	}
+	for _, c := range cases {
+		if d := p.Evaluate(req(c.mod)); d.Action != c.want || d.RuleID != c.rule {
+			t.Errorf("%s: got %s by %q, want %s by %q", c.name, d.Action, d.RuleID, c.want, c.rule)
+		}
+	}
+}
+
+func TestCloudAppRuleValidation(t *testing.T) { // AGT-031
+	bad := map[string]*Policy{
+		"actions without apps": {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{CloudActions: []string{"upload"}}}}},
+		"unknown action":       {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{CloudApps: []string{"box"}, CloudActions: []string{"explode"}}}}},
+		"bad app id":           {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{CloudApps: []string{"Bad App!"}}}}},
+		"private policy":       {Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{CloudApps: []string{"box"}}}}},
+	}
+	for name, p := range bad {
+		if err := p.Compile(nil); err == nil && len(Validate(p, nil)) == 0 {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

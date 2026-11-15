@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/cloudapps"
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
@@ -172,6 +173,7 @@ type Tenant struct {
 	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"`      // tenancy restriction on SaaS sign-in (DATA-002a)
 	Privacy     *privacy.Config                 `json:"privacy,omitempty"`      // log privacy mode (NFR-033)
 	Failure     *FailureMode                    `json:"failure_mode,omitempty"` // fail-open or fail-closed choices (NFR-012)
+	CloudApps   map[string]cloudapps.App        `json:"cloud_apps,omitempty"`   // this tenant\'s own apps for cloud app control (ZIA-011)
 	SCIM        *SCIMConfig                     `json:"scim,omitempty"`         // provisioning from the identity provider (INT-002)
 	SCIMUsers   map[string]SCIMUser             `json:"scim_users,omitempty"`
 	SCIMGroups  map[string]SCIMGroup            `json:"scim_groups,omitempty"`
@@ -480,6 +482,9 @@ func (s *Store) PutPolicyAs(tenant string, k policy.Kind, p *policy.Policy, ifMa
 	if err := t.checkEDM(p); err != nil {
 		return cur, err
 	}
+	if err := t.checkCloudApps(p); err != nil {
+		return cur, err
+	}
 	if err := t.checkInjects(p); err != nil {
 		return cur, err
 	}
@@ -667,6 +672,7 @@ type TenantSnap struct {
 	EDM            []EDMSet // exact-data-match sets: salted hashes only
 	Tenancy        *tenancy.Config
 	Failure        *FailureMode
+	CloudApps      []cloudapps.App // the tenant's own apps; the node adds the built-in ones
 }
 
 // Grant is an admin-approved, time-limited access (just-in-time).
@@ -739,6 +745,9 @@ func (s *Store) Snapshot() *Snapshot {
 		}
 		ts.Tenancy = t.Tenancy
 		ts.Failure = t.Failure
+		for _, a := range t.CloudApps {
+			ts.CloudApps = append(ts.CloudApps, a)
+		}
 		for _, sc := range t.Secrets {
 			ts.Secrets = append(ts.Secrets, sc)
 		}
@@ -1385,4 +1394,85 @@ func (s *Store) FailureModeOf(tenant string) FailureMode {
 		}
 	}
 	return f
+}
+
+func (t *Tenant) catalog() *cloudapps.Catalog {
+	var custom []cloudapps.App
+	for _, a := range t.CloudApps {
+		custom = append(custom, a)
+	}
+	return cloudapps.NewCatalog(custom)
+}
+
+// checkCloudApps refuses a policy that names an app that does not exist.
+func (t *Tenant) checkCloudApps(p *policy.Policy) error {
+	cat := t.catalog()
+	for _, r := range p.Rules {
+		for _, a := range r.Match.CloudApps {
+			if !cat.Has(a) {
+				return fmt.Errorf("rule %q names the unknown app %q (see GET /v1/cloud-apps)", r.ID, a)
+			}
+		}
+	}
+	return nil
+}
+
+// PutCloudApp stores one of the tenant's own apps (it replaces a built-in app of the same id).
+func (s *Store) PutCloudApp(tenant string, a cloudapps.App) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if _, exists := t.CloudApps[a.ID]; !exists && len(t.CloudApps) >= 100 {
+		return fmt.Errorf("at most 100 apps of your own")
+	}
+	if t.CloudApps == nil {
+		t.CloudApps = map[string]cloudapps.App{}
+	}
+	t.CloudApps[a.ID] = a
+	return s.save()
+}
+
+// CloudCatalog returns the apps the tenant sees: built-in, with its own added or replacing.
+func (s *Store) CloudCatalog(tenant string) *cloudapps.Catalog {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return cloudapps.NewCatalog(nil)
+	}
+	return t.catalog()
+}
+
+// DeleteCloudApp removes one of the tenant's own apps; a policy that still names it (and that would be
+// left naming nothing) stops the removal. Removing an app that replaced a built-in one restores the built-in.
+func (s *Store) DeleteCloudApp(tenant, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if _, ok := t.CloudApps[id]; !ok {
+		return ErrNotFound
+	}
+	builtin := false
+	for _, b := range cloudapps.Builtin() {
+		builtin = builtin || b.ID == id
+	}
+	if !builtin {
+		for k, d := range t.Policies {
+			for _, r := range d.Policy.Rules {
+				for _, a := range r.Match.CloudApps {
+					if a == id {
+						return fmt.Errorf("app %q is still used by rule %q of the %s policy", id, r.ID, k)
+					}
+				}
+			}
+		}
+	}
+	delete(t.CloudApps, id)
+	return s.save()
 }

@@ -1199,3 +1199,103 @@ func TestFailureModeEndpoint(t *testing.T) { // AGT-030 (NFR-012)
 		t.Fatalf("%s", ab)
 	}
 }
+
+func TestCloudAppsEndpoints(t *testing.T) { // AGT-031 (ZIA-011)
+	e := newEnrolEnv(t)
+	c, b, _ := e.call("GET", "/v1/cloud-apps", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), `"id":"dropbox"`) || !strings.Contains(string(b), `"builtin":true`) || !strings.Contains(string(b), "have not been checked") {
+		t.Fatalf("%d %s", c, b)
+	}
+	// a rule naming an app that does not exist is refused when the policy is saved
+	web := func(app string, actions ...string) map[string]any {
+		m := map[string]any{"cloud_apps": []string{app}}
+		if len(actions) > 0 {
+			m["cloud_actions"] = actions
+		}
+		return map[string]any{"default_action": "allow", "rules": []map[string]any{{"id": "r", "priority": 1, "action": "deny", "match": m}}}
+	}
+	if c, b, _ := e.call("PUT", "/v1/policies/web", e.adminA, web("our-portal", "upload"), "If-Match", "0"); c != 400 || !strings.Contains(string(b), "unknown app") {
+		t.Fatalf("an unknown app: %d %s", c, b)
+	}
+	own := map[string]any{"domains": []string{"portal.example.com"}, "actions": map[string]any{"upload": []map[string]any{{"methods": []string{"post"}, "paths": []string{"/files"}}}}}
+	if c, b, _ := e.call("PUT", "/v1/cloud-apps/our-portal", e.adminA, own); c != 200 || !strings.Contains(string(b), `"POST"`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	if c, _, _ := e.call("PUT", "/v1/policies/web", e.adminA, web("our-portal", "upload"), "If-Match", "0"); c != 200 {
+		t.Fatalf("a rule naming the organisation's own app: %d", c)
+	}
+	if snap := e.api.Store.Snapshot().Tenants["a"]; snap == nil || len(snap.CloudApps) != 1 || snap.CloudApps[0].ID != "our-portal" {
+		t.Fatalf("the nodes must get the organisation's own apps: %+v", snap)
+	}
+	// bad apps
+	for name, body := range map[string]map[string]any{
+		"wildcard domain": {"domains": []string{"*.example.com"}},
+		"no domains":      {"domains": []string{}},
+		"unknown action":  {"domains": []string{"a.example.com"}, "actions": map[string]any{"explode": []map[string]any{{}}}},
+		"id mismatch":     {"id": "other", "domains": []string{"a.example.com"}},
+		"unknown field":   {"domains": []string{"a.example.com"}, "bogus": 1},
+	} {
+		if c, _, _ := e.call("PUT", "/v1/cloud-apps/our-portal", e.adminA, body); c != 400 {
+			t.Errorf("%s: %d", name, c)
+		}
+	}
+	// deleting an app a rule uses is refused; a built-in cannot be deleted; an unused own app can
+	if c, _, _ := e.call("DELETE", "/v1/cloud-apps/our-portal", e.adminA, nil); c != 409 {
+		t.Fatalf("an app in use: %d", c)
+	}
+	if c, _, _ := e.call("DELETE", "/v1/cloud-apps/dropbox", e.adminA, nil); c != 404 {
+		t.Fatalf("a built-in app: %d", c)
+	}
+	e.call("PUT", "/v1/cloud-apps/unused", e.adminA, map[string]any{"domains": []string{"u.example.com"}})
+	if c, _, _ := e.call("DELETE", "/v1/cloud-apps/unused", e.adminA, nil); c != 200 {
+		t.Fatalf("an unused app: %d", c)
+	}
+	// replacing a built-in app, and restoring it by deleting the replacement
+	dropbox := func() (builtin bool, domains []string) {
+		_, b, _ := e.call("GET", "/v1/cloud-apps", e.adminA, nil)
+		var l struct {
+			Apps []struct {
+				ID      string
+				Builtin bool
+				Domains []string
+			}
+		}
+		json.Unmarshal(b, &l)
+		for _, a := range l.Apps {
+			if a.ID == "dropbox" {
+				return a.Builtin, a.Domains
+			}
+		}
+		t.Fatal("dropbox is missing from the catalogue")
+		return
+	}
+	if bi, d := dropbox(); !bi || len(d) != 3 {
+		t.Fatalf("the built-in app: %v %v", bi, d)
+	}
+	e.call("PUT", "/v1/cloud-apps/dropbox", e.adminA, map[string]any{"domains": []string{"dropbox.com"}})
+	if bi, d := dropbox(); bi || len(d) != 1 || d[0] != "dropbox.com" {
+		t.Fatalf("the replacement must win: %v %v", bi, d)
+	}
+	if c, _, _ := e.call("DELETE", "/v1/cloud-apps/dropbox", e.adminA, nil); c != 200 {
+		t.Fatalf("restoring the built-in: %d", c)
+	}
+	if bi, d := dropbox(); !bi || len(d) != 3 {
+		t.Fatalf("the built-in dropbox must be back: %v %v", bi, d)
+	}
+	// roles, tenants, audit
+	for _, role := range []store.Role{store.Viewer, store.Helpdesk, store.Auditor} {
+		tok, _ := e.api.Store.AddAdmin("a", "r-"+string(role), role)
+		if c, _, _ := e.call("GET", "/v1/cloud-apps", tok, nil); c != 200 {
+			t.Errorf("%s could not read: %d", role, c)
+		}
+		if c, _, _ := e.call("PUT", "/v1/cloud-apps/x1", tok, own); c != 403 {
+			t.Errorf("%s changed the catalogue: %d", role, c)
+		}
+	}
+	if _, b, _ := e.call("GET", "/v1/cloud-apps", e.adminB, nil); strings.Contains(string(b), "our-portal") {
+		t.Fatalf("tenant b sees tenant a's app: %s", b)
+	}
+	if _, ab, _ := e.call("GET", "/v1/audit", e.adminA, nil); !strings.Contains(string(ab), "cloud-app.put") {
+		t.Fatalf("%s", ab)
+	}
+}

@@ -138,6 +138,7 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	pol := p.State.Policy(id.Tenant, policy.Web)
 	d := policy.Decision{Action: policy.Deny, Reason: "no-policy"}
 	cats := p.Classifier.Categories(host)
+	cat := p.catalog(id.Tenant)
 	var hits, files []string
 	if pol != nil {
 		if (pol.UsesDLP() || pol.UsesUploadFileTypes()) && q.Body != nil && q.Body != http.NoBody && (q.Method == "POST" || q.Method == "PUT" || q.Method == "PATCH") {
@@ -150,7 +151,8 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 			}
 		}
 		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits, UploadFiles: files})
+			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits, UploadFiles: files,
+			CloudApps: cat.AppsFor(host), CloudActions: cat.ActionsFor(host, q.Method, q.URL.Path)})
 		rec.Version = pol.Version
 		rec.DLP = hits
 		if d.Action == policy.Deny && len(files) > 0 && ruleUsesUploadFileTypes(pol, d.RuleID) {

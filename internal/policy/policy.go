@@ -90,6 +90,10 @@ type Request struct {
 	// phase, the kinds the response carries (package filetype).
 	UploadFiles   []string
 	DownloadFiles []string
+	// CloudApps are the apps the request's host belongs to; CloudActions the "app:action" pairs the
+	// (decrypted or plain) request is recognised as (package cloudapps).
+	CloudApps    []string
+	CloudActions []string
 	// AssumeDevice skips the checks that belong to a device (network, workspace, posture). Used when
 	// asking whether a person could reach something, without having one of their devices at hand.
 	AssumeDevice bool
@@ -153,6 +157,12 @@ type Match struct {
 	// with the action deny; inspected traffic only.
 	UploadFileTypes   []string `json:"upload_file_types,omitempty"`
 	DownloadFileTypes []string `json:"download_file_types,omitempty"`
+	// CloudApps names apps of the catalogue (package cloudapps), such as "dropbox". With no CloudActions the
+	// rule matches any request to the app's domains; with CloudActions ("upload", "post", "share", ...)
+	// it matches requests recognised as one of those actions of one of the apps, which needs decrypted
+	// traffic. Web rules only (ZIA-011).
+	CloudApps    []string `json:"cloud_apps,omitempty"`
+	CloudActions []string `json:"cloud_actions,omitempty"`
 	// MaxRisk and MinRisk bound the user's risk score (inclusive).
 	MaxRisk *int `json:"max_risk,omitempty"`
 	MinRisk *int `json:"min_risk,omitempty"`
@@ -372,6 +382,21 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 				if want == got {
 					ok = true
 				}
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	if len(m.CloudApps) > 0 {
+		ok := false
+		for _, app := range m.CloudApps {
+			if len(m.CloudActions) == 0 {
+				ok = ok || contains(r.CloudApps, app)
+				continue
+			}
+			for _, act := range m.CloudActions {
+				ok = ok || contains(r.CloudActions, app+":"+act)
 			}
 		}
 		if !ok {
@@ -603,6 +628,15 @@ func (p *Policy) EvaluateResponse(r Request) (d Decision) {
 func (p *Policy) UsesResponseDLP() bool {
 	for _, r := range p.Rules {
 		if len(r.Match.DLPResponse) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(l []string, s string) bool {
+	for _, x := range l {
+		if x == s {
 			return true
 		}
 	}

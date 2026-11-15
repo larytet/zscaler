@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/larytet/zscaler/internal/cloudapps"
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/tenancy"
 	"io"
@@ -44,6 +45,7 @@ type tenantView struct {
 	edm     map[string]*dlp.EDM
 	tenancy *tenancy.Config
 	failure store.FailureMode
+	catalog *cloudapps.Catalog
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -98,6 +100,7 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 			tv.secrets[sc.Name] = sc
 		}
 		tv.tenancy = t.Tenancy
+		tv.catalog = cloudapps.NewCatalog(t.CloudApps)
 		tv.failure = store.FailureMode{OnStale: broker.FailDeny, OnLogFailure: broker.FailDeny}
 		if t.Failure != nil {
 			if t.Failure.OnStale != "" {
@@ -203,6 +206,16 @@ func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
 	}
 	return false, nil, nil
 }
+
+// CloudCatalog returns the apps the tenant sees for cloud app control: the built-in ones and its own (ZIA-011).
+func (s *SyncState) CloudCatalog(tenant string) *cloudapps.Catalog {
+	if t := s.t(tenant); t != nil && t.catalog != nil {
+		return t.catalog
+	}
+	return defaultCatalog
+}
+
+var defaultCatalog = cloudapps.NewCatalog(nil)
 
 // FailureMode returns what the tenant chose for a node that is unhealthy; an unknown tenant gets the safe choice (NFR-012).
 func (s *SyncState) FailureMode(tenant string) (string, string) {

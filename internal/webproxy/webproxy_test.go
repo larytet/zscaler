@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/cloudapps"
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
@@ -39,6 +40,7 @@ type state struct {
 	edm         map[string]*dlp.EDM
 	tenancyHost string // the one host the tenancy test restricts
 	stale       bool
+	catalog     *cloudapps.Catalog
 	onStale     string
 	onLog       string
 }
@@ -47,6 +49,15 @@ func (s *state) EDM(string) map[string]*dlp.EDM {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.edm
+}
+
+func (s *state) CloudCatalog(string) *cloudapps.Catalog {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.catalog == nil {
+		return cloudapps.NewCatalog(nil)
+	}
+	return s.catalog
 }
 
 func (s *state) Stale() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stale }

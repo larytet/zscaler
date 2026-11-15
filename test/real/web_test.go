@@ -283,3 +283,52 @@ func TestRealZIA005FileTypeControl(t *testing.T) {
 		t.Errorf("expected 4 refusals recorded with their kind, found %d", refused)
 	}
 }
+
+// REAL-ZIA-006 (ZIA-011): cloud app control. An app is defined for the origin (the organisation's own,
+// through the catalogue API); a rule refuses its uploads, a post and plain reads go through; then a rule on
+// the app as a whole is decided at the connection.
+func TestRealZIA006CloudAppControl(t *testing.T) {
+	w, a := startWeb(t)
+	w.must("PUT", "/v1/inspection", map[string]any{"enabled": true})
+	w.must("PUT", "/v1/cloud-apps/origin-box", map[string]any{"name": "Origin box", "domains": []string{w.site.ip}, "actions": map[string]any{
+		"upload": []map[string]any{{"methods": []string{"POST"}, "paths": []string{"/up"}}},
+		"post":   []map[string]any{{"methods": []string{"POST"}, "paths": []string{"/msg"}}}}})
+	w.putWebPolicy("allow", []map[string]any{{"id": "no-uploads", "priority": 1, "action": "deny", "reason": "Files may not be put in outside storage",
+		"match": map[string]any{"cloud_apps": []string{"origin-box"}, "cloud_actions": []string{"upload"}}}})
+	ca := w.inspectionPool()
+	var r webResult
+	eventually(t, "a post to go through", 60*time.Second, func() bool {
+		r = w.get(a, ca, "POST", "/msg", "hello", nil)
+		return r.err == nil && r.code == 200
+	})
+	if r = w.get(a, ca, "GET", "/up", "", nil); r.code != 200 {
+		t.Fatalf("reading is not uploading: %+v", r)
+	}
+	eventually(t, "the upload to be refused", 30*time.Second, func() bool {
+		r = w.get(a, ca, "POST", "/up", "a file", nil)
+		return r.code == 403
+	})
+	if !strings.Contains(r.body, "Files may not be put in outside storage") {
+		t.Fatalf("the rule's reason must be on the page: %q", r.body)
+	}
+	seen, _ := w.originSeen()
+	if contains(seen, `POST /up auth=`) {
+		t.Fatalf("the refused upload reached the origin: %v", seen)
+	}
+
+	// the whole app: decided when the connection is made
+	w.putWebPolicy("allow", []map[string]any{{"id": "no-box", "priority": 1, "action": "deny", "match": map[string]any{"cloud_apps": []string{"origin-box"}}}})
+	eventually(t, "the app as a whole to be refused", 30*time.Second, func() bool {
+		r = w.get(a, ca, "GET", "/msg", "", nil)
+		return r.err != nil || r.code == 403
+	})
+	found := false
+	eventually(t, "the refusal to be recorded with the rule", 15*time.Second, func() bool {
+		for _, d := range w.decisions() {
+			if d["action"] == "deny" && d["rule"] == "no-box" {
+				found = true
+			}
+		}
+		return found
+	})
+}
