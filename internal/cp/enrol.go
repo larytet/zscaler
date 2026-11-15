@@ -410,6 +410,9 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		if e.API.Decisions != nil {
 			e.API.Decisions.Add(rec)
 		}
+		if e.API.Captures != nil && rec.Kind == "capture" {
+			e.API.Captures.Put(rec.Tenant, rec)
+		}
 		if e.API.Health != nil && rec.Kind == "health" && rec.Health != nil {
 			e.API.Health.Put(devhealth.Entry{Tenant: rec.Tenant, User: rec.User, Device: rec.Device, At: time.Now(), Snapshot: *rec.Health})
 		}

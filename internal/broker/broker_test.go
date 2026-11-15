@@ -983,3 +983,14 @@ func TestWorkspaceIsDecidedByTheCertificateRole(t *testing.T) { // WBT-003, WBT-
 		t.Fatal("unexpected")
 	}
 }
+
+func TestCapturesAreNeverPersistedByTheNode(t *testing.T) { // ZIA-022b
+	if (Record{Kind: "capture"}).Durable() {
+		t.Fatal("captured content must not be written to the node's disk")
+	}
+	for _, k := range []string{"private", "web", "posture", "connector", "health", ""} {
+		if !(Record{Kind: k}).Durable() {
+			t.Errorf("%q records must still be persisted", k)
+		}
+	}
+}

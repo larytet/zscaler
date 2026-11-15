@@ -1886,3 +1886,96 @@ func TestScn017EnforcementNodeRedundancy(t *testing.T) {
 		t.Fatal("an unknown app was served by the surviving node")
 	}
 }
+
+// SCN-018 (ZIA-022b): a capture rule keeps a decrypted exchange, which an admin can read, while the
+// enforcement node's own log file never holds the content.
+func TestScn018TrafficCapture(t *testing.T) {
+	origin := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		b, _ := io.ReadAll(q.Body)
+		w.Header().Set("Set-Cookie", "sid=ORIGINSECRET")
+		fmt.Fprintf(w, "origin got %d bytes", len(b))
+	}))
+	defer origin.Close()
+	hp := strings.TrimPrefix(origin.URL, "https://")
+	host := strings.Split(hp, ":")[0]
+	pemFile := filepath.Join(t.TempDir(), "origin.pem")
+	os.WriteFile(pemFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: origin.Certificate().Raw}), 0o600)
+
+	s := newStack(t, "--lab-allow-dial", hp, "--lab-upstream-ca", pemFile)
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/web", map[string]any{"default_action": "allow", "rules": []map[string]any{{
+		"id": "watch", "priority": 10, "action": "allow", "capture": true,
+		"match": map[string]any{"domains": []string{host}, "paths": []string{"/watch"}}}}}, s.token)
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
+	req, _ := http.NewRequest("GET", s.adminU+"/v1/inspection/ca.pem", nil)
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	resp, err := s.admin.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caPEM, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	pool := x509.NewCertPool()
+	pool.AppendCertsFromPEM(caPEM)
+
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	proxy := fmt.Sprintf("127.0.0.1:%d", a.ports["http"])
+	waitPort(t, a.ports["http"])
+	var done bool
+	eventually(t, "a captured request to go through", 25*time.Second, func() bool {
+		c, err := net.Dial("tcp", proxy)
+		if err != nil {
+			return false
+		}
+		defer c.Close()
+		fmt.Fprintf(c, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", hp, hp)
+		br := bufio.NewReader(c)
+		r, err := http.ReadResponse(br, nil)
+		if err != nil || r.StatusCode != 200 {
+			return false
+		}
+		inner := tls.Client(&bufferedConn{Conn: c, r: br}, &tls.Config{RootCAs: pool, ServerName: host})
+		inner.SetDeadline(time.Now().Add(5 * time.Second))
+		if inner.Handshake() != nil {
+			return false
+		}
+		fmt.Fprintf(inner, "POST /watch HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer LEAKCHECK\r\nContent-Length: 12\r\n\r\ncaptured-me!", hp)
+		rr, err := http.ReadResponse(bufio.NewReader(inner), nil)
+		if err != nil {
+			return false
+		}
+		b, _ := io.ReadAll(rr.Body)
+		done = string(b) == "origin got 12 bytes"
+		return done
+	})
+	var id int
+	eventually(t, "the capture to appear for the admin", 15*time.Second, func() bool {
+		code, b := s.api("GET", "/v1/captures", nil, s.token)
+		var list []struct {
+			ID   int
+			Rule string
+			Host string
+		}
+		json.Unmarshal(b, &list)
+		if code == 200 && len(list) > 0 && list[0].Rule == "watch" {
+			id = list[0].ID
+			return true
+		}
+		return false
+	})
+	code, b := s.api("GET", fmt.Sprintf("/v1/captures/%d", id), nil, s.token)
+	if code != 200 || !strings.Contains(string(b), "[redacted]") || strings.Contains(string(b), "LEAKCHECK") || strings.Contains(string(b), "ORIGINSECRET") {
+		t.Fatalf("%d %s", code, b)
+	}
+	// the node's own log file never held the content
+	for _, d := range s.decisions() {
+		if d["kind"] == "capture" {
+			t.Fatal("a capture was written to the enforcement node's decision log")
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(s.dir, "en", "decisions.jsonl"))
+	if strings.Contains(string(raw), "captured-me") || strings.Contains(string(raw), "Y2FwdHVyZWQtbWUh") {
+		t.Fatal("captured content reached the node's log file")
+	}
+}

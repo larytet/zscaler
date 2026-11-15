@@ -40,6 +40,12 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: duplicate priority %d", w, r.Priority)
 		}
 		prios[r.Priority] = true
+		if r.Capture && p.Kind != Web {
+			add("%s: capture is only valid in web policies", w)
+		}
+		if r.Capture && len(r.Match.Domains)+len(r.Match.Categories)+len(r.Match.Paths)+len(r.Match.Methods)+len(r.Match.DLP)+len(r.Match.DLPResponse)+len(r.Match.Groups)+len(r.Match.Users) == 0 {
+			add("%s: a capture rule must narrow what it captures (users, groups, domains, categories, paths, methods or dlp); capturing everything is refused", w)
+		}
 		switch r.Action {
 		case Allow, Deny:
 		case Isolate:

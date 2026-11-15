@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -477,5 +478,149 @@ func TestResponseRulesDoNotScanWhenNoRuleAsks(t *testing.T) {
 	}
 	if code, _ := get(t, c, br, "GET", hostport(o.URL), "/x", ""); code != 200 {
 		t.Fatalf("%d", code)
+	}
+}
+
+func captureRig(t *testing.T) (*rig, *tls.Conn, *bufio.Reader, string) {
+	r := newRig(t)
+	o := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		b, _ := io.ReadAll(q.Body)
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Set-Cookie", "session=SECRETCOOKIE; Path=/")
+		fmt.Fprintf(w, `{"echo":%d,"path":%q}`, len(b), q.URL.Path)
+	}))
+	t.Cleanup(o.Close)
+	r.exemptAdd(hostport(o.URL))
+	r.up.AddCert(o.Certificate())
+	enableInspection(r)
+	host := strings.Split(hostport(o.URL), ":")[0]
+	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 8, Rules: []policy.Rule{
+		{ID: "no-upload", Priority: 1, Action: policy.Deny, Capture: true, Match: policy.Match{Domains: []string{host}, Paths: []string{"/upload"}, Methods: []string{"POST"}}},
+		{ID: "watch", Priority: 2, Action: policy.Allow, Capture: true, Match: policy.Match{Domains: []string{host}, Paths: []string{"/watch"}}}}}
+	if err := pol.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	r.st.set(func(s *state) { s.pol = pol })
+	roots := x509.NewCertPool()
+	roots.AddCert(r.tenCA.Cert)
+	c, br, err := r.tunnel(t, hostport(o.URL), roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r, c, br, hostport(o.URL)
+}
+
+func (r *rig) captures() []broker_Record {
+	time.Sleep(60 * time.Millisecond)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []broker_Record
+	for _, l := range r.logs {
+		if l.Kind == "capture" {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
+func TestCaptureKeepsTheExchangeButNotTheCredentials(t *testing.T) { // ZIA-022b
+	r, c, br, hp := captureRig(t)
+	fmt.Fprintf(c, "POST /watch?token=SECRETQUERY HTTP/1.1\r\nHost: %s\r\nAuthorization: Bearer SECRETTOKEN\r\nCookie: sid=SECRETSID\r\nX-Custom: visible\r\nContent-Length: 11\r\n\r\nhello world", hp)
+	resp, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || string(body) != `{"echo":11,"path":"/watch"}` {
+		t.Fatalf("capture must not change what the user gets: %d %q", resp.StatusCode, body)
+	}
+	caps := r.captures()
+	if len(caps) != 1 || caps[0].Capture == nil {
+		t.Fatalf("expected one capture, got %d", len(caps))
+	}
+	cp := caps[0].Capture
+	if cp.Rule != "watch" || cp.Method != "POST" || cp.Verdict != "allow" || cp.Status != 200 || cp.Path != "/watch?[query removed]" {
+		t.Fatalf("%+v", cp)
+	}
+	if req, _ := base64.StdEncoding.DecodeString(cp.ReqBody); string(req) != "hello world" {
+		t.Fatalf("request body %q", req)
+	}
+	if rb, _ := base64.StdEncoding.DecodeString(cp.RespBody); !strings.Contains(string(rb), `"echo":11`) {
+		t.Fatalf("response body %q", rb)
+	}
+	for _, h := range []string{"Authorization", "Cookie"} {
+		if cp.ReqHeaders[h] != "[redacted]" {
+			t.Errorf("request header %s not redacted: %q", h, cp.ReqHeaders[h])
+		}
+	}
+	if cp.RespHeaders["Set-Cookie"] != "[redacted]" {
+		t.Errorf("Set-Cookie not redacted: %q", cp.RespHeaders["Set-Cookie"])
+	}
+	if cp.ReqHeaders["X-Custom"] != "visible" {
+		t.Error("ordinary headers should be kept")
+	}
+	all := fmt.Sprint(caps)
+	for _, secret := range []string{"SECRETTOKEN", "SECRETSID", "SECRETCOOKIE", "SECRETQUERY"} {
+		if strings.Contains(all, secret) {
+			t.Fatalf("%s reached the capture", secret)
+		}
+	}
+}
+
+func TestCaptureOfABlockedRequestAndOfUnmatchedTraffic(t *testing.T) {
+	r, c, br, hp := captureRig(t)
+	if code, _ := get(t, c, br, "POST", hp, "/upload", "secret upload"); code != 403 {
+		t.Fatalf("%d", code)
+	}
+	if code, _ := get(t, c, br, "GET", hp, "/unrelated", ""); code != 200 {
+		t.Fatalf("%d", code)
+	}
+	caps := r.captures()
+	if len(caps) != 1 || caps[0].Capture.Rule != "no-upload" || caps[0].Capture.Verdict != "deny" || caps[0].Capture.Status != 403 {
+		t.Fatalf("only the blocked upload should be captured: %+v", caps)
+	}
+	if b, _ := base64.StdEncoding.DecodeString(caps[0].Capture.ReqBody); string(b) != "secret upload" {
+		t.Fatalf("a blocked request's body is the evidence: %q", b)
+	}
+	if caps[0].Capture.RespBody != "" {
+		t.Fatal("a blocked request has no origin response to capture")
+	}
+}
+
+func TestCaptureBodiesAreCapped(t *testing.T) {
+	r, c, br, hp := captureRig(t)
+	big := strings.Repeat("z", CaptureMaxBody+500)
+	code, body := get(t, c, br, "POST", hp, "/watch", big)
+	if code != 200 || !strings.Contains(body, fmt.Sprintf(`"echo":%d`, len(big))) {
+		t.Fatalf("the origin must still receive the whole body: %d %q", code, body)
+	}
+	caps := r.captures()
+	if len(caps) != 1 || !caps[0].Capture.Truncated {
+		t.Fatalf("%+v", caps)
+	}
+	if b, _ := base64.StdEncoding.DecodeString(caps[0].Capture.ReqBody); len(b) != CaptureMaxBody {
+		t.Fatalf("kept %d bytes, cap is %d", len(b), CaptureMaxBody)
+	}
+}
+
+func TestNothingIsCapturedWithoutInspectionOrARule(t *testing.T) {
+	r := newRig(t)
+	o := inspectOrigin(t, r)
+	// inspection off: an opaque tunnel, so there is nothing to capture even with a capture rule
+	host := strings.Split(hostport(o.URL), ":")[0]
+	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 9, Rules: []policy.Rule{
+		{ID: "watch", Priority: 1, Action: policy.Allow, Capture: true, Match: policy.Match{Domains: []string{host}}}}}
+	pol.Compile(nil)
+	r.st.set(func(s *state) { s.pol = pol })
+	pool := x509.NewCertPool()
+	pool.AddCert(o.Certificate())
+	c, br, err := r.tunnel(t, hostport(o.URL), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	get(t, c, br, "GET", hostport(o.URL), "/x", "")
+	if n := len(r.captures()); n != 0 {
+		t.Fatalf("%d captures from traffic the proxy could not read", n)
 	}
 }

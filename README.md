@@ -115,6 +115,8 @@ Data loss prevention (needs inspection on): a web rule can carry `"dlp": ["credi
 
 Just-in-time access: give a rule the action `require_approval` (it must name its apps). The first attempt is blocked and opens a request (emailed to the alert recipients when SMTP is set). Approve it with `POST /v1/approvals/{id}/approve {"minutes": 60}` or in the console; access starts within seconds and ends on its own, or earlier with `POST /v1/approvals/{id}/end`.
 
+Traffic capture (needs inspection on): a web rule with `"capture": true` (and conditions that narrow it) keeps the decrypted exchanges it decides for one hour, with credentials redacted and bodies cut at 64 KiB. Admins read them with `GET /v1/captures` and `GET /v1/captures/{id}`; every read is audited, and `DELETE /v1/captures` removes them. They are never written to the enforcement node's disk. Treat the admin role as able to read web sessions.
+
 Incidents: `GET /v1/incidents` (and the Incidents tab) puts together what happened to one person in the last 24 hours (a failing device, repeated blocks, blocked transfers of sensitive data) into one sentence with a severity and what to do.
 
 Redundancy: run two or more enforcement nodes, list them all in the connector's `--en` (comma separated) and in each agent's `en_addrs`. If a node dies, access continues through the others within seconds.

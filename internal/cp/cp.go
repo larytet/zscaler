@@ -16,6 +16,7 @@ import (
 	"github.com/larytet/zscaler/internal/approvals"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/captures"
 	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/digest"
@@ -39,6 +40,7 @@ type API struct {
 	Decisions *decisions.Store
 	Approvals *approvals.Store
 	Health    *devhealth.Store
+	Captures  *captures.Store
 	// OnApprovalRequest is called when a new access request is created.
 	OnApprovalRequest func(approvals.Request)
 	OnRevokeDevice    func(tenant string, d store.Device)
@@ -91,6 +93,9 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
+	m.HandleFunc("GET /v1/captures", a.wrap(write, a.listCaptures))
+	m.HandleFunc("GET /v1/captures/{id}", a.wrap(write, a.getCapture))
+	m.HandleFunc("DELETE /v1/captures", a.wrap(write, a.purgeCaptures))
 	m.HandleFunc("GET /v1/incidents", a.wrap(read, a.getIncidents))
 	m.HandleFunc("GET /v1/health", a.wrap(read, a.getHealth))
 	m.HandleFunc("POST /v1/ai-agents", a.wrap(write, a.createAIAgent))
@@ -976,4 +981,35 @@ func (a *API) getIncidents(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 		out = []incidents.Incident{}
 	}
 	return out, nil
+}
+
+// Captures hold decrypted content, so even reading the list needs the admin role (not viewer),
+// and reading one is written to the audit log.
+func (a *API) listCaptures(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	if a.Captures == nil {
+		return []captures.Summary{}, nil
+	}
+	return a.Captures.List(c.tenant), nil
+}
+
+func (a *API) getCapture(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil || a.Captures == nil {
+		return nil, fail(404, "not_found", "not found")
+	}
+	e, ok := a.Captures.Get(c.tenant, id) // tenant from the token only
+	if !ok {
+		return nil, fail(404, "not_found", "not found or expired")
+	}
+	a.log(c, "capture.read", strconv.Itoa(id), nil, map[string]string{"user": e.User, "host": e.Capture.Host})
+	return e, nil
+}
+
+func (a *API) purgeCaptures(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	if a.Captures == nil {
+		return map[string]int{"purged": 0}, nil
+	}
+	n := a.Captures.Purge(c.tenant)
+	a.log(c, "capture.purge", "all", nil, map[string]int{"count": n})
+	return map[string]int{"purged": n}, nil
 }

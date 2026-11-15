@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/larytet/zscaler/internal/approvals"
+	"github.com/larytet/zscaler/internal/captures"
 	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/incidents"
 	"io"
@@ -903,5 +904,65 @@ func TestIncidentsEndpoint(t *testing.T) { // ZIA-022c
 	_, b, _ = e.call("GET", "/v1/incidents", e.adminB, nil)
 	if strings.Contains(string(b), "alice") || !strings.Contains(string(b), "zed") {
 		t.Fatalf("tenant isolation: %s", b)
+	}
+}
+
+func TestCaptureEndpoints(t *testing.T) { // ZIA-022b
+	e := newEnrolEnv(t)
+	e.api.Captures = captures.New()
+	e.api.Decisions = decisions.New()
+	mk := func(tenant, user string) broker.Record {
+		return broker.Record{Tenant: tenant, Kind: "capture", User: user, Device: "d1", Capture: &broker.Capture{Rule: "watch", Method: "POST", Host: "ai.example", Path: "/chat", Verdict: "allow", Status: 200, ReqBody: "aGVsbG8="}}
+	}
+	if c, _ := e.post("/ingest/records", []broker.Record{mk("a", "alice"), mk("b", "eve")}, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	// a capture is not an access decision: it must not show up in decision search or the digest
+	if got, _ := e.api.Decisions.Query("a", decisions.Filter{}); len(got) != 0 {
+		t.Fatalf("captures leaked into decisions: %+v", got)
+	}
+	code, b, _ := e.call("GET", "/v1/captures", e.adminA, nil)
+	var list []captures.Summary
+	json.Unmarshal(b, &list)
+	if code != 200 || len(list) != 1 || list[0].User != "alice" || list[0].ReqBytes != 5 || strings.Contains(string(b), "aGVsbG8") || strings.Contains(string(b), "eve") {
+		t.Fatalf("the list shows metadata only and only this tenant's: %d %s", code, b)
+	}
+	id := fmt.Sprint(list[0].ID)
+	// the content needs the admin role, even to list it
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("GET", "/v1/captures", viewer, nil); c != 403 {
+		t.Fatalf("viewer listed captures: %d", c)
+	}
+	if c, _, _ := e.call("GET", "/v1/captures/"+id, viewer, nil); c != 403 {
+		t.Fatalf("viewer read a capture: %d", c)
+	}
+	if c, _, _ := e.call("GET", "/v1/captures/"+id, e.adminB, nil); c != 404 {
+		t.Fatalf("tenant b read tenant a's capture: %d", c)
+	}
+	code, b, _ = e.call("GET", "/v1/captures/"+id, e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), "aGVsbG8=") {
+		t.Fatalf("%d %s", code, b)
+	}
+	if c, _, _ := e.call("GET", "/v1/captures/9999", e.adminA, nil); c != 404 {
+		t.Fatalf("unknown id: %d", c)
+	}
+	// reading is audited
+	_, ab, _ := e.call("GET", "/v1/audit", e.adminA, nil)
+	if !strings.Contains(string(ab), "capture.read") || !strings.Contains(string(ab), "ai.example") {
+		t.Fatalf("a read of captured content must be in the audit log: %s", ab)
+	}
+	// purge: scoped to the tenant, audited
+	if c, b, _ := e.call("DELETE", "/v1/captures", viewer, nil); c != 403 {
+		t.Fatalf("viewer purged: %d %s", c, b)
+	}
+	if c, b, _ := e.call("DELETE", "/v1/captures", e.adminA, nil); c != 200 || !strings.Contains(string(b), `"purged":1`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	if _, b, _ := e.call("GET", "/v1/captures", e.adminB, nil); !strings.Contains(string(b), "eve") {
+		t.Fatalf("tenant a's purge removed tenant b's captures: %s", b)
+	}
+	_, ab, _ = e.call("GET", "/v1/audit", e.adminA, nil)
+	if !strings.Contains(string(ab), "capture.purge") {
+		t.Fatal("purge not audited")
 	}
 }

@@ -543,3 +543,26 @@ func TestResponseDLPValidation(t *testing.T) {
 		t.Fatal(errs)
 	}
 }
+
+func TestCaptureFlagAndValidation(t *testing.T) { // ZIA-022b
+	p := mk(t, Web,
+		Rule{ID: "cap", Priority: 1, Action: Allow, Capture: true, Match: Match{Domains: []string{"ai.example"}}},
+		Rule{ID: "plain", Priority: 2, Action: Allow, Match: Match{Domains: []string{"other.example"}}})
+	if d := p.Evaluate(Request{Kind: Web, Host: "ai.example", Now: t0}); !d.Capture || d.RuleID != "cap" {
+		t.Fatalf("%+v", d)
+	}
+	if d := p.Evaluate(Request{Kind: Web, Host: "other.example", Now: t0}); d.Capture {
+		t.Fatal("a rule that did not ask for capture produced one")
+	}
+	if d := p.Evaluate(Request{Kind: Web, Host: "nobody.example", Now: t0}); d.Capture {
+		t.Fatal("the default decision must never capture")
+	}
+	for name, pol := range map[string]*Policy{
+		"capture everything": {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Capture: true, Match: Match{Posture: &PostureMatch{DiskEncrypted: bp(true)}}}}},
+		"private rule":       {Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Capture: true, Match: Match{Groups: []string{"g"}}}}},
+	} {
+		if errs := Validate(pol, nil); len(errs) == 0 {
+			t.Errorf("%s accepted", name)
+		}
+	}
+}

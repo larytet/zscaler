@@ -69,11 +69,13 @@ func main() {
 	sinkOK.Store(true)
 	fwd := &en.Forwarder{URL: *cpURL, TLS: id.TLS(cli.HostOf(*cpURL))}
 	logRec := func(r broker.Record) {
-		lmu.Lock()
-		b, _ := json.Marshal(r)
-		_, werr := lf.Write(append(b, '\n'))
-		sinkOK.Store(werr == nil)
-		lmu.Unlock()
+		if r.Durable() { // captured content is never written to this node's disk
+			lmu.Lock()
+			b, _ := json.Marshal(r)
+			_, werr := lf.Write(append(b, '\n'))
+			sinkOK.Store(werr == nil)
+			lmu.Unlock()
+		}
 		fwd.Add(r)
 	}
 

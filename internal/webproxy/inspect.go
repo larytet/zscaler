@@ -148,10 +148,20 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	}
 	rec.Rule, rec.Reason = d.RuleID, d.Reason
 	ref := refID()
+	// ZIA-022b: a rule that asks for capture keeps the exchange. Take the request body prefix now,
+	// handing the body back whole so forwarding is unchanged.
+	var reqBody []byte
+	var reqTrunc bool
+	if d.Capture {
+		reqBody, q.Body, reqTrunc = takePrefix(q.Body, CaptureMaxBody)
+	}
 	switch d.Action {
 	case policy.Deny:
 		rec.Action = "deny"
 		p.Log(rec)
+		if d.Capture {
+			p.Log(captureRecord(rec, d.RuleID, "deny", q, reqBody, http.StatusForbidden, nil, nil, reqTrunc))
+		}
 		if len(hits) > 0 && d.RuleID != "" && ruleUsesDLP(pol, d.RuleID) {
 			dlpBlockPage(w, host, hits, ref)
 			return
@@ -163,6 +173,9 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 		if !p.warnPassed(q, id, host) {
 			rec.Action = "warn"
 			p.Log(rec)
+			if d.Capture {
+				p.Log(captureRecord(rec, d.RuleID, "warn", q, reqBody, http.StatusOK, nil, nil, reqTrunc))
+			}
 			p.warnPage(w, q, id, host, cats, ref)
 			return
 		}
@@ -188,8 +201,17 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	defer resp.Body.Close()
 	if scanResp && textual(resp.Header.Get("Content-Type")) {
 		if blocked := p.scanResponse(w, resp, pol, id, user, host, cats, rec); blocked {
+			if d.Capture {
+				p.Log(captureRecord(rec, d.RuleID, "deny", q, reqBody, http.StatusForbidden, nil, nil, reqTrunc))
+			}
 			return
 		}
+	}
+	if d.Capture {
+		var respBody []byte
+		var respTrunc bool
+		respBody, resp.Body, respTrunc = takePrefix(resp.Body, CaptureMaxBody)
+		p.Log(captureRecord(rec, d.RuleID, "allow", q, reqBody, resp.StatusCode, resp.Header, respBody, reqTrunc || respTrunc))
 	}
 	for _, hh := range hopHeaders {
 		resp.Header.Del(hh)

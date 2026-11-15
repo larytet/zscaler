@@ -107,10 +107,32 @@ type Record struct {
 	DLP []string `json:"dlp,omitempty"`
 	// Health is set on records of Kind "health": the latest device health numbers.
 	Health *devhealth.Snapshot `json:"health,omitempty"`
+	// Capture is set on records of Kind "capture": a kept exchange (ZIA-022b). Never persisted to the node's log file.
+	Capture *Capture `json:"capture,omitempty"`
 	// Inputs to the decision, so that a draft policy can be replayed against history.
 	Groups  []string     `json:"groups,omitempty"`
 	Posture *PostureSnap `json:"posture,omitempty"`
 }
+
+// Capture is a decrypted exchange kept for forensics. Credentials are redacted before it is
+// built; bodies are cut at a size cap (Truncated says so) and held as base64.
+type Capture struct {
+	Rule        string            `json:"rule"`
+	Method      string            `json:"method"`
+	Host        string            `json:"host"`
+	Path        string            `json:"path"`
+	Verdict     string            `json:"verdict"` // allow, deny or warn
+	Status      int               `json:"status"`  // the status the user received
+	ReqHeaders  map[string]string `json:"req_headers,omitempty"`
+	ReqBody     string            `json:"req_body,omitempty"` // base64
+	RespHeaders map[string]string `json:"resp_headers,omitempty"`
+	RespBody    string            `json:"resp_body,omitempty"` // base64
+	Truncated   bool              `json:"truncated,omitempty"`
+}
+
+// Durable reports whether a record may be written to the node's log file. Captures hold
+// content and only travel to the control plane, where they expire quickly.
+func (r Record) Durable() bool { return r.Kind != "capture" }
 
 // PostureSnap is the posture that was in force for a decision.
 type PostureSnap struct {

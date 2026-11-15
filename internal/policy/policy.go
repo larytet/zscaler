@@ -84,9 +84,10 @@ type Request struct {
 }
 
 type Decision struct {
-	Action Action
-	RuleID string // "" means default
-	Reason string
+	Action  Action
+	RuleID  string // "" means default
+	Reason  string
+	Capture bool // the deciding rule asks for the exchange to be captured
 }
 
 type PostureMatch struct {
@@ -142,6 +143,9 @@ type Rule struct {
 	Action   Action `json:"action"`
 	Match    Match  `json:"match"`
 	Reason   string `json:"reason,omitempty"`
+	// Capture keeps the decrypted exchange of every request this rule decides, for forensics
+	// (ZIA-022b). Web rules only, and only on inspected traffic. It is an explicit, audited choice.
+	Capture bool `json:"capture,omitempty"`
 }
 
 type Policy struct {
@@ -277,7 +281,7 @@ func (p *Policy) Evaluate(r Request) (d Decision) {
 				}
 				return Decision{Action: Deny, RuleID: c.ID, Reason: "workspace-required"}
 			}
-			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
+			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason, Capture: c.Capture}
 		}
 	}
 	def := p.DefaultAction
