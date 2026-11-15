@@ -41,6 +41,17 @@ const tabs = {
     const d = el('div'); d.appendChild(el('h2', 'This week')); d.appendChild(el('pre', digest));
     show(a, d);
   },
+  Incidents: async () => {
+    const list = await api('GET', '/v1/incidents');
+    const out = el('div'); out.appendChild(el('h2', 'Incidents (last 24 hours)'));
+    out.appendChild(el('p', 'Several things the product saw about one person, put together. Severity is from fixed rules, not a model.', 'muted'));
+    if (!list.length) out.appendChild(el('p', 'No incidents.', 'ok'));
+    list.forEach((i) => { const c = el('div', undefined, 'card'); const cls = i.severity === 'high' ? 'err' : (i.severity === 'medium' ? 'warn' : 'muted');
+      c.appendChild(el('strong', i.severity.toUpperCase() + ': ' + i.summary, cls));
+      i.recommended_actions.forEach((a) => c.appendChild(el('div', 'What to do: ' + a)));
+      c.appendChild(el('div', 'Risk score ' + i.risk_score + ', last seen ' + when(i.last_seen), 'muted')); out.appendChild(c); });
+    show(out);
+  },
   Access: async () => {
     const f = { user: el('input'), app: el('input'), action: el('select') };
     ['', 'allow', 'deny', 'warn'].forEach((o) => { const opt = el('option', o || 'any'); opt.value = o; f.action.appendChild(opt); });

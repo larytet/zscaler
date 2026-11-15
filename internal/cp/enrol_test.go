@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"github.com/larytet/zscaler/internal/approvals"
 	"github.com/larytet/zscaler/internal/devhealth"
+	"github.com/larytet/zscaler/internal/incidents"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -869,5 +870,38 @@ func TestInspectionCAEndpointForDevices(t *testing.T) { // ZIA-034
 	cb, _ := e.api.Store.Inspection("b")
 	if ca.CACert == cb.CACert {
 		t.Fatal("tenants share a CA")
+	}
+}
+
+func TestIncidentsEndpoint(t *testing.T) { // ZIA-022c
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	e.api.Alerts = alerts.New()
+	now := time.Now()
+	var recs []broker.Record
+	for i := 0; i < 6; i++ {
+		recs = append(recs, broker.Record{Tenant: "a", Kind: "private", Event: "open", Action: "deny", Reason: "default", User: "alice", App: "erp", TS: now})
+	}
+	recs = append(recs,
+		broker.Record{Tenant: "a", Kind: "web", Event: "open", Action: "deny", Reason: "dlp-response", User: "alice", DLP: []string{"credit-card"}, TS: now},
+		broker.Record{Tenant: "b", Kind: "private", Event: "open", Action: "deny", Reason: "default", User: "zed", App: "x", TS: now})
+	for i := 0; i < 5; i++ {
+		recs = append(recs, broker.Record{Tenant: "b", Kind: "private", Event: "open", Action: "deny", Reason: "default", User: "zed", App: "x", TS: now})
+	}
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	code, b, _ := e.call("GET", "/v1/incidents", e.adminA, nil)
+	var list []incidents.Incident
+	json.Unmarshal(b, &list)
+	if code != 200 || len(list) != 1 || list[0].User != "alice" || list[0].Severity != incidents.High || strings.Contains(string(b), "zed") {
+		t.Fatalf("%d %s", code, b)
+	}
+	if !strings.Contains(string(b), "credit-card") || strings.Contains(string(b), "4111") {
+		t.Fatalf("%s", b)
+	}
+	_, b, _ = e.call("GET", "/v1/incidents", e.adminB, nil)
+	if strings.Contains(string(b), "alice") || !strings.Contains(string(b), "zed") {
+		t.Fatalf("tenant isolation: %s", b)
 	}
 }

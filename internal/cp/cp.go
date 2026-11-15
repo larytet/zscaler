@@ -20,6 +20,7 @@ import (
 	"github.com/larytet/zscaler/internal/devhealth"
 	"github.com/larytet/zscaler/internal/digest"
 	"github.com/larytet/zscaler/internal/evidence"
+	"github.com/larytet/zscaler/internal/incidents"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/risk"
@@ -90,6 +91,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
+	m.HandleFunc("GET /v1/incidents", a.wrap(read, a.getIncidents))
 	m.HandleFunc("GET /v1/health", a.wrap(read, a.getHealth))
 	m.HandleFunc("POST /v1/ai-agents", a.wrap(write, a.createAIAgent))
 	m.HandleFunc("GET /v1/ai-agents", a.wrap(read, a.listAIAgents))
@@ -958,4 +960,20 @@ func (a *API) getHealth(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 		return []devhealth.Device{}, nil
 	}
 	return a.Health.List(c.tenant, time.Now()), nil
+}
+
+func (a *API) getIncidents(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	var es []decisions.Entry
+	if a.Decisions != nil {
+		es = a.Decisions.Since(c.tenant, time.Now().Add(-incidents.Window))
+	}
+	var al []alerts.Alert
+	if a.Alerts != nil {
+		al = a.Alerts.List(c.tenant, true)
+	}
+	out := incidents.Build(time.Now(), es, al, a.scores(c.tenant))
+	if out == nil {
+		out = []incidents.Incident{}
+	}
+	return out, nil
 }
