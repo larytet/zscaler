@@ -473,3 +473,15 @@ func (s *Store) AlertEmails(tenant string) []string {
 	}
 	return nil
 }
+
+// Tenants lists tenant IDs.
+func (s *Store) Tenants() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]string, 0, len(s.d.Tenants))
+	for id := range s.d.Tenants {
+		out = append(out, id)
+	}
+	sort.Strings(out)
+	return out
+}

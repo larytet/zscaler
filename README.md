@@ -100,6 +100,8 @@ If the device fails the posture check (no disk encryption detected, or no firewa
 
 Alert emails: start `ztx-cp` with `--smtp-addr host:port --smtp-from alerts@yourdomain` (password in `ZTX_SMTP_PASSWORD`), then `PUT /v1/alert-settings` with `{"emails":["owner@yourdomain"]}`.
 
+Weekly digest: `GET /v1/digest?days=7&format=text` returns the plain-language summary; with SMTP configured it is emailed to the same recipients every Monday 08:00 UTC. Search recent access decisions with `GET /v1/decisions?user=&app=&action=&since=`.
+
 Secrets are read from files or environment variables and never from command-line arguments.
 
 ## Known limits that matter before real use

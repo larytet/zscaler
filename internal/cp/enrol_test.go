@@ -384,3 +384,31 @@ func TestDecisionSearch(t *testing.T) {
 		t.Fatalf("viewer: %d", code)
 	}
 }
+
+func TestDigestEndpoint(t *testing.T) {
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	e.api.Alerts = alerts.New()
+	now := time.Now()
+	var recs []broker.Record
+	for i := 0; i < 6; i++ {
+		recs = append(recs, broker.Record{Tenant: "a", Kind: "private", Action: "deny", Event: "open", User: "u1", App: "erp", TS: now})
+	}
+	recs = append(recs, broker.Record{Tenant: "a", Kind: "web", Action: "deny", Event: "open", User: "u1", TS: now},
+		broker.Record{Tenant: "b", Kind: "private", Action: "deny", Event: "open", User: "zz", App: "secret", TS: now})
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	code, b, _ := e.call("GET", "/v1/digest?days=7", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), `"private_sessions_denied":6`) || !strings.Contains(string(b), `"web_requests_blocked":1`) || strings.Contains(string(b), "secret") {
+		t.Fatalf("%d %s", code, b)
+	}
+	_, txt, _ := e.call("GET", "/v1/digest?format=text", e.adminA, nil)
+	if !strings.Contains(string(txt), "What to do this week") || !strings.Contains(string(txt), "u1 was blocked 6 times from erp") {
+		t.Fatalf("%s", txt)
+	}
+	_, other, _ := e.call("GET", "/v1/digest", e.adminB, nil)
+	if strings.Contains(string(other), `"u1"`) || !strings.Contains(string(other), `"private_sessions_denied":1`) {
+		t.Fatalf("tenant b must see only its own activity: %s", other)
+	}
+}

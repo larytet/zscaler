@@ -69,10 +69,12 @@ func main() {
 		}
 		return subject
 	}
+	var notifier *alerts.SMTPNotifier
 	if *smtpAddr != "" {
 		n := &alerts.SMTPNotifier{Addr: *smtpAddr, From: *smtpFrom, Username: *smtpUser, Password: os.Getenv("ZTX_SMTP_PASSWORD"),
 			To: st.AlertEmails, Errf: func(err error) { log.Printf("alert email: %v", err) }}
 		eng.OnOpen = n.Notify
+		notifier = n
 	}
 	go func() {
 		for range time.Tick(30 * time.Second) {
@@ -82,6 +84,9 @@ func main() {
 	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New()}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent}
 
+	if notifier != nil {
+		go weeklyDigest(api, st, notifier)
+	}
 	admin := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	en := &http.Server{Handler: enrol.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,
@@ -99,4 +104,25 @@ func main() {
 	}
 	log.Printf("control plane up: admin %s, enrolment %s, CA certificate for endpoints: %s", *adminL, *enrolL, filepath.Join(*data, "ca.pem"))
 	select {}
+}
+
+// weeklyDigest emails each tenant's digest on Monday at 08:00 UTC, once per week.
+func weeklyDigest(api *cp.API, st *store.Store, n *alerts.SMTPNotifier) {
+	last := map[string]string{}
+	for range time.Tick(time.Minute) {
+		now := time.Now().UTC()
+		if now.Weekday() != time.Monday || now.Hour() != 8 {
+			continue
+		}
+		day := now.Format("2006-01-02")
+		for _, t := range st.Tenants() {
+			if last[t] == day {
+				continue
+			}
+			last[t] = day
+			if err := n.SendText(t, "Your weekly security summary", api.BuildDigest(t, 7).Text()); err != nil {
+				log.Printf("digest email for %s: %v", t, err)
+			}
+		}
+	}
 }

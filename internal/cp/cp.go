@@ -15,6 +15,7 @@ import (
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
+	"github.com/larytet/zscaler/internal/digest"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
@@ -73,6 +74,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/audit", a.wrap(read, a.listAudit))
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
+	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
 	return m
@@ -556,4 +558,33 @@ func (a *API) listDecisions(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 		out = []decisions.Entry{}
 	}
 	return out, nil
+}
+
+// BuildDigest summarises the last `days` days for a tenant.
+func (a *API) BuildDigest(tenant string, days int) digest.Digest {
+	to := time.Now()
+	from := to.Add(-time.Duration(days) * 24 * time.Hour)
+	var es []decisions.Entry
+	if a.Decisions != nil {
+		es = a.Decisions.Since(tenant, from)
+	}
+	var al []alerts.Alert
+	if a.Alerts != nil {
+		al = a.Alerts.List(tenant, true)
+	}
+	return digest.Build(tenant, from, to, es, al)
+}
+
+func (a *API) getDigest(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days <= 0 || days > 90 {
+		days = 7
+	}
+	d := a.BuildDigest(c.tenant, days)
+	if r.URL.Query().Get("format") == "text" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, d.Text())
+		return nil, nil
+	}
+	return d, nil
 }

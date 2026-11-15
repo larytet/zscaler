@@ -170,3 +170,25 @@ func TestUnreachableSMTPReportsError(t *testing.T) {
 }
 
 var _ = broker.Record{}
+
+func TestSendTextDigest(t *testing.T) {
+	f := newSMTP(t)
+	n := &SMTPNotifier{Addr: f.ln.Addr().String(), From: "alerts@example.com", To: func(tenant string) []string {
+		if tenant == "t1" {
+			return []string{"owner@example.com"}
+		}
+		return nil
+	}}
+	if err := n.SendText("t2", "Weekly", "body"); err != nil {
+		t.Fatal(err) // no recipients is not an error
+	}
+	if err := n.SendText("t1", "Your weekly security summary", "Private apps: 3 allowed\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.wait(t, 1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.msgs) != 1 || !strings.Contains(f.msgs[0], "Subject: Your weekly security summary") || !strings.Contains(f.msgs[0], "Private apps: 3 allowed") {
+		t.Fatalf("%v", f.msgs)
+	}
+}

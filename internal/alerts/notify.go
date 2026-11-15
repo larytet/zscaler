@@ -46,3 +46,22 @@ func (n *SMTPNotifier) Notify(a Alert) {
 		n.Errf(err)
 	}
 }
+
+// SendText emails a plain-text message with a fixed subject to the tenant's recipients.
+func (n *SMTPNotifier) SendText(tenant, subject, body string) error {
+	to := n.To(tenant)
+	if len(to) == 0 {
+		return nil
+	}
+	msg := "From: " + clean(n.From) + "\r\nTo: " + clean(strings.Join(to, ", ")) + "\r\nSubject: " + clean(subject) +
+		"\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n" + body
+	var auth smtp.Auth
+	if n.Username != "" {
+		host := n.Addr
+		if i := strings.LastIndexByte(host, ':'); i >= 0 {
+			host = host[:i]
+		}
+		auth = smtp.PlainAuth("", n.Username, n.Password, host)
+	}
+	return smtp.SendMail(n.Addr, auth, n.From, to, []byte(msg))
+}
