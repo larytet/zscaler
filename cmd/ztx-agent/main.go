@@ -35,6 +35,7 @@ func main() {
 	home, _ := os.UserHomeDir()
 	dir := flag.String("dir", filepath.Join(home, ".ztx-agent"), "agent state directory")
 	cfgPath := flag.String("config", "", "config file (default <dir>/config.json)")
+	noBrowser := flag.Bool("no-browser", false, "print the sign-in URL instead of opening a browser")
 	flag.Parse()
 	if flag.NArg() != 1 {
 		usage()
@@ -60,9 +61,11 @@ func main() {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		if err := a.Enrol(ctx, func(u string) error {
-			fmt.Println("Opening your browser to sign in. If it does not open, visit:\n" + u)
-			if err := openBrowser(u); err != nil {
-				fmt.Println("(could not open a browser automatically)")
+			fmt.Println("Sign in at:\n" + u)
+			if !*noBrowser {
+				if err := openBrowser(u); err != nil {
+					fmt.Println("(could not open a browser automatically)")
+				}
 			}
 			return nil
 		}); err != nil {
