@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/larytet/zscaler/internal/dlp"
+	"github.com/larytet/zscaler/internal/policydiff"
 	"io"
 	"net/http"
 	"regexp"
@@ -81,6 +82,10 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("DELETE /v1/segments/{id}", a.wrap(write, a.deleteSegment))
 	m.HandleFunc("GET /v1/policies/{kind}", a.wrap(read, a.getPolicy))
 	m.HandleFunc("PUT /v1/policies/{kind}", a.wrap(write, a.putPolicy))
+	m.HandleFunc("GET /v1/policies/{kind}/versions", a.wrap(read, a.policyVersions))
+	m.HandleFunc("GET /v1/policies/{kind}/versions/{n}", a.wrap(read, a.policyVersion))
+	m.HandleFunc("GET /v1/policies/{kind}/diff", a.wrap(read, a.policyDiff))
+	m.HandleFunc("POST /v1/policies/{kind}/rollback", a.wrap(write, a.policyRollback))
 	m.HandleFunc("POST /v1/policies/{kind}/dry-run", a.wrap(read, a.dryRun))
 	m.HandleFunc("POST /v1/policies/{kind}/simulate", a.wrap(read, a.simulate))
 	m.HandleFunc("POST /v1/policies/safe-defaults", a.wrap(write, a.safeDefaults))
@@ -331,7 +336,7 @@ func (a *API) putPolicy(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 	if d, err := a.Store.GetPolicy(c.tenant, k); err == nil {
 		before = d.Policy
 	}
-	v, err := a.Store.PutPolicy(c.tenant, k, &p, im)
+	v, err := a.Store.PutPolicyAs(c.tenant, k, &p, im, c.actor, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1143,4 +1148,103 @@ func (a *API) deleteEDM(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 	}
 	a.log(c, "edm.delete", name, nil, nil)
 	return map[string]string{"deleted": name}, nil
+}
+
+func (a *API) policyVersions(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	k, err := kindOf(r)
+	if err != nil {
+		return nil, err
+	}
+	return a.Store.PolicyVersions(c.tenant, k)
+}
+
+func versionNumber(s string) (int, error) {
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 1 {
+		return 0, fail(400, "invalid", "version must be a positive integer")
+	}
+	return n, nil
+}
+
+func (a *API) policyVersion(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	k, err := kindOf(r)
+	if err != nil {
+		return nil, err
+	}
+	n, err := versionNumber(r.PathValue("n"))
+	if err != nil {
+		return nil, err
+	}
+	v, err := a.Store.PolicyVersion(c.tenant, k, n)
+	if err != nil {
+		return nil, fail(404, "not_found", "that version is not kept (the last 50 are)")
+	}
+	return v, nil
+}
+
+// policyDiff says what changed between two saved versions (to defaults to the current one).
+func (a *API) policyDiff(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	k, err := kindOf(r)
+	if err != nil {
+		return nil, err
+	}
+	from, err := versionNumber(r.URL.Query().Get("from"))
+	if err != nil {
+		return nil, err
+	}
+	var to int
+	if v := r.URL.Query().Get("to"); v != "" {
+		if to, err = versionNumber(v); err != nil {
+			return nil, err
+		}
+	} else if d, err := a.Store.GetPolicy(c.tenant, k); err == nil {
+		to = d.Version
+	} else {
+		return nil, fail(404, "not_found", "no such policy")
+	}
+	fv, err := a.Store.PolicyVersion(c.tenant, k, from)
+	if err != nil {
+		return nil, fail(404, "not_found", fmt.Sprintf("version %d is not kept", from))
+	}
+	tv, err := a.Store.PolicyVersion(c.tenant, k, to)
+	if err != nil {
+		return nil, fail(404, "not_found", fmt.Sprintf("version %d is not kept", to))
+	}
+	res := policydiff.Diff(fv.Policy, tv.Policy)
+	return map[string]any{"from": from, "to": to, "same": res.Same, "changes": res.Changes}, nil
+}
+
+// policyRollback saves an earlier version again as a new version (the history is never rewritten).
+// If-Match must name the current version, as for any save.
+func (a *API) policyRollback(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	k, err := kindOf(r)
+	if err != nil {
+		return nil, err
+	}
+	im, err := ifMatch(r)
+	if err != nil {
+		return nil, err
+	}
+	var in struct {
+		Version int `json:"version"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	old, err := a.Store.PolicyVersion(c.tenant, k, in.Version)
+	if err != nil || old.Policy == nil {
+		return nil, fail(404, "not_found", "that version is not kept (the last 50 are)")
+	}
+	var before any
+	if d, err := a.Store.GetPolicy(c.tenant, k); err == nil {
+		before = d.Policy
+	}
+	p := old.Policy
+	v, err := a.Store.PutPolicyAs(c.tenant, k, p, im, c.actor, fmt.Sprintf("rollback to version %d", in.Version))
+	if err != nil {
+		return nil, err
+	}
+	w.Header().Set("ETag", strconv.Itoa(v))
+	a.log(c, "policy.rollback", string(k), before, map[string]int{"restored": in.Version, "version": v})
+	return map[string]int{"version": v, "restored": in.Version}, nil
 }

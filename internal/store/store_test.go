@@ -381,3 +381,36 @@ func TestDocumentSetsKeepOnlyHashedRuns(t *testing.T) { // AGT-020 (store)
 		t.Fatal("too many documents accepted")
 	}
 }
+
+func TestPolicyHistoryIsBoundedAndPersisted(t *testing.T) { // AGT-021 (store)
+	p := filepath.Join(t.TempDir(), "s.json")
+	s, _ := Open(p)
+	s.CreateTenant("a", "A")
+	for i := 0; i < PolicyHistoryMax+5; i++ {
+		if _, err := s.PutPolicyAs("a", policy.Web, &policy.Policy{DefaultAction: policy.Allow}, i, "bob", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	vs, _ := s.PolicyVersions("a", policy.Web)
+	if len(vs) != PolicyHistoryMax || vs[len(vs)-1].Version != PolicyHistoryMax+5 || vs[0].Version != 6 {
+		t.Fatalf("%d versions, first %d last %d", len(vs), vs[0].Version, vs[len(vs)-1].Version)
+	}
+	if _, err := s.PolicyVersion("a", policy.Web, 1); err != ErrNotFound {
+		t.Fatalf("an old version is dropped: %v", err)
+	}
+	s2, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vs2, _ := s2.PolicyVersions("a", policy.Web); len(vs2) != PolicyHistoryMax || vs2[0].By != "bob" {
+		t.Fatal("history must survive a restart")
+	}
+	// a policy saved before history existed still lists its current version
+	s3, _ := Open("")
+	s3.CreateTenant("a", "A")
+	s3.PutPolicy("a", policy.Web, &policy.Policy{DefaultAction: policy.Allow}, 0)
+	s3.d.Tenants["a"].PolicyHist = nil
+	if vs, _ := s3.PolicyVersions("a", policy.Web); len(vs) != 1 || vs[0].Version != 1 {
+		t.Fatalf("%+v", vs)
+	}
+}

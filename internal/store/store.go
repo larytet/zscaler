@@ -112,21 +112,22 @@ func (s *Store) AgentTimes(tenant string) map[string]AgentTimes {
 }
 
 type Tenant struct {
-	ID          string                     `json:"id"`
-	Name        string                     `json:"name"`
-	IDP         IDP                        `json:"idp"`
-	AlertEmails []string                   `json:"alert_emails,omitempty"`
-	Segments    map[string]broker.Segment  `json:"segments"`
-	Policies    map[policy.Kind]*PolicyDoc `json:"policies"`
-	Users       map[string]policy.User     `json:"users"`
-	Restricted  map[string]string          `json:"restricted,omitempty"` // subject -> reason
-	risk        map[string]int             `json:"-"`                    // computed, in memory only
-	Grants      []Grant                    `json:"grants,omitempty"`
-	AgentTimes  map[string]AgentTimes      `json:"agent_times,omitempty"` // AI agent registry: created and last used
-	Inspect     InspectCfg                 `json:"inspect,omitempty"`
-	Secrets     map[string]Secret          `json:"secrets,omitempty"`
-	EDM         map[string]EDMSet          `json:"edm,omitempty"`
-	Devices     map[string]Device          `json:"devices"`
+	ID          string                          `json:"id"`
+	Name        string                          `json:"name"`
+	IDP         IDP                             `json:"idp"`
+	AlertEmails []string                        `json:"alert_emails,omitempty"`
+	Segments    map[string]broker.Segment       `json:"segments"`
+	Policies    map[policy.Kind]*PolicyDoc      `json:"policies"`
+	Users       map[string]policy.User          `json:"users"`
+	Restricted  map[string]string               `json:"restricted,omitempty"` // subject -> reason
+	risk        map[string]int                  `json:"-"`                    // computed, in memory only
+	Grants      []Grant                         `json:"grants,omitempty"`
+	PolicyHist  map[policy.Kind][]PolicyVersion `json:"policy_history,omitempty"` // saved versions, newest last (ADM-004)
+	AgentTimes  map[string]AgentTimes           `json:"agent_times,omitempty"`    // AI agent registry: created and last used
+	Inspect     InspectCfg                      `json:"inspect,omitempty"`
+	Secrets     map[string]Secret               `json:"secrets,omitempty"`
+	EDM         map[string]EDMSet               `json:"edm,omitempty"`
+	Devices     map[string]Device               `json:"devices"`
 }
 
 type adminRec struct {
@@ -339,6 +340,11 @@ func (s *Store) GetPolicy(tenant string, k policy.Kind) (*PolicyDoc, error) {
 // PutPolicy compiles and stores p. ifMatch is the version the caller read
 // (0 when none exists). Returns the new version.
 func (s *Store) PutPolicy(tenant string, k policy.Kind, p *policy.Policy, ifMatch int) (int, error) {
+	return s.PutPolicyAs(tenant, k, p, ifMatch, "", "")
+}
+
+// PutPolicyAs is PutPolicy that also records who saved the version and a short note in the history.
+func (s *Store) PutPolicyAs(tenant string, k policy.Kind, p *policy.Policy, ifMatch int, by, note string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t, err := s.tenant(tenant)
@@ -368,6 +374,14 @@ func (s *Store) PutPolicy(tenant string, k policy.Kind, p *policy.Policy, ifMatc
 		return cur, err
 	}
 	t.Policies[k] = &PolicyDoc{Version: p.Version, Policy: p}
+	if t.PolicyHist == nil {
+		t.PolicyHist = map[policy.Kind][]PolicyVersion{}
+	}
+	h := append(t.PolicyHist[k], PolicyVersion{Version: p.Version, At: time.Now().UTC(), By: by, Note: note, Policy: clonePolicy(p)})
+	if len(h) > PolicyHistoryMax {
+		h = append([]PolicyVersion(nil), h[len(h)-PolicyHistoryMax:]...)
+	}
+	t.PolicyHist[k] = h
 	return p.Version, s.save()
 }
 
@@ -1049,4 +1063,63 @@ func (s *Store) PutEDMDocuments(tenant, name string, docs []string) (runs, skipp
 	}
 	t.EDM[name] = EDMSet{Name: name, Kind: "documents", Salt: hex.EncodeToString(salt), Hashes: all, Count: len(all), Skipped: skipped, Updated: time.Now().UTC()}
 	return len(all), skipped, s.save()
+}
+
+// PolicyHistoryMax is how many saved versions of each policy are kept.
+const PolicyHistoryMax = 50
+
+// PolicyVersion is one saved version of a policy.
+type PolicyVersion struct {
+	Version int            `json:"version"`
+	At      time.Time      `json:"at"`
+	By      string         `json:"by,omitempty"`
+	Note    string         `json:"note,omitempty"`
+	Policy  *policy.Policy `json:"policy,omitempty"`
+}
+
+func clonePolicy(p *policy.Policy) *policy.Policy {
+	b, _ := json.Marshal(p)
+	var out policy.Policy
+	json.Unmarshal(b, &out)
+	return &out
+}
+
+// PolicyVersions lists the saved versions of a policy, oldest first, without the bodies. A policy
+// saved before history existed shows its current version only.
+func (s *Store) PolicyVersions(tenant string, k policy.Kind) ([]PolicyVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return nil, err
+	}
+	out := []PolicyVersion{}
+	for _, v := range t.PolicyHist[k] {
+		v.Policy = nil
+		out = append(out, v)
+	}
+	if d, ok := t.Policies[k]; ok && (len(out) == 0 || out[len(out)-1].Version != d.Version) {
+		out = append(out, PolicyVersion{Version: d.Version, Note: "current (saved before history was kept)"})
+	}
+	return out, nil
+}
+
+// PolicyVersion returns one saved version with its body.
+func (s *Store) PolicyVersion(tenant string, k policy.Kind, n int) (*PolicyVersion, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range t.PolicyHist[k] {
+		if v.Version == n {
+			v.Policy = clonePolicy(v.Policy)
+			return &v, nil
+		}
+	}
+	if d, ok := t.Policies[k]; ok && d.Version == n {
+		return &PolicyVersion{Version: n, Policy: clonePolicy(d.Policy), Note: "current"}, nil
+	}
+	return nil, ErrNotFound
 }

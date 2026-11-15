@@ -1079,3 +1079,73 @@ func TestAgentRegistryLastUseAndUnused(t *testing.T) { // AGT-016 (AGS-005)
 		t.Fatal("tenant b sees tenant a's agents")
 	}
 }
+
+func TestPolicyHistoryDiffAndRollback(t *testing.T) { // AGT-021 (ADM-004)
+	e := newEnrolEnv(t)
+	put := func(im string, rules []map[string]any, def string) int {
+		c, _, _ := e.call("PUT", "/v1/policies/web", e.adminA, map[string]any{"default_action": def, "rules": rules}, "If-Match", im)
+		return c
+	}
+	r1 := []map[string]any{{"id": "block-games", "priority": 1, "action": "deny", "match": map[string]any{"categories": []string{"gambling"}}}}
+	r2 := []map[string]any{{"id": "block-games", "priority": 1, "action": "deny", "match": map[string]any{"categories": []string{"gambling", "games"}}},
+		{"id": "warn-social", "priority": 2, "action": "warn", "match": map[string]any{"categories": []string{"social"}}}}
+	if put("0", r1, "allow") != 200 || put("1", r2, "allow") != 200 || put("2", nil, "deny") != 200 {
+		t.Fatal("setup")
+	}
+	c, b, _ := e.call("GET", "/v1/policies/web/versions", e.adminA, nil)
+	var vs []struct {
+		Version int
+		By      string
+		Policy  any
+	}
+	json.Unmarshal(b, &vs)
+	if c != 200 || len(vs) != 3 || vs[0].Version != 1 || vs[2].Version != 3 || vs[0].Policy != nil {
+		t.Fatalf("%d %s", c, b)
+	}
+	if vs[0].By == "" {
+		t.Fatal("who saved the version must be recorded")
+	}
+	// diff 1 to 3: the rule is gone and the default changed
+	c, b, _ = e.call("GET", "/v1/policies/web/diff?from=1&to=3", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), "rule_removed") || !strings.Contains(string(b), "default_action") || !strings.Contains(string(b), "gambling") {
+		t.Fatalf("%d %s", c, b)
+	}
+	if c, b, _ = e.call("GET", "/v1/policies/web/diff?from=2", e.adminA, nil); c != 200 || !strings.Contains(string(b), `"to":3`) {
+		t.Fatalf("to defaults to the current version: %d %s", c, b)
+	}
+	// one version's body can be read
+	if c, b, _ = e.call("GET", "/v1/policies/web/versions/2", e.adminA, nil); c != 200 || !strings.Contains(string(b), "warn-social") {
+		t.Fatalf("%d %s", c, b)
+	}
+	// rollback needs the current version in If-Match, an existing version, and write rights
+	if c, _, _ = e.call("POST", "/v1/policies/web/rollback", e.adminA, map[string]any{"version": 1}, "If-Match", "1"); c != 409 && c != 412 {
+		t.Fatalf("a stale If-Match must be refused: %d", c)
+	}
+	if c, _, _ = e.call("POST", "/v1/policies/web/rollback", e.adminA, map[string]any{"version": 99}, "If-Match", "3"); c != 404 {
+		t.Fatalf("%d", c)
+	}
+	if c, _, _ = e.call("POST", "/v1/policies/web/rollback", e.adminA, map[string]any{"version": 1}); c != 428 {
+		t.Fatalf("If-Match is required: %d", c)
+	}
+	if c, _, _ = e.call("POST", "/v1/policies/web/rollback", e.adminB, map[string]any{"version": 1}, "If-Match", "0"); c == 200 {
+		t.Fatal("another tenant must not be able to roll back this one")
+	}
+	c, b, _ = e.call("POST", "/v1/policies/web/rollback", e.adminA, map[string]any{"version": 1}, "If-Match", "3")
+	if c != 200 || !strings.Contains(string(b), `"version":4`) || !strings.Contains(string(b), `"restored":1`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	// the live policy is version 1's content again, saved as version 4; nothing was rewritten
+	if c, b, _ = e.call("GET", "/v1/policies/web/diff?from=1&to=4", e.adminA, nil); c != 200 || !strings.Contains(string(b), `"same":true`) {
+		t.Fatalf("version 4 must equal version 1: %d %s", c, b)
+	}
+	if c, b, _ = e.call("GET", "/v1/policies/web/versions", e.adminA, nil); !strings.Contains(string(b), "rollback to version 1") || strings.Count(string(b), `"version"`) != 4 {
+		t.Fatalf("%s", b)
+	}
+	if c, b, _ = e.call("GET", "/v1/audit", e.adminA, nil); !strings.Contains(string(b), "policy.rollback") {
+		t.Fatalf("a rollback must be audited: %s", b)
+	}
+	// tenant isolation of the history
+	if c, b, _ = e.call("GET", "/v1/policies/web/versions/2", e.adminB, nil); c == 200 {
+		t.Fatalf("tenant b read tenant a's history: %s", b)
+	}
+}

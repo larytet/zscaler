@@ -30,7 +30,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 
 | # | Requirement | Gap | State |
 |---|---|---|---|
-| G1 | ADM-004 | Policy change history, diff and rollback. The audit log holds before and after, but there is no way to list versions, see a diff or roll back | queued |
+| G1 | ADM-004 | Policy change history, diff and rollback | **done (S16)**: last 50 versions kept per policy, who saved each, plain-language diff, rollback as a new version; no console page |
 | G2 | ADM-002 | Roles: only viewer and admin exist; the requirement names owner, admin, read-only, helpdesk, auditor | queued |
 | G3 | INT-004, ADM-006a | Log streaming to a SIEM (HTTPS and syslog) with a documented schema; nothing streams today | queued |
 | G4 | DATA-002a | Tenancy restriction (only the corporate tenant of Microsoft 365, Google Workspace, Slack), by adding the vendor's header on inspected traffic | queued |
