@@ -6,7 +6,7 @@ RB1 proves the core loop: identity and posture, then policy, then a brokered pri
 
 | Area | Deferred item | Priority in spec | Why deferred | Suggested phase |
 |---|---|---|---|---|
-| Web | **Browser isolation / secure workspace browser** (BYOD-001..004 now M, BYOD-005 still C, spec 18.4) | M | Needs a remote-rendering fleet with real per-session cost. Does not change the core loop | R2, first |
+| Web | **Workspace browser** for unmanaged devices and browser isolation (requirements v0.6: WB-001..013, BYOD-001..005, ZPA-055, ZIA-022d, ZIA-024). **v1 is a proof of concept (decision C, requirements v0.7): launcher, isolated erased profile, forced proxy, inspection trust and automatic locking. Deferred to a later version (they need an in-browser extension: option A, a bundled Chromium, or B, an enterprise policy file): data controls (WB-006, BYOD-002), per-launch proxy credential, extension allow-list, installers and updates.** Cloud-streamed isolation is ZIA-024b, class C | M (v1: proof of concept) | Local browser, so no rendering fleet; the extension question is the blocker (DESIGN D8.7) | R2, first |
 | Web | TLS inspection (ZIA-040 and spec 6.4) | M | Privacy and per-tenant CA decisions open (DESIGN D5.8). Without it, `warn` on HTTPS cannot show a page and policy is host-only. Isolation is one way around that | R2 |
 | Web | DLP, CASB, GenAI controls (spec 6.5, 7; DATA-005/006, AGT-014, AI-001..003 now M) | M | Depend on TLS inspection | R3 |
 | Web | Sandbox, advanced threat protection | M | Needs file extraction and a detonation service | R3 |
