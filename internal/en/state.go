@@ -16,6 +16,11 @@ import (
 	"github.com/larytet/zscaler/internal/store"
 )
 
+// DefaultSyncEvery is the default poll interval. With 5 s the worst case for a
+// change to reach a node is about 5 s plus transfer, which does not meet the
+// 5 s target of PERF-006, so the default is 2 s.
+const DefaultSyncEvery = 2 * time.Second
+
 type tenantView struct {
 	segs    map[string]broker.Segment
 	users   map[string]policy.User

@@ -13,11 +13,11 @@ All components of the private path run in one process on loopback unless noted, 
 | PERF-003 1000 concurrent sessions | heap under 300 MB, no errors | 1000 held, 0 errors, heap +131 MB (whole stack in one process, so an upper bound for the EN) | met |
 | PERF-004 connector idle memory | under 30 MB | 9.9 MB resident after 10 s idle (real process) | met |
 | PERF-005 / POL-028 policy evaluation | under 50 us for 500 rules | 0.36 us (was 59 us with a linear scan; rules are now indexed by group and user, and a randomized test checks the index never changes a decision) | met |
-| PERF-006 policy push to 20 ENs | all within 5 s | not measured. ENs poll every 5 s by default, so the worst case is about 5 s plus transfer | untested |
-| PERF-007 web proxy throughput | 1000 requests/s per core | not measured | untested |
-| PERF-008 decision-log overhead | under 5% | not measured | untested |
+| PERF-006 policy push to 20 ENs | all within 5 s | 1.9 s worst case with 20 pollers and a 2 s interval. The default interval was 5 s, which would not have met the target, so it is now 2 s | met |
+| PERF-007 web proxy throughput | 1000 requests/s per core | 2355 req/s on one core with client, proxy and origin sharing it (885 before caching the per-request certificate-chain check; revocation is still checked on every request) | met |
+| PERF-008 decision-log overhead | under 5% | within noise: best-of-three 1.016 ms without log, 0.967 ms with (negative, so no measurable cost) | met |
 
-Reproduce: `go test -tags perf -v -run TestPerf ./internal/broker` and `go test -tags e2e -run TestPerf004 ./test/e2e`.
+Reproduce: `go test -tags perf -v -run TestPerf ./internal/broker ./internal/en ./internal/webproxy` and `go test -tags e2e -run TestPerf004 ./test/e2e`.
 
 ## Security checks
 

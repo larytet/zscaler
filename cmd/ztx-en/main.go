@@ -31,7 +31,7 @@ func main() {
 	proxyL := flag.String("proxy-listen", "127.0.0.1:9444", "web proxy listen address")
 	logPath := flag.String("decision-log", "", "decision log file (JSON lines); default <data>/decisions.jsonl")
 	catFile := flag.String("categories", "", "JSON file mapping category to domain list")
-	every := flag.Duration("sync-every", 5*time.Second, "state poll interval")
+	every := flag.Duration("sync-every", en.DefaultSyncEvery, "state poll interval")
 	flag.Parse()
 
 	caPEM, err := os.ReadFile(*cpCA)

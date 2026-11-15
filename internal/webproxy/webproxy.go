@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"fmt"
 	"html"
@@ -69,6 +70,7 @@ type Proxy struct {
 	mu        sync.Mutex
 	usedWarn  map[string]time.Time
 	transport *http.Transport
+	idCache   sync.Map
 }
 
 func (p *Proxy) init() {
@@ -114,12 +116,34 @@ func (p *Proxy) safeDialer() *net.Dialer {
 	}}
 }
 
+type cachedID struct {
+	id  pki.Identity
+	exp time.Time
+}
+
+// verifyCached checks the certificate chain at most once a minute per
+// certificate. Revocation is NOT cached: callers check it on every request.
+func (p *Proxy) verifyCached(c *x509.Certificate) (pki.Identity, error) {
+	key := sha256.Sum256(c.Raw)
+	if v, ok := p.idCache.Load(key); ok {
+		if ci := v.(cachedID); time.Now().Before(ci.exp) {
+			return ci.id, nil
+		}
+	}
+	id, err := p.CA.Verify(c, nil)
+	if err != nil {
+		return id, err
+	}
+	p.idCache.Store(key, cachedID{id, time.Now().Add(time.Minute)})
+	return id, nil
+}
+
 func (p *Proxy) identify(r *http.Request) (pki.Identity, policy.User, bool) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		return pki.Identity{}, policy.User{}, false
 	}
-	id, err := p.CA.Verify(r.TLS.PeerCertificates[0], p.Rev)
-	if err != nil || id.Role != pki.RoleDevice || broker.Revoked(p.State, nil, id) {
+	id, err := p.verifyCached(r.TLS.PeerCertificates[0])
+	if err != nil || id.Role != pki.RoleDevice || broker.Revoked(p.State, p.Rev, id) {
 		return id, policy.User{}, false
 	}
 	u, ok := p.State.User(id.Tenant, id.Subject)
