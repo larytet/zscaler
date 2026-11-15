@@ -73,6 +73,7 @@ func (a *API) createAIAgent(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 		}
 	}
 	tok := a.Tokens.Issue(c.tenant, ServiceTokenPrefix+subject)
+	a.Store.NoteAgentCreated(c.tenant, subject, time.Now())
 	a.log(c, "ai-agent.create", subject, nil, map[string]any{"operator": op.Subject, "apps": in.Apps, "minutes": in.Minutes})
 	return map[string]any{"agent": subject, "operator": op.Subject, "apps": in.Apps, "access_until": until, "enrolment_token": tok, "token_valid_minutes": 60}, nil
 }
@@ -80,11 +81,16 @@ func (a *API) createAIAgent(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 func (a *API) listAIAgents(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
 	users, _ := a.Store.Users(c.tenant)
 	type row struct {
-		Agent    string   `json:"agent"`
-		Operator string   `json:"operator"`
-		Disabled bool     `json:"disabled"`
-		Apps     []string `json:"apps"`
+		Agent       string     `json:"agent"`
+		Operator    string     `json:"operator"`
+		Disabled    bool       `json:"disabled"`
+		Apps        []string   `json:"apps"`
+		Created     time.Time  `json:"created,omitempty"`
+		LastUse     *time.Time `json:"last_use,omitempty"`
+		AccessUntil *time.Time `json:"access_until,omitempty"`
+		Unused      bool       `json:"unused"` // never used, or not for 30 days
 	}
+	times := a.Store.AgentTimes(c.tenant)
 	out := []row{}
 	snap := a.Store.Snapshot().Tenants[c.tenant]
 	for _, u := range users {
@@ -96,8 +102,26 @@ func (a *API) listAIAgents(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 			for _, g := range snap.Grants {
 				if g.User == u.Subject {
 					rw.Apps = append(rw.Apps, g.App)
+					if rw.AccessUntil == nil || g.Expires.After(*rw.AccessUntil) {
+						x := g.Expires
+						rw.AccessUntil = &x
+					}
 				}
 			}
+		}
+		if tm, ok := times[u.Subject]; ok {
+			rw.Created = tm.Created
+			if !tm.LastUse.IsZero() {
+				lu := tm.LastUse
+				rw.LastUse = &lu
+			}
+		}
+		if !rw.Disabled {
+			ref := rw.Created
+			if rw.LastUse != nil {
+				ref = *rw.LastUse
+			}
+			rw.Unused = !ref.IsZero() && time.Since(ref) > 30*24*time.Hour
 		}
 		out = append(out, rw)
 	}

@@ -1029,3 +1029,53 @@ func TestShadowAIAndLintEndpoints(t *testing.T) { // AGT-011, AGT-012 (API)
 		t.Fatalf("another tenant sees the agent: %d", c)
 	}
 }
+
+func TestAgentRegistryLastUseAndUnused(t *testing.T) { // AGT-016 (AGS-005)
+	e := newEnrolEnv(t)
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	e.api.Store.UpsertUser("a", policy.User{Subject: "alice", Email: "alice@example.com"})
+	for _, n := range []string{"busy", "idle"} {
+		e.call("POST", "/v1/ai-agents", e.adminA, map[string]any{"name": n, "operator": "alice", "apps": []string{"erp"}})
+	}
+	type row struct {
+		Agent   string
+		LastUse *time.Time `json:"last_use"`
+		Unused  bool
+		Access  *time.Time `json:"access_until"`
+	}
+	list := func() map[string]row {
+		_, b, _ := e.call("GET", "/v1/ai-agents", e.adminA, nil)
+		var rs []row
+		json.Unmarshal(b, &rs)
+		m := map[string]row{}
+		for _, r := range rs {
+			m[r.Agent] = r
+		}
+		return m
+	}
+	if m := list(); m["agent:busy"].LastUse != nil || m["agent:busy"].Unused || m["agent:busy"].Access == nil {
+		t.Fatalf("a new agent is not unused, has no last use yet, and shows when access ends: %+v", m["agent:busy"])
+	}
+	now := time.Now()
+	e.api.Store.NoteAgentUse("a", "agent:busy", now)
+	e.api.Store.NoteAgentUse("a", "alice", now) // a person is not an agent: ignored
+	if m := list(); m["agent:busy"].LastUse == nil {
+		t.Fatal("last use not shown")
+	}
+	if _, ok := e.api.Store.AgentTimes("a")["alice"]; ok {
+		t.Fatal("a person was recorded in the agent registry")
+	}
+	// 31 days without use is flagged; a recent use clears it
+	e.api.Store.NoteAgentCreated("a", "agent:idle", now.Add(-31*24*time.Hour))
+	if m := list(); !m["agent:idle"].Unused || m["agent:busy"].Unused {
+		t.Fatalf("%+v", m)
+	}
+	e.api.Store.NoteAgentUse("a", "agent:idle", now)
+	if m := list(); m["agent:idle"].Unused {
+		t.Fatal("a used agent must not be flagged")
+	}
+	// tenant isolation
+	if _, b, _ := e.call("GET", "/v1/ai-agents", e.adminB, nil); strings.Contains(string(b), "idle") {
+		t.Fatal("tenant b sees tenant a's agents")
+	}
+}

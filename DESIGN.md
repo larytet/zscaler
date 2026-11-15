@@ -720,7 +720,7 @@ Section 19 collects ideas for small businesses that let AI agents reach their sy
 | A2 | AGS-002 and AGS-003 read-only agent pack with egress allow-list | Recommended first; mostly policy templates over existing features | **Built (S8).**
 | A3 | AGS-004 operator cap | Small, deterministic, closes "agent more powerful than its owner" | **Built (S9).**
 | A4 | AGS-016 shadow-AI report and AGS-017 rule-of-two lint | Read-only analysis over data we already hold | **Built (S10).**
-| A5 | AGS-009 per-agent caps, AGS-005 registry fields | Needs counters and persisted last-use |
+| A5 | AGS-009 per-agent caps, AGS-005 registry fields | Needs counters and persisted last-use | **Registry fields built (S11); volume caps not built.**
 | later | AGS-007/008 chat approval and fatigue limits, AGS-010 named actions, AGS-012 masking, AGS-014 intent, AGS-015 chained decision log, AGS-018 volume signals, AGS-011 | Larger, or need a protocol or an outside integration |
 
 ### D9.3 Design decisions for A1

@@ -407,6 +407,9 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		if e.API.Alerts != nil {
 			e.API.Alerts.Ingest(rec)
 		}
+		if rec.Action == "allow" && rec.Event != "close" && strings.HasPrefix(rec.User, "agent:") {
+			e.API.Store.NoteAgentUse(rec.Tenant, rec.User, rec.TS)
+		}
 		if e.API.Decisions != nil {
 			e.API.Decisions.Add(rec)
 		}

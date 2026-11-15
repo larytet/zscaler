@@ -1263,6 +1263,11 @@ func TestScn010AIAgent(t *testing.T) {
 	if !found {
 		t.Fatal("no decision logged under the agent's identity")
 	}
+	// the registry shows when the agent was last used (AGS-005)
+	eventually(t, "the registry to show the agent's last use", 15*time.Second, func() bool {
+		_, b := s.api("GET", "/v1/ai-agents", nil, s.token)
+		return strings.Contains(string(b), `"last_use"`)
+	})
 	// removing the agent ends its access within seconds
 	c, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
 	if err != nil {

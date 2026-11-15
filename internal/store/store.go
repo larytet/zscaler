@@ -56,6 +56,60 @@ type PolicyDoc struct {
 	Policy  *policy.Policy `json:"policy"`
 }
 
+// AgentTimes are the registry facts for one AI agent identity (AGS-005).
+type AgentTimes struct {
+	Created time.Time `json:"created"`
+	LastUse time.Time `json:"last_use,omitempty"`
+}
+
+// NoteAgentCreated records when an agent identity was made (or re-made).
+func (s *Store) NoteAgentCreated(tenant, subject string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if t.AgentTimes == nil {
+		t.AgentTimes = map[string]AgentTimes{}
+	}
+	t.AgentTimes[subject] = AgentTimes{Created: at}
+	return s.save()
+}
+
+// NoteAgentUse records that an agent was allowed through. It is called for every allowed decision,
+// so it writes the store at most once every five minutes per agent.
+func (s *Store) NoteAgentUse(tenant, subject string, at time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return
+	}
+	cur, ok := t.AgentTimes[subject]
+	if !ok || at.Sub(cur.LastUse) < 5*time.Minute && !cur.LastUse.IsZero() {
+		return // unknown identity (not an agent of ours) or recorded recently
+	}
+	cur.LastUse = at
+	t.AgentTimes[subject] = cur
+	s.save()
+}
+
+// AgentTimes returns the registry facts for a tenant's agents.
+func (s *Store) AgentTimes(tenant string) map[string]AgentTimes {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]AgentTimes, len(t.AgentTimes))
+	for k, v := range t.AgentTimes {
+		out[k] = v
+	}
+	return out
+}
+
 type Tenant struct {
 	ID          string                     `json:"id"`
 	Name        string                     `json:"name"`
@@ -67,6 +121,7 @@ type Tenant struct {
 	Restricted  map[string]string          `json:"restricted,omitempty"` // subject -> reason
 	risk        map[string]int             `json:"-"`                    // computed, in memory only
 	Grants      []Grant                    `json:"grants,omitempty"`
+	AgentTimes  map[string]AgentTimes      `json:"agent_times,omitempty"` // AI agent registry: created and last used
 	Inspect     InspectCfg                 `json:"inspect,omitempty"`
 	Secrets     map[string]Secret          `json:"secrets,omitempty"`
 	Devices     map[string]Device          `json:"devices"`
