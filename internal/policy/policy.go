@@ -46,6 +46,8 @@ type User struct {
 	Email    string
 	Groups   []string
 	Disabled bool
+	// Risk is a 0 to 100 score computed by the control plane (0 when unknown).
+	Risk int
 }
 
 type Device struct {
@@ -99,6 +101,9 @@ type Match struct {
 	Posture    *PostureMatch `json:"posture,omitempty"`
 	Time       *TimeMatch    `json:"time,omitempty"`
 	Network    *NetworkMatch `json:"network,omitempty"`
+	// MaxRisk and MinRisk bound the user's risk score (inclusive).
+	MaxRisk *int `json:"max_risk,omitempty"`
+	MinRisk *int `json:"min_risk,omitempty"`
 }
 
 type Rule struct {
@@ -289,6 +294,9 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 		if !ok {
 			return false
 		}
+	}
+	if (m.MaxRisk != nil && r.User.Risk > *m.MaxRisk) || (m.MinRisk != nil && r.User.Risk < *m.MinRisk) {
+		return false
 	}
 	if m.Time != nil && !c.timeOK(r.Now) {
 		return false

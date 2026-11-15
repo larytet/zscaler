@@ -91,6 +91,11 @@ func main() {
 	if notifier != nil {
 		go weeklyDigest(api, st, notifier)
 	}
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			api.RefreshRisk()
+		}
+	}()
 	admin := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}
 	en := &http.Server{Handler: enrol.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,

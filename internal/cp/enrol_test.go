@@ -20,6 +20,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
 	tidp "github.com/larytet/zscaler/test/idp"
 )
@@ -482,3 +483,53 @@ func TestSuggestionsAndInvestigate(t *testing.T) {
 }
 
 func ptrTrue() *bool { b := true; return &b }
+
+func TestRiskScoresFlowToStateAndPolicy(t *testing.T) { // ARCH-007
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	e.api.Alerts = alerts.New()
+	e.api.Store.UpsertUser("a", policy.User{Subject: "u1", Groups: []string{"g"}})
+	e.api.Store.UpsertUser("a", policy.User{Subject: "u2", Groups: []string{"g"}})
+	now := time.Now()
+	var recs []broker.Record
+	for i := 0; i < 10; i++ {
+		recs = append(recs, broker.Record{Tenant: "a", Kind: "private", Event: "open", Action: "deny", User: "u1", App: "erp", TS: now})
+	}
+	recs = append(recs, broker.Record{Tenant: "a", Kind: "posture", Action: "pass", User: "u1", Device: "d1"},
+		broker.Record{Tenant: "a", Kind: "posture", Action: "fail", Reason: "disk encryption is off", User: "u1", Device: "d1"})
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	e.api.RefreshRisk()
+	u1, _ := e.api.Store.User("a", "u1")
+	u2, _ := e.api.Store.User("a", "u2")
+	if u1.Risk != 70 || u2.Risk != 0 {
+		t.Fatalf("u1 risk %d (want 70: posture 40 + many denies 30), u2 risk %d", u1.Risk, u2.Risk)
+	}
+	// the score reaches enforcement nodes in the snapshot, so a rule can use it
+	for _, u := range e.api.Store.Snapshot().Tenants["a"].Users {
+		if u.Subject == "u1" && u.Risk != 70 {
+			t.Fatalf("snapshot lost the risk score: %+v", u)
+		}
+	}
+	min := 70
+	p := &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny, Rules: []policy.Rule{
+		{ID: "high-risk", Priority: 1, Action: policy.Deny, Match: policy.Match{MinRisk: &min}},
+		{ID: "ok", Priority: 2, Action: policy.Allow, Match: policy.Match{Groups: []string{"g"}}}}}
+	if err := p.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	if d := p.Evaluate(policy.Request{Kind: policy.Private, User: u1}); d.RuleID != "high-risk" {
+		t.Fatalf("%+v", d)
+	}
+	if d := p.Evaluate(policy.Request{Kind: policy.Private, User: u2}); d.RuleID != "ok" {
+		t.Fatalf("%+v", d)
+	}
+	code, b, _ := e.call("GET", "/v1/risk", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), `"score":70`) || !strings.Contains(string(b), "below the security baseline") {
+		t.Fatalf("%d %s", code, b)
+	}
+	if _, b, _ = e.call("GET", "/v1/risk", e.adminB, nil); strings.Contains(string(b), "u1") {
+		t.Fatalf("tenant isolation: %s", b)
+	}
+}

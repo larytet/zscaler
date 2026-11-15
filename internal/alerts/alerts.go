@@ -22,6 +22,7 @@ type Alert struct {
 	Tenant  string     `json:"tenant"`
 	Kind    string     `json:"kind"` // repeated-denies | connector-offline | posture-failed
 	Key     string     `json:"key"`
+	User    string     `json:"user,omitempty"`
 	Message string     `json:"message"`
 	Action  string     `json:"recommended_action"`
 	Opened  time.Time  `json:"opened"`
@@ -71,13 +72,16 @@ func (e *Engine) who(tenant, subject string) string {
 }
 
 // openAlert creates the alert unless one with the same kind and key is open.
-func (e *Engine) openAlert(tenant, kind, key, msg, action string) *Alert {
+func (e *Engine) openAlert(tenant, kind, key, msg, action string, user ...string) *Alert {
 	k := kind + "|" + tenant + "|" + key
 	if a, ok := e.open[k]; ok {
 		return a
 	}
 	e.next++
 	a := &Alert{ID: e.next, Tenant: tenant, Kind: kind, Key: key, Message: msg, Action: action, Opened: e.now()}
+	if len(user) > 0 {
+		a.User = user[0]
+	}
 	e.alerts = append(e.alerts, a)
 	e.open[k] = a
 	if e.OnOpen != nil {
@@ -133,7 +137,7 @@ func (e *Engine) onDeny(r broker.Record) {
 		}
 		e.openAlert(r.Tenant, "repeated-denies", key,
 			fmt.Sprintf("%s was blocked %d times from %s in the last %d minutes", e.who(r.Tenant, r.User), len(kept), r.App, int(DenyWindow.Minutes())),
-			fmt.Sprintf("Check whether %s should have access (rule: %s), or contact them.", e.who(r.Tenant, r.User), rule))
+			fmt.Sprintf("Check whether %s should have access (rule: %s), or contact them.", e.who(r.Tenant, r.User), rule), r.User)
 	}
 }
 
@@ -149,7 +153,7 @@ func (e *Engine) onPosture(r broker.Record) {
 	if seen && was { // pass -> fail is the interesting transition
 		e.openAlert(r.Tenant, "posture-failed", r.Device,
 			fmt.Sprintf("%s's device %s stopped meeting the security baseline: %s", e.who(r.Tenant, r.User), r.Device, r.Reason),
-			fmt.Sprintf("Ask %s to fix it (for example turn disk encryption or the firewall back on). Access to protected apps is blocked until then.", e.who(r.Tenant, r.User)))
+			fmt.Sprintf("Ask %s to fix it (for example turn disk encryption or the firewall back on). Access to protected apps is blocked until then.", e.who(r.Tenant, r.User)), r.User)
 	}
 }
 

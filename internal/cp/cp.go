@@ -20,6 +20,7 @@ import (
 	"github.com/larytet/zscaler/internal/evidence"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/risk"
 	"github.com/larytet/zscaler/internal/simulate"
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -82,6 +83,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
+	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
 	m.HandleFunc("GET /v1/suggestions", a.wrap(read, a.getSuggestions))
 	m.HandleFunc("GET /v1/investigate", a.wrap(read, a.investigate))
 	m.HandleFunc("GET /v1/evidence", a.wrap(read, a.getEvidence))
@@ -742,4 +744,36 @@ func (a *API) unrestrictUser(w http.ResponseWriter, r *http.Request, c ctxInfo) 
 	}
 	a.log(c, "user.unrestrict", id, nil, nil)
 	return map[string]any{"unrestricted": id}, nil
+}
+
+func (a *API) scores(tenant string) []risk.Score {
+	var es []decisions.Entry
+	if a.Decisions != nil {
+		es = a.Decisions.Since(tenant, time.Now().Add(-24*time.Hour))
+	}
+	var al []alerts.Alert
+	if a.Alerts != nil {
+		al = a.Alerts.List(tenant, true)
+	}
+	return risk.Compute(time.Now(), es, al)
+}
+
+// RefreshRisk recomputes every tenant's scores and hands them to the store, from
+// where they travel to enforcement nodes with the next state snapshot.
+func (a *API) RefreshRisk() {
+	for _, t := range a.Store.Tenants() {
+		m := map[string]int{}
+		for _, s := range a.scores(t) {
+			m[s.User] = s.Score
+		}
+		a.Store.SetRisk(t, m)
+	}
+}
+
+func (a *API) getRisk(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	out := a.scores(c.tenant)
+	if out == nil {
+		out = []risk.Score{}
+	}
+	return out, nil
 }

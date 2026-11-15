@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I9c (restricted group).
+**Last updated:** 2026-11-15, after I9d (risk score).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -51,8 +51,8 @@ Implementation language: **Go** (chosen by the user).
 | I9a | Signed control-plane state (DESIGN D5.5, SEC-007): the CP signs every snapshot (ECDSA, sequence number and time covered); ENs pin the public key at enrolment and refuse unsigned, forged, tampered, replayed or stale state | done. Closes the SEC-007 gap. ENs enrolled before this must be enrolled again to get the key. The signing key is a file on the control plane (no KMS) | signed, en tests |
 | I9b | Admin console (DESIGN D5.2): static page on the admin listener with Overview, Access, People, Apps, Policy (simulate only), Reports, Investigate; token kept in sessionStorage; strict CSP; no HTML-parsing code (a test enforces it) | done, but **never opened in a real browser**: tests cover serving, headers, the no-HTML-sinks rule and JavaScript syntax only. Read-only except disable-user and revoke-device. No policy editing | ui tests |
 | I9c | Product-side `restricted` group (ZPA-072): `POST /v1/users/{id}/restrict` and `/unrestrict`; survives IdP group refreshes; the safe-default policies deny it first; console buttons. Live sessions end within seconds (SCN-007) | done. It only helps if the policy has a rule for the group: tenants that wrote their own policy must add one | store, cp tests, SCN-007 |
-| I9d | Basic risk score feeding policy (ARCH-007) | pending | |
-| I9e | Just-in-time access with approval (ZPA-027) | pending | |
+| I9d | Explainable risk score (ARCH-007): 0 to 100 from four signals (device below baseline, many blocked attempts, repeated web blocks), refreshed every 30 s, carried to ENs in the signed snapshot, usable in rules as `max_risk` / `min_risk`; `GET /v1/risk` shows scores with reasons; console column | done, in simple form. It is a handful of rules, not a model: no behavioural baselines, no external threat feeds. The safe defaults do NOT use it, so nothing is blocked on risk unless an admin writes a rule. Scores are lost on restart until the next refresh. Simulation cannot replay risk rules | risk, policy, cp tests |
+| I9e | Just-in-time access with approval (ZPA-027) | **next** | |
 | I8e | Rule suggestions (OPS-005): `GET /v1/suggestions`, drafts to simulate and never auto-applied, and it says when the fix is the device, not the rule. Guided investigation (OPS-004): `GET /v1/investigate?user=` explains each decision in plain words with a fix | done. Rule-based text, not machine learning. No admin UI to show it in | advice tests |
 | I8c | Insurance questionnaire evidence export: `GET /v1/evidence` (JSON or `?format=text`). It marks MFA, endpoint protection and backups as not evidenced, because this product cannot see them | done. Not mapped to any specific insurer's questionnaire | evidence tests |
 | I7g | Exit-criteria review, three consecutive clean runs, lint and vulnerability scan | done: see the review below. RB1 does not meet its own exit criteria (USE-001 open) | T3.7 |

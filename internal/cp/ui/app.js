@@ -58,7 +58,8 @@ const tabs = {
     show(el('h2', 'Access decisions'), row, out); await go();
   },
   People: async () => {
-    const [users, devices] = await Promise.all([api('GET', '/v1/users'), api('GET', '/v1/devices')]);
+    const [users, devices, risks] = await Promise.all([api('GET', '/v1/users'), api('GET', '/v1/devices'), api('GET', '/v1/risk')]);
+    const riskOf = {}; risks.forEach((r) => { riskOf[r.user] = r; });
     const reload = () => tabs.People().catch(failure);
     const isRestricted = (x) => (x.Groups || []).indexOf('restricted') >= 0;
     const actions = (x) => { const d = el('span'); if (x.Disabled) return d;
@@ -67,7 +68,8 @@ const tabs = {
         : btn('Restrict', async () => { if (confirm('Restrict ' + x.Subject + '? The safe-default policy blocks them within seconds, without waiting for your identity provider.')) { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/restrict', { reason: 'restricted from the console' }); await reload(); } }));
       d.appendChild(btn('Disable', async () => { if (confirm('Disable ' + x.Subject + '? Their sessions end within seconds.')) { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/disable'); await reload(); } }, 'danger'));
       return d; };
-    const u = table(['User', 'Email', 'Groups', 'State', ''], users.map((x) => [x.Subject, x.Email, (x.Groups || []).join(', '), x.Disabled ? 'disabled' : (isRestricted(x) ? 'restricted' : 'active'), actions(x)]));
+    const riskText = (x) => { const r = riskOf[x.Subject]; return r ? r.score + ' (' + r.reasons.join('; ') + ')' : '0'; };
+    const u = table(['User', 'Email', 'Groups', 'State', 'Risk', ''], users.map((x) => [x.Subject, x.Email, (x.Groups || []).join(', '), x.Disabled ? 'disabled' : (isRestricted(x) ? 'restricted' : 'active'), riskText(x), actions(x)]));
     const d = table(['Device', 'User', 'State', ''], devices.map((x) => [x.id, x.user, x.revoked ? 'revoked' : 'active',
       x.revoked ? '' : btn('Revoke', async () => { if (confirm('Revoke device ' + x.id + '?')) { await api('POST', '/v1/devices/' + encodeURIComponent(x.id) + '/revoke'); await reload(); } }, 'danger')]));
     show(el('h2', 'People'), u, el('h2', 'Devices'), d);

@@ -58,6 +58,7 @@ type Tenant struct {
 	Policies    map[policy.Kind]*PolicyDoc `json:"policies"`
 	Users       map[string]policy.User     `json:"users"`
 	Restricted  map[string]string          `json:"restricted,omitempty"` // subject -> reason
+	risk        map[string]int             `json:"-"`                    // computed, in memory only
 	Devices     map[string]Device          `json:"devices"`
 }
 
@@ -329,6 +330,7 @@ func (s *Store) SetUserDisabled(tenant, subject string, disabled bool) error {
 
 // effective adds product-side groups to what the identity provider said.
 func (t *Tenant) effective(u policy.User) policy.User {
+	u.Risk = t.risk[u.Subject]
 	if _, ok := t.Restricted[u.Subject]; ok {
 		g := make([]string, 0, len(u.Groups)+1)
 		for _, x := range u.Groups {
@@ -538,4 +540,13 @@ func (s *Store) AdminCounts(tenant string) (admins, viewers int) {
 		}
 	}
 	return
+}
+
+// SetRisk replaces a tenant's computed risk scores (not persisted).
+func (s *Store) SetRisk(tenant string, scores map[string]int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if t, err := s.tenant(tenant); err == nil {
+		t.risk = scores
+	}
 }

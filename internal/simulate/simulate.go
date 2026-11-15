@@ -41,6 +41,7 @@ func Run(draft *policy.Policy, entries []decisions.Entry) Result {
 		"Only private-access sessions are replayed. Web decisions are not, because records do not keep the category list.",
 		"Source IP is not recorded, so rules that match on network address are replayed as if the address were unknown.",
 		"A user's groups and device posture are those recorded at the time of each decision.",
+		"Risk scores are not recorded, so rules that use max_risk or min_risk are replayed as if every user had risk 0.",
 	}}
 	type key struct{ user, app, from, to, rule string }
 	agg := map[key]*Change{}

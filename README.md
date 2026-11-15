@@ -100,6 +100,8 @@ If the device fails the posture check (no disk encryption detected, or no firewa
 
 Fast reaction to a suspected compromise: `POST /v1/users/{id}/restrict` puts the user in a product-side `restricted` group. The safe-default policies deny it first, so live sessions end within seconds without waiting for your identity provider. `POST /v1/users/{id}/unrestrict` lifts it. If you wrote your own policy, add a deny rule for the group `restricted`.
 
+Risk: `GET /v1/risk` lists users with a 0 to 100 score and the reasons. A rule can use it with `"max_risk": 49` or `"min_risk": 70`. The safe defaults do not, so nothing is blocked on risk until you add such a rule.
+
 Console: open `https://localhost:8443/` (the admin listener) and sign in with the admin token. It shows alerts, access decisions, people and devices, apps, a policy simulator, reports and an investigation page. It was only tested without a browser: report anything odd.
 
 Alert emails: start `ztx-cp` with `--smtp-addr host:port --smtp-from alerts@yourdomain` (password in `ZTX_SMTP_PASSWORD`), then `PUT /v1/alert-settings` with `{"emails":["owner@yourdomain"]}`.

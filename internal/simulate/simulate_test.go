@@ -96,7 +96,7 @@ func TestMachineryDenialsAreNotPolicyDecisions(t *testing.T) {
 	if r.Replayed != 0 || r.Skipped != 3 || r.NewlyAllowed != 0 {
 		t.Fatalf("an outage must not look like something a new rule would have fixed: %+v", r)
 	}
-	if len(r.Caveats) < 4 {
+	if len(r.Caveats) < 5 {
 		t.Fatal("an empty replay must say it proves nothing")
 	}
 }

@@ -337,3 +337,35 @@ func TestIndexEqualsLinearScan(t *testing.T) {
 		}
 	}
 }
+
+func TestRiskConditions(t *testing.T) { // ARCH-007
+	max, min := 49, 70
+	low := mk(t, Private, Rule{ID: "ok", Priority: 1, Action: Allow, Match: Match{Groups: []string{"g"}, MaxRisk: &max}})
+	high := mk(t, Private, Rule{ID: "block", Priority: 1, Action: Deny, Match: Match{Groups: []string{"g"}, MinRisk: &min}},
+		Rule{ID: "ok", Priority: 2, Action: Allow, Match: Match{Groups: []string{"g"}}})
+	for risk, want := range map[int]Action{0: Allow, 49: Allow, 50: Deny, 100: Deny} {
+		r := req("g")
+		r.User.Risk = risk
+		if got := low.Evaluate(r).Action; got != want {
+			t.Errorf("max_risk 49 with risk %d: got %s", risk, got)
+		}
+	}
+	for risk, want := range map[int]Action{0: Allow, 69: Allow, 70: Deny, 100: Deny} {
+		r := req("g")
+		r.User.Risk = risk
+		if got := high.Evaluate(r).Action; got != want {
+			t.Errorf("min_risk 70 with risk %d: got %s", risk, got)
+		}
+	}
+	bad := 101
+	p := &Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Match: Match{Groups: []string{"g"}, MaxRisk: &bad}}}}
+	if errs := Validate(p, nil); len(errs) == 0 {
+		t.Fatal("risk above 100 accepted")
+	}
+	neg, lo, hi := -1, 80, 20
+	for _, m := range []Match{{Groups: []string{"g"}, MinRisk: &neg}, {Groups: []string{"g"}, MinRisk: &lo, MaxRisk: &hi}} {
+		if errs := Validate(&Policy{Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Match: m}}}, nil); len(errs) == 0 {
+			t.Fatalf("bad risk bounds accepted: %+v", m)
+		}
+	}
+}

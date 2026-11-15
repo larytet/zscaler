@@ -48,7 +48,7 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: unknown action %q", w, r.Action)
 		}
 		m := r.Match
-		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories) == 0 && m.Posture == nil {
+		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories) == 0 && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
 			add("%s: allow rule matches everything", w)
 		}
 		for _, a := range m.Apps {
@@ -60,6 +60,14 @@ func Validate(p *Policy, known map[string]bool) []error {
 			if strings.ContainsAny(d, "/:@ ") || d == "" {
 				add("%s: bad domain %q (no scheme, path or port)", w, d)
 			}
+		}
+		for name, v := range map[string]*int{"max_risk": m.MaxRisk, "min_risk": m.MinRisk} {
+			if v != nil && (*v < 0 || *v > 100) {
+				add("%s: %s must be between 0 and 100", w, name)
+			}
+		}
+		if m.MinRisk != nil && m.MaxRisk != nil && *m.MinRisk > *m.MaxRisk {
+			add("%s: min_risk is above max_risk, the rule can never match", w)
 		}
 		if n := m.Network; n != nil {
 			for _, c := range n.SrcCIDRs {
