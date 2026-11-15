@@ -96,5 +96,5 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 
 - CP-signed policy stream (DESIGN D5.5, SEC-007): ENs trust any authenticated control plane. Rollback to an older version is refused.
 - The admin UI (DESIGN D5.2) is not built: API only.
-- Of the 34 items promoted to Must in v0.5, only the cheap operations ones are built, in simple form: weekly digest, insurance evidence export, private-access policy simulation, rule suggestions, guided investigation. The other 29 are not (inspection add-ons, DLP, ZPA extras, isolation and BYOD, risk scoring, DEX, AI controls, and others). See ROADMAP.md.
+- Of the 34 items promoted to Must in v0.5, only the cheap operations ones are built, in simple form: weekly digest, insurance evidence export, private-access policy simulation, rule suggestions, guided investigation. The other 28 are not (inspection add-ons, DLP, ZPA extras, isolation and BYOD, risk scoring, DEX, AI controls, and others). See ROADMAP.md.
 - Everything in ROADMAP.md.
