@@ -25,14 +25,47 @@ type Filter struct {
 type Store struct {
 	Max int // per tenant, default 50000
 
-	mu   sync.Mutex
-	seq  int
-	data map[string][]Entry
+	mu      sync.Mutex
+	seq     int
+	data    map[string][]Entry
+	archive *Archive
 }
 
 func New() *Store { return &Store{data: map[string][]Entry{}} }
 
+// Archive, when set, also keeps every record on disk for the retention period (see archive.go).
+func (s *Store) SetArchive(a *Archive) { s.mu.Lock(); s.archive = a; s.mu.Unlock() }
+
+// Archive returns the archive, or nil.
+func (s *Store) Archive() *Archive { s.mu.Lock(); defer s.mu.Unlock(); return s.archive }
+
+// Restore refills the in-memory view from the archive (after a restart).
+func (s *Store) Restore(perTenant int) int {
+	s.mu.Lock()
+	a := s.archive
+	s.mu.Unlock()
+	if a == nil {
+		return 0
+	}
+	n := 0
+	for _, r := range a.Restore(perTenant) {
+		s.addMemory(r)
+		n++
+	}
+	return n
+}
+
 func (s *Store) Add(r broker.Record) {
+	s.mu.Lock()
+	a := s.archive
+	s.mu.Unlock()
+	if a != nil {
+		a.Append(r) // a failure to write is not a reason to lose the live view
+	}
+	s.addMemory(r)
+}
+
+func (s *Store) addMemory(r broker.Record) {
 	if r.Kind == "posture" || r.Kind == "connector" || r.Kind == "health" || r.Kind == "capture" {
 		return // events feed alerts, they are not access decisions
 	}

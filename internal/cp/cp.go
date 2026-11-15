@@ -102,6 +102,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/audit", a.wrap(audit, a.listAudit))
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	m.HandleFunc("GET /v1/decisions", a.wrap(logs, a.listDecisions))
+	m.HandleFunc("GET /v1/decisions/history", a.wrap(logs, a.decisionHistory))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
 	m.HandleFunc("GET /v1/ai-agents/{name}/readonly-pack", a.wrap(read, a.readonlyPack))

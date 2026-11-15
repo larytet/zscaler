@@ -35,6 +35,7 @@ func main() {
 	enrolL := flag.String("enrol-listen", "127.0.0.1:8444", "enrolment and sync listen address")
 	names := flag.String("names", "localhost,127.0.0.1", "comma-separated DNS names or IPs for the server certificate")
 	bootFile := flag.String("bootstrap-token-file", "", "file holding the bootstrap token (or set ZTX_BOOTSTRAP_TOKEN)")
+	retentionDays := flag.Int("log-retention-days", 183, "how many days decision records are kept on disk (1 to 3650; the default is six months)")
 	devTTL := flag.Duration("device-cert-ttl", 0, "lifetime of device certificates (default 12h); a shorter life ends a revoked or disabled user's access sooner but renews more often. At least 30s, at most 7 days")
 	minAgent := flag.String("min-agent-version", "", "agents older than this refuse to start sessions")
 	smtpAddr := flag.String("smtp-addr", "", "SMTP server host:port for alert emails (empty disables email)")
@@ -92,6 +93,23 @@ func main() {
 		}
 	}()
 	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New(), Approvals: approvals.New(), Health: devhealth.New(), Captures: captures.New()}
+	if *retentionDays < 1 || *retentionDays > 3650 {
+		log.Fatal("--log-retention-days must be between 1 and 3650")
+	}
+	archive, err := decisions.OpenArchive(filepath.Join(*data, "decisions"), time.Duration(*retentionDays)*24*time.Hour)
+	if err != nil {
+		log.Fatal(err)
+	}
+	api.Decisions.SetArchive(archive)
+	log.Printf("%s; %d recent records reloaded", archive.Describe(), api.Decisions.Restore(50000))
+	go func() {
+		for {
+			if n := archive.Purge(); n > 0 {
+				log.Printf("decision archive: %d day files past their retention deleted", n)
+			}
+			time.Sleep(6 * time.Hour)
+		}
+	}()
 	api.SIEM = &siem.Streamer{AllowLoopback: os.Getenv("ZTX_SIEM_ALLOW_LOOPBACK") == "1"} // loopback targets are a lab-only switch
 	for tenant, c := range st.SIEMConfigs() {
 		c := c

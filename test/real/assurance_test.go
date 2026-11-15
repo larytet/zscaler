@@ -137,6 +137,43 @@ func TestRealOPS001DecisionRecordsAreCompleteAndHoldNoPayload(t *testing.T) {
 			t.Errorf("bad timestamp %v", d["ts"])
 		}
 	}
+	// the records are also kept on disk by the control plane for the retention period (six months by
+	// default), and the history survives a restart of the control plane
+	history := func() (opens int) {
+		cursor := ""
+		for i := 0; i < 50; i++ {
+			_, b := w.api("GET", "/v1/decisions/history?kind=private&action=allow&limit=1000&cursor="+cursor, nil)
+			var pg struct {
+				Records []map[string]any
+				Next    string `json:"next_cursor"`
+				Days    int    `json:"retention_days"`
+			}
+			if err := json.Unmarshal(b, &pg); err != nil || pg.Days != 183 {
+				t.Fatalf("history: %v %s", err, b)
+			}
+			for _, r := range pg.Records {
+				if r["event"] == "open" {
+					opens++
+				}
+			}
+			if pg.Next == "" {
+				break
+			}
+			cursor = pg.Next
+		}
+		return opens
+	}
+	if n := history(); n < privOpen {
+		t.Errorf("the on-disk history has %d private allow records, the app saw %d connections", n, privOpen)
+	}
+	kept := history()
+	w.cpProc.Process.Kill()
+	w.cpProc.Wait()
+	w.restartCP()
+	if n := history(); n != kept {
+		t.Errorf("the history changed across a control plane restart: %d before, %d after", kept, n)
+	}
+
 	// search through the admin API finds the same records, and no payload is in them
 	_, sb := w.api("GET", "/v1/decisions?kind=private&action=deny&limit=500", nil)
 	var found []map[string]any
