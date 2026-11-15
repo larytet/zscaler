@@ -2,7 +2,7 @@
 
 **Working name:** SMB-ZTX (placeholder)
 **Goal:** Feature parity with the Zscaler Zero Trust Exchange (ZIA, ZPA, ZDX, data security) for organisations of roughly 5–250 people with no dedicated security team.
-**Status:** Draft v0.7, 2026-11-15
+**Status:** Draft v0.8, 2026-11-15
 **Audience:** Product, architecture, engineering
 
 ---
@@ -482,7 +482,7 @@ Implication: Zscaler's enterprise packaging has **many 500-user minimums**, plus
 
 ## 15. Open questions and risks
 
-1. **Patent exposure.** Connector stitching (US 11,652,797 family, priority 2014-06-20, estimated expiry 2034) and handshake snooping (US 11,750,405 family) are Zscaler-assigned. Claim scope is unknown. Obtain a freedom-to-operate opinion before design freeze.
+1. **Patent exposure.** Connector stitching (US 11,652,797 family, priority 2014-06-20, estimated expiry 2034) and handshake snooping (US 11,750,405 family) are Zscaler-assigned. Claim scope is unknown. Obtain a freedom-to-operate opinion before design freeze. Further patents found in the agentic-AI and isolation search are listed in 19.7.
 2. **Inspection versus end-to-end encryption.** ZPA-031 and ZPA-041 pull in opposite directions. Decide the default.
 3. **Economics.** No Zscaler pricing was found. Establish whether a per-user price that SMBs accept covers PoP, egress and inspection costs.
 4. **PoP strategy.** Build, or ride a partner network such as a hyperscaler or a CDN edge.
@@ -537,6 +537,8 @@ Known from search result summaries only (pages not opened in full):
 - **0.6** Product decision: unmanaged devices and browser isolation are delivered by a **workspace browser** on the device (section 18.4, new family WB-001..WB-013). ZPA-055, ZIA-022d and ZIA-024 reworded to use it; cloud-streamed isolation moves to ZIA-024b (C). Parity matrix, SMB-007 and the ZPA-040 note updated. No requirement was removed.
 
 - **0.7** Decision on the workspace extension: **option C for v1**. The workspace browser v1 is a **proof of concept** with no data controls (clipboard, download, upload, print, drag and drop, watermark), no per-launch proxy credential and no extension allow-list, because Chrome 146 does not load a command-line extension. Those parts (WB-006 and the related items) are **deferred**, not failed; options A (bundled Chromium) and B (enterprise policy) remain the recorded ways to deliver them. ZPA-055, ZIA-022d, ZIA-024, BYOD-002 and SMB-007 reworded so none claims data controls in v1. Every WB item and BYOD item now carries a v1 status tag.
+
+- **0.8** New section 19: agentic-AI security for small businesses (new family AGS-001..AGS-018). It collects the ideas from the AirlockAI review (agents never hold credentials, deterministic enforcement outside the model, approval for writes, masking, audit, caps) and from a patent and prior-art search, with the patent risks recorded in 19.7. No existing requirement changes priority. Section 15 risk 1 points to 19.7.
 
 ### 17.1 Promoted to Must in 0.5
 
@@ -655,3 +657,77 @@ Workspace browser requirements (new in 0.6):
 - Building a private global backbone (Cato) and SD-WAN hardware (both): capital intensive, outside "small business, no network team".
 - 5G appliances, SD-branch switching with uPoE (Palo Alto): hardware business.
 - Marketing statistics (95% of web threats stopped inline, 10x better SLAs, and so on): vendor claims with no method.
+
+---
+
+## 19. Agentic-AI security for small businesses (new in 0.8)
+
+Small businesses are starting to give AI agents access to their invoices, customers, files, mail and tickets. They have no security team to review that access. This section collects every idea from the agentic-AI review in one place. It builds on AI-001..AI-004 (section 7) and on what is already implemented: named agent identities, just-in-time approval, response DLP, the risk score and the signed audit.
+
+Inspiration: the AirlockAI project (a local design that keeps credentials out of the agent and puts a deterministic gateway between the agent and the systems), plus public descriptions of agent gateways (credential injection at egress, per-call scoped tokens). Confidence markers as in section 0: `[V]` verified against a source named in 19.8, `[I]` inferred. All priorities here are **proposals**, not product decisions.
+
+### 19.1 Principles
+
+1. **The agent never holds a credential.** The platform holds the secret and adds it to the request after the policy allows it.
+2. **Enforcement is deterministic and outside the model.** Rules, not a classifier or the agent's own instructions, decide what an agent may do or see. An unclear case is refused.
+3. **Read by default, write by approval.** Anything that changes data waits for a person.
+4. **The agent is never more powerful than the person who owns it.**
+5. **Everything is explainable to an owner who is not a security expert.**
+
+### 19.2 Identity and access
+
+- **AGS-001 (S, recommended first) credential injection.** The platform stores each SaaS or API secret and adds it to the agent's outbound request at the enforcement node, only after policy allows the call. The agent holds only its platform identity. Rotating a secret needs no change to the agent `[V: described for agent gateways in 19.8; I: our implementation on the TLS-inspecting proxy, I10a]`.
+- **AGS-002 (S, recommended first) read-only agent pack.** A ready policy template for agent identities: GET and read-only queries allowed on the listed apps, every write method denied or sent to approval. Builds on method and path rules (ZPA-074 web side) and `require_approval` (ZPA-027) `[I]`.
+- **AGS-003 (S) default-deny egress per agent.** An agent can reach only its listed apps and the model provider. Everything else is refused and logged `[V: AirlockAI egress gateway; I: per-identity policy]`.
+- **AGS-004 (S) operator cap.** An agent's access is the intersection of its grants and its operator's own access. If the operator loses access, so does the agent `[I]`. See 19.7 for a patent note.
+- **AGS-005 (S) agent registry.** One list of every agent: owner, purpose, apps, last use, expiry and risk. Agents unused for 30 days are flagged for removal `[V: Zscaler markets an agent registry; I: our version]`.
+- **AGS-006 (S) short-lived, per-task grants.** Access expires on its own (minutes to hours) and the owner renews it. Revocation is one click and effective within seconds (I12b) `[V: pattern in 19.8; see 19.7]`.
+
+### 19.3 Control of risky actions
+
+- **AGS-007 (S) approval for writes by email, Slack or Teams.** The agent proposes an action, the owner sees the exact action and data touched, and approves or rejects. The approval expires. Extends ZPA-027 and INT-007 `[V: AirlockAI proposal flow]`.
+- **AGS-008 (S) approval-fatigue controls.** The approval card shows the exact request, never a summary written by the agent. Limit how many approvals one person receives per hour, group low-risk ones, and require a second look for unusual ones `[V: published research on approval hijacking, 19.8]`.
+- **AGS-009 (S) volume caps and kill switch.** Per-agent limits on rows, bytes and calls per hour. Passing a limit pauses the agent and alerts the owner. One button revokes the agent `[V: AirlockAI row and size caps; I: counters on the node]`.
+- **AGS-010 (S) named actions instead of raw API access.** The administrator approves a small set of named actions (for example "unpaid invoices over 30 days"). The agent can call only those. This is the strongest control and needs a gateway layer for tool calls `[V: AirlockAI query patterns; I: effort is larger than the items above]`.
+- **AGS-011 (C) agent-proposed access.** The agent proposes the actions it needs. The administrator reviews them in one screen and approves. Nothing is allowed before approval `[V: AirlockAI section 7.8]`.
+
+### 19.4 Data protection
+
+- **AGS-012 (S) mask instead of block.** Replace card numbers, national IDs, account numbers and emails in results with tokens before the agent sees them, where the policy says so. Extends response DLP (I16), which today blocks the whole response `[V: AirlockAI anonymising results; I]`. Limits as DLP: pattern based, so reformatted data can be missed.
+- **AGS-013 (S) prompt and upload DLP for AI tools.** Already covered in basic form by AI-003 and request DLP. The addition is a clear per-tool setting: allow, warn or block `[I]`.
+
+### 19.5 Visibility and evidence
+
+- **AGS-014 (S) intent-before, result-after audit per agent.** Each call records what the agent said it wanted to do and what happened, in one trail per agent. A weekly plain-language summary: "the invoice agent read 212 invoices and asked to change 3" `[V: AirlockAI audit; I]`.
+- **AGS-015 (C) hash-chained audit.** Each record includes the hash of the one before, so an owner, auditor or insurer can check that the log was not edited. Builds on signed state (I9a) `[I]`. See 19.7 for a patent note.
+- **AGS-016 (S) shadow-AI report.** Which employees send data to which AI tools, with one-click allow, warn or block. Extends AI-001 `[I]`.
+
+### 19.6 Dangerous setups and agent risk
+
+- **AGS-017 (S) "rule of two" configuration check.** Warn when one agent can read private data, receive untrusted input (web pages, inbound mail) and send data out. That combination is how injected instructions steal data. Advice only, not a block, since published sources say detection alone cannot be the gate `[V: sources in 19.8; I: lint over our policy]`.
+- **AGS-018 (C) agent risk score.** Add agent behaviour (sudden volume, new apps, denied attempts) to the existing risk score (ARCH-007) so a risky agent loses access first `[I]`.
+
+### 19.7 Patent and prior-art notes
+
+Found by web search on 2026-11-15. Search snippets and one Google Patents page were read. **Claims were read in full only for US 11,968,179.** Nothing here is a legal opinion. Counsel must read the claims before design freeze (section 15, risk 1).
+
+| Patent | Subject | Overlaps | Handling |
+|---|---|---|---|
+| **US 11,968,179** (Zscaler; application US20210250333A1, priority 2016-05-18, granted 2024-04-23, shown as active to about 2037) | Claim 1: decide a remote user may access an application and that it should be isolated; create tunnels between the device, an isolation service operating the isolated browser and the application; load the application there; provide **image content** to the device | Cloud-streamed isolation (ZIA-024b) | Do not build cloud-streamed isolation without counsel. The workspace browser (section 18.4) runs the page on the device and sends no image stream, so it is outside claim 1 as worded `[V: claim text read]`. |
+| **US 12,688,261** (issued 2026-07-21) | Authorising a tool call by an autonomous agent with short-lived delegation artifacts per invocation | AGS-001, AGS-006, I12b | Open risk. Claims not read. |
+| **US 12,671,588** | Delegated authorisation, agent paused until a human approval, risk-adaptive tightening, receipt lineage | AGS-007, AGS-015, ARCH-007 | Open risk. Claims not read. |
+| **US 12,732,509** | Execution boundary intercepts a proposed action; authority narrows at each delegation step | AGS-004, AGS-010 | Open risk. Claims not read. |
+| Zscaler pending application on agent intent classification (published 2026-03) | Title only | AGS-005 | Unknown. |
+| Zscaler US 11,652,797 and US 11,750,405 | Connector stitching, handshake snooping | Section 15 risk 1 | Unchanged. |
+
+Not found: a patent for the rule-of-two check (AGS-017) or for a Palo Alto workspace browser. The search tool is weak for patents, so absence is not evidence.
+
+### 19.8 Sources
+
+- agentgateway, "Credential injection for AI agent egress" (2026-07-27); aiAuthZ preprint (alphaxiv 2607.05518) `[V]`.
+- Zscaler, "Zero trust for AI agents: least privilege" and the Network World launch article on agentic-AI security `[V]`.
+- Palo Alto Networks, "6 security gaps browser extensions cannot fix on unmanaged devices" `[V]`.
+- arXiv 2609.21081 ("Loopjacking: hijacking human-in-the-loop approval") and arXiv 2609.15906 ("Authorization architectures for tool-using AI agents") `[V]`.
+- Arcjet, "The lethal trifecta for AI agents" `[V]`.
+- AirlockAI README and SPEC (local project) `[V]`.
+- Google Patents US20210250333A1, Justia US 12,688,261, USPTO US 12,671,588 and US 12,732,509 `[V: snippets only, except as stated in 19.7]`.
