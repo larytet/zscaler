@@ -17,6 +17,7 @@ import (
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/dlp"
+	"github.com/larytet/zscaler/internal/filetype"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
@@ -137,11 +138,11 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	pol := p.State.Policy(id.Tenant, policy.Web)
 	d := policy.Decision{Action: policy.Deny, Reason: "no-policy"}
 	cats := p.Classifier.Categories(host)
-	var hits []string
+	var hits, files []string
 	if pol != nil {
-		if pol.UsesDLP() && q.Body != nil && q.Body != http.NoBody && (q.Method == "POST" || q.Method == "PUT" || q.Method == "PATCH") {
+		if (pol.UsesDLP() || pol.UsesUploadFileTypes()) && q.Body != nil && q.Body != http.NoBody && (q.Method == "POST" || q.Method == "PUT" || q.Method == "PATCH") {
 			var skipped bool
-			hits, skipped = scanBody(q, p.edmSets(id.Tenant))
+			hits, files, skipped = scanBody(q, p.edmSets(id.Tenant), pol.UsesDLP(), pol.UsesUploadFileTypes())
 			if skipped {
 				note := rec // visible in the log: the rule could not see this body
 				note.Action, note.Reason = "info", "dlp-skipped-too-large"
@@ -149,9 +150,12 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 			}
 		}
 		d = pol.Evaluate(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
-			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits})
+			Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, Path: q.URL.Path, Method: q.Method, DLPHits: hits, UploadFiles: files})
 		rec.Version = pol.Version
 		rec.DLP = hits
+		if d.Action == policy.Deny && len(files) > 0 && ruleUsesUploadFileTypes(pol, d.RuleID) {
+			rec.FileTypes = files
+		}
 	}
 	rec.Rule, rec.Reason = d.RuleID, d.Reason
 	ref := refID()
@@ -168,6 +172,10 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 		p.Log(rec)
 		if d.Capture {
 			p.Log(captureRecord(rec, d.RuleID, "deny", q, reqBody, http.StatusForbidden, nil, nil, reqTrunc))
+		}
+		if len(rec.FileTypes) > 0 {
+			fileBlockPage(w, host, "upload", rec.FileTypes, ref)
+			return
 		}
 		if len(hits) > 0 && d.RuleID != "" && ruleUsesDLP(pol, d.RuleID) {
 			dlpBlockPage(w, host, hits, ref)
@@ -241,6 +249,14 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 		return
 	}
 	defer resp.Body.Close()
+	if pol != nil && pol.UsesDownloadFileTypes() {
+		if p.checkDownload(w, resp, pol, id, user, host, q, cats, rec) {
+			if d.Capture {
+				p.Log(captureRecord(rec, d.RuleID, "deny", q, reqBody, http.StatusForbidden, nil, nil, reqTrunc))
+			}
+			return
+		}
+	}
 	if scanResp && textual(resp.Header.Get("Content-Type")) {
 		if blocked := p.scanResponse(w, resp, pol, id, user, host, cats, rec); blocked {
 			if d.Capture {
@@ -333,23 +349,29 @@ func (p *Proxy) edmSets(tenant string) map[string]*dlp.EDM {
 	return nil
 }
 
-func scanBody(q *http.Request, sets map[string]*dlp.EDM) (hits []string, skipped bool) {
+func scanBody(q *http.Request, sets map[string]*dlp.EDM, wantDLP, wantFiles bool) (hits, files []string, skipped bool) {
 	if q.ContentLength > MaxScanBytes {
-		return nil, true
+		return nil, nil, true
 	}
 	buf, err := io.ReadAll(io.LimitReader(q.Body, MaxScanBytes+1))
 	rest := q.Body
 	if len(buf) > MaxScanBytes {
 		// too large: do not scan a prefix and call it clean; forward everything as it came
 		q.Body = readCloser{io.MultiReader(bytes.NewReader(buf), rest), rest}
-		return nil, true
+		return nil, nil, true
 	}
 	q.Body = io.NopCloser(bytes.NewReader(buf))
 	q.ContentLength = int64(len(buf))
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
-	return dlp.ScanWith(buf, sets), false
+	if wantDLP {
+		hits = dlp.ScanWith(buf, sets)
+	}
+	if wantFiles {
+		files = filetype.Upload(q.Header.Get("Content-Type"), q.URL.Path, buf)
+	}
+	return hits, files, false
 }
 
 type readCloser struct {
@@ -452,4 +474,46 @@ func scrubInjected(resp *http.Response, secret string) bool {
 	resp.Header.Del("Content-Length")
 	resp.Header.Del("Content-Encoding") // Transport only decompresses what it asked for; an encoded body cannot be scanned
 	return true
+}
+
+func ruleUsesUploadFileTypes(p *policy.Policy, id string) bool {
+	for _, r := range p.Rules {
+		if r.ID == id {
+			return len(r.Match.UploadFileTypes) > 0
+		}
+	}
+	return false
+}
+
+// checkDownload looks at the start of a response for its kind of file and refuses it if a rule says
+// so (ZIA-013). Only the first few KiB are read; the rest streams on unchanged, so a large download is
+// not held in memory. It reports whether it wrote a block page.
+func (p *Proxy) checkDownload(w http.ResponseWriter, resp *http.Response, pol *policy.Policy, id pki.Identity, user policy.User,
+	host string, q *http.Request, cats []string, base broker.Record) bool {
+	head, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	resp.Body = readCloser{io.MultiReader(bytes.NewReader(head), resp.Body), resp.Body}
+	files := filetype.Download(resp.Header.Get("Content-Disposition"), q.URL.Path, resp.Header.Get("Content-Type"), head)
+	if len(files) == 0 {
+		return false
+	}
+	d := pol.EvaluateResponse(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
+		Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, DownloadFiles: files})
+	if d.Action != policy.Deny {
+		return false
+	}
+	rec := base
+	rec.TS, rec.Action, rec.Rule, rec.Reason, rec.FileTypes, rec.Inspected = time.Now().UTC(), "deny", d.RuleID, "file-type-download", files, true
+	p.Log(rec)
+	resp.Body.Close()
+	fileBlockPage(w, host, "download", files, refID())
+	return true
+}
+
+func fileBlockPage(w http.ResponseWriter, host, direction string, types []string, ref string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>File blocked</h1>
+<p>A file you tried to %s with %s looks like a kind your organisation does not allow (%s).</p>
+<p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
+		direction, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
 }

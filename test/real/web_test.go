@@ -3,7 +3,9 @@
 package real
 
 import (
+	"bytes"
 	"encoding/json"
+	"mime/multipart"
 	"strings"
 	"testing"
 	"time"
@@ -208,5 +210,60 @@ func TestRealZIA004CaptureAndCredentialInjection(t *testing.T) {
 	// a capture is never written to the node's disk
 	if strings.Contains(w.allDecisionsRaw(), `"kind":"capture"`) {
 		t.Fatal("a capture was written to the enforcement node's log")
+	}
+}
+
+// REAL-ZIA-005 (ZIA-013): file type control on decrypted traffic. Programs are refused going up and
+// coming down, also when they are named or typed as something harmless; clean files pass whole.
+func TestRealZIA005FileTypeControl(t *testing.T) {
+	w, a := startWeb(t)
+	w.must("PUT", "/v1/inspection", map[string]any{"enabled": true})
+	w.putWebPolicy("allow", []map[string]any{
+		{"id": "no-exe-up", "priority": 1, "action": "deny", "match": map[string]any{"upload_file_types": []string{"executable"}}},
+		{"id": "no-exe-down", "priority": 2, "action": "deny", "match": map[string]any{"download_file_types": []string{"executable"}}}})
+	ca := w.inspectionPool()
+	form := func(name string, content []byte) (string, string) {
+		var b bytes.Buffer
+		mw := multipart.NewWriter(&b)
+		fw, _ := mw.CreateFormFile("file", name)
+		fw.Write(content)
+		mw.Close()
+		return mw.FormDataContentType(), b.String()
+	}
+	pe := append([]byte("MZ\x90\x00\x03"), make([]byte, 200)...)
+	ct, clean := form("cv.pdf", []byte("%PDF-1.7 a clean document"))
+	var r webResult
+	eventually(t, "a clean upload to go through", 60*time.Second, func() bool {
+		r = w.get(a, ca, "POST", "/up", clean, map[string]string{"Content-Type": ct})
+		return r.err == nil && r.code == 200
+	})
+	before, _ := w.originSeen()
+	for name, file := range map[string][2]any{"a program": {"tool.exe", pe}, "a program named as a picture": {"holiday.jpg", pe}} {
+		ct, body := form(file[0].(string), file[1].([]byte))
+		if r = w.get(a, ca, "POST", "/up", body, map[string]string{"Content-Type": ct}); r.code != 403 || !strings.Contains(r.body, "File blocked") {
+			t.Errorf("%s was not refused going up: %+v", name, r)
+		}
+	}
+	if seen, _ := w.originSeen(); len(seen) != len(before) {
+		t.Errorf("%d refused uploads reached the origin", len(seen)-len(before))
+	}
+	for _, p := range []string{"/dl/setup.exe", "/dl/holiday.jpg"} {
+		if r = w.get(a, ca, "GET", p, "", nil); r.code != 403 || !strings.Contains(r.body, "File blocked") {
+			t.Errorf("%s was not refused coming down: %+v", p, r)
+		}
+	}
+	if r = w.get(a, ca, "GET", "/dl/report.pdf", "", nil); r.code != 200 || r.body != "%PDF-1.7 a clean document" {
+		t.Errorf("a clean download was damaged: %+v", r)
+	}
+	refused := 0
+	for _, d := range w.decisions() {
+		if d["action"] == "deny" && (d["rule"] == "no-exe-up" || d["rule"] == "no-exe-down") {
+			if ft, _ := d["file_types"].([]any); len(ft) > 0 {
+				refused++
+			}
+		}
+	}
+	if refused < 4 {
+		t.Errorf("expected 4 refusals recorded with their kind, found %d", refused)
 	}
 }

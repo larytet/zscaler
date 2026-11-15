@@ -584,3 +584,65 @@ func TestRemovableMediaPostureRule(t *testing.T) { // AGT-019 (DATA-005, basic)
 		t.Fatal("unknown must fail closed, like every other posture check")
 	}
 }
+
+func TestFileTypeRules(t *testing.T) { // AGT-025 (ZIA-013)
+	p := &Policy{Kind: Web, DefaultAction: Allow, Rules: []Rule{
+		{ID: "up", Priority: 1, Action: Deny, Match: Match{UploadFileTypes: []string{"executable", "ext:.iso"}}},
+		{ID: "down", Priority: 2, Action: Deny, Match: Match{DownloadFileTypes: []string{"archive"}}},
+	}}
+	if err := p.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	if errs := Validate(p, nil); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	req := func(mod func(*Request)) Request {
+		r := Request{Kind: Web, Host: "x.example", Now: t0, User: User{Email: "a@example.com"}, Inspected: true}
+		mod(&r)
+		return r
+	}
+	if d := p.Evaluate(req(func(r *Request) { r.UploadFiles = []string{"executable"} })); d.Action != Deny || d.RuleID != "up" {
+		t.Fatalf("%+v", d)
+	}
+	if d := p.Evaluate(req(func(r *Request) { r.UploadFiles = []string{"ext:.iso", "disk-image"} })); d.RuleID != "up" {
+		t.Fatalf("an explicit extension: %+v", d)
+	}
+	if d := p.Evaluate(req(func(r *Request) { r.UploadFiles = []string{"pdf"} })); d.Action != Allow {
+		t.Fatalf("%+v", d)
+	}
+	// an upload rule needs decrypted traffic, and does not apply in the response phase
+	if d := p.Evaluate(req(func(r *Request) { r.UploadFiles = []string{"executable"}; r.Inspected = false })); d.Action != Allow {
+		t.Fatalf("not inspected: %+v", d)
+	}
+	// a download rule applies only to the response, and only through EvaluateResponse
+	if d := p.Evaluate(req(func(r *Request) { r.DownloadFiles = []string{"archive"} })); d.Action != Allow {
+		t.Fatalf("a download rule must not fire on the request: %+v", d)
+	}
+	if d := p.EvaluateResponse(req(func(r *Request) { r.DownloadFiles = []string{"archive"} })); d.Action != Deny || d.RuleID != "down" {
+		t.Fatalf("%+v", d)
+	}
+	if d := p.EvaluateResponse(req(func(r *Request) { r.DownloadFiles = []string{"pdf"} })); d.Action != Allow {
+		t.Fatalf("%+v", d)
+	}
+	if d := p.EvaluateResponse(req(func(r *Request) { r.UploadFiles = []string{"executable"} })); d.Action != Allow {
+		t.Fatalf("an upload rule must not fire on the response: %+v", d)
+	}
+	if !p.UsesUploadFileTypes() || !p.UsesDownloadFileTypes() || (&Policy{}).UsesUploadFileTypes() {
+		t.Fatal("Uses*")
+	}
+}
+
+func TestFileTypeRuleValidation(t *testing.T) { // AGT-025
+	bad := map[string]*Policy{
+		"warn":         {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Warn, Match: Match{UploadFileTypes: []string{"executable"}}}}},
+		"allow":        {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Allow, Match: Match{DownloadFileTypes: []string{"executable"}}}}},
+		"unknown type": {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{UploadFileTypes: []string{"malware"}}}}},
+		"bad ext":      {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{DownloadFileTypes: []string{"ext:exe"}}}}},
+		"private":      {Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "r", Priority: 1, Action: Deny, Match: Match{UploadFileTypes: []string{"executable"}}}}},
+	}
+	for name, p := range bad {
+		if err := p.Compile(nil); err == nil && len(Validate(p, nil)) == 0 {
+			t.Errorf("%s was accepted", name)
+		}
+	}
+}

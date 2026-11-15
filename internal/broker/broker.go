@@ -123,6 +123,8 @@ type Record struct {
 	Workspace bool `json:"workspace,omitempty"`
 	// DLP lists the data types found in a blocked or logged request body. Never the data.
 	DLP []string `json:"dlp,omitempty"`
+	// FileTypes are the kinds of file a blocked upload or download carried (ZIA-013), never the file.
+	FileTypes []string `json:"file_types,omitempty"`
 	// Health is set on records of Kind "health": the latest device health numbers.
 	Health *devhealth.Snapshot `json:"health,omitempty"`
 	// Capture is set on records of Kind "capture": a kept exchange (ZIA-022b). Never persisted to the node's log file.

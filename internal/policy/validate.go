@@ -2,6 +2,7 @@ package policy
 
 import (
 	"fmt"
+	"github.com/larytet/zscaler/internal/filetype"
 
 	"github.com/larytet/zscaler/internal/dlp"
 	"net/netip"
@@ -102,6 +103,19 @@ func Validate(p *Policy, known map[string]bool) []error {
 		}
 		if len(m.DLPResponse) > 0 && p.Kind != Web {
 			add("%s: dlp_response is only valid in web policies", w)
+		}
+		if (len(m.UploadFileTypes) > 0 || len(m.DownloadFileTypes) > 0) && r.Action != Deny {
+			add("%s: a file-type rule must have the action deny (it can only block a transfer)", w)
+		}
+		if (len(m.UploadFileTypes) > 0 || len(m.DownloadFileTypes) > 0) && p.Kind != Web {
+			add("%s: upload_file_types and download_file_types are only valid in web policies", w)
+		}
+		for _, list := range [][]string{m.UploadFileTypes, m.DownloadFileTypes} {
+			for _, ft := range list {
+				if !filetype.IsKnown(ft) {
+					add("%s: unknown file type %q (known: %s, or ext:.abc)", w, ft, strings.Join(filetype.Known, ", "))
+				}
+			}
 		}
 		for _, dn := range m.DLPResponse {
 			if !dlp.KnownType(dn) {

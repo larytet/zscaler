@@ -26,6 +26,20 @@ func main() {
 		defer mu.Unlock()
 		fmt.Fprint(w, strings.Join(seen, "\n"))
 	})
+	// downloads of different kinds, for the file-type tests
+	pe := append([]byte("MZ\x90\x00\x03"), make([]byte, 200)...)
+	mux.HandleFunc("/dl/setup.exe", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(pe)
+	})
+	mux.HandleFunc("/dl/holiday.jpg", func(w http.ResponseWriter, r *http.Request) { // a program under a picture's name and type
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Write(pe)
+	})
+	mux.HandleFunc("/dl/report.pdf", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Write([]byte("%PDF-1.7 a clean document"))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		auth := r.Header.Get("Authorization")

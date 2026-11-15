@@ -4,6 +4,7 @@ package policy
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/larytet/zscaler/internal/filetype"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -85,6 +86,10 @@ type Request struct {
 	// ResponseDLPHits is set only for the second evaluation, made once the response is known.
 	ResponseDLPHits []string
 	ResponsePhase   bool
+	// UploadFiles are the kinds of file the decrypted request carries; DownloadFiles, in the response
+	// phase, the kinds the response carries (package filetype).
+	UploadFiles   []string
+	DownloadFiles []string
 	// AssumeDevice skips the checks that belong to a device (network, workspace, posture). Used when
 	// asking whether a person could reach something, without having one of their devices at hand.
 	AssumeDevice bool
@@ -142,6 +147,12 @@ type Match struct {
 	// answering with a customer's card number). Inspected web traffic only; the proxy applies
 	// the rule after the origin has answered and before anything reaches the user.
 	DLPResponse []string `json:"dlp_response,omitempty"`
+	// UploadFileTypes and DownloadFileTypes name kinds of file (see package filetype: "executable",
+	// "archive", "disguised", "ext:.iso", ...). The rule matches when a decrypted upload, or a
+	// download, carries one of them, by name, declared type or file signature (ZIA-013). Web rules
+	// with the action deny; inspected traffic only.
+	UploadFileTypes   []string `json:"upload_file_types,omitempty"`
+	DownloadFileTypes []string `json:"download_file_types,omitempty"`
 	// MaxRisk and MinRisk bound the user's risk score (inclusive).
 	MaxRisk *int `json:"max_risk,omitempty"`
 	MinRisk *int `json:"min_risk,omitempty"`
@@ -367,6 +378,16 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 			return false
 		}
 	}
+	if len(m.UploadFileTypes) > 0 { // a request rule: the upload is seen only when decrypted
+		if r.ResponsePhase || !r.Inspected || !filetype.Match(m.UploadFileTypes, r.UploadFiles) {
+			return false
+		}
+	}
+	if len(m.DownloadFileTypes) > 0 { // a response rule, applied once the response is known
+		if !r.ResponsePhase || !filetype.Match(m.DownloadFileTypes, r.DownloadFiles) {
+			return false
+		}
+	}
 	if len(m.DLP) > 0 {
 		ok := false
 		for _, want := range m.DLP {
@@ -528,6 +549,26 @@ func parseHM(s string) (int, error) {
 	return t.Hour()*60 + t.Minute(), nil
 }
 
+// UsesUploadFileTypes reports whether any rule needs uploads checked for file type.
+func (p *Policy) UsesUploadFileTypes() bool {
+	for _, r := range p.Rules {
+		if len(r.Match.UploadFileTypes) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// UsesDownloadFileTypes reports whether any rule needs downloads checked for file type.
+func (p *Policy) UsesDownloadFileTypes() bool {
+	for _, r := range p.Rules {
+		if len(r.Match.DownloadFileTypes) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // UsesDLP reports whether any rule needs the request body scanned, so the proxy only
 // pays for scanning when a policy asks for it.
 func (p *Policy) UsesDLP() bool {
@@ -551,7 +592,7 @@ func (p *Policy) EvaluateResponse(r Request) (d Decision) {
 	r.ResponsePhase = true
 	for i := range p.compiled {
 		c := &p.compiled[i]
-		if len(c.Match.DLPResponse) > 0 && c.matches(p.Kind, r) {
+		if (len(c.Match.DLPResponse) > 0 || len(c.Match.DownloadFileTypes) > 0) && c.matches(p.Kind, r) {
 			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
 		}
 	}
