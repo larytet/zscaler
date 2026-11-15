@@ -133,3 +133,25 @@ func verify(r io.Reader) (last string, n int, err error) {
 }
 
 var ErrCorrupt = errors.New("audit: corrupt")
+
+// ReadAll returns every record for a tenant in order ("" for all tenants).
+func ReadAll(path, tenant string) ([]Event, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	var out []Event
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 1<<20), 16<<20)
+	for sc.Scan() {
+		var e Event
+		if json.Unmarshal(sc.Bytes(), &e) == nil && (tenant == "" || e.Tenant == tenant) {
+			out = append(out, e)
+		}
+	}
+	return out, sc.Err()
+}

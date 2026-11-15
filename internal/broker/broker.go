@@ -31,7 +31,8 @@ type Target struct {
 
 type Segment struct {
 	ID      string   `json:"id"`
-	Group   string   `json:"group"` // connector group
+	Group   string   `json:"group"`           // connector group
+	Class   string   `json:"class,omitempty"` // "standard" or "admin", used by the safe-defaults pack
 	Targets []Target `json:"targets"`
 }
 
