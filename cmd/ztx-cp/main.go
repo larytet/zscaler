@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -28,6 +29,9 @@ func main() {
 	enrolL := flag.String("enrol-listen", "127.0.0.1:8444", "enrolment and sync listen address")
 	names := flag.String("names", "localhost,127.0.0.1", "comma-separated DNS names or IPs for the server certificate")
 	bootFile := flag.String("bootstrap-token-file", "", "file holding the bootstrap token (or set ZTX_BOOTSTRAP_TOKEN)")
+	smtpAddr := flag.String("smtp-addr", "", "SMTP server host:port for alert emails (empty disables email)")
+	smtpFrom := flag.String("smtp-from", "alerts@localhost", "From address for alert emails")
+	smtpUser := flag.String("smtp-user", "", "SMTP username (password from ZTX_SMTP_PASSWORD)")
 	flag.Parse()
 
 	boot, err := cli.Secret(*bootFile, "ZTX_BOOTSTRAP_TOKEN")
@@ -62,6 +66,11 @@ func main() {
 			return u.Email
 		}
 		return subject
+	}
+	if *smtpAddr != "" {
+		n := &alerts.SMTPNotifier{Addr: *smtpAddr, From: *smtpFrom, Username: *smtpUser, Password: os.Getenv("ZTX_SMTP_PASSWORD"),
+			To: st.AlertEmails, Errf: func(err error) { log.Printf("alert email: %v", err) }}
+		eng.OnOpen = n.Notify
 	}
 	go func() {
 		for range time.Tick(30 * time.Second) {

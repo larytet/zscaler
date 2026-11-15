@@ -98,6 +98,8 @@ curl --cacert $CA -s https://localhost:8443/v1/alerts -H "Authorization: Bearer 
 
 If the device fails the posture check (no disk encryption detected, or no firewall detected), the private app is denied and the decision log at `en-data/decisions.jsonl` says why. On Windows the firewall probe is not implemented, so posture-protected apps are denied there.
 
+Alert emails: start `ztx-cp` with `--smtp-addr host:port --smtp-from alerts@yourdomain` (password in `ZTX_SMTP_PASSWORD`), then `PUT /v1/alert-settings` with `{"emails":["owner@yourdomain"]}`.
+
 Secrets are read from files or environment variables and never from command-line arguments.
 
 ## Known limits that matter before real use

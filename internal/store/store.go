@@ -50,13 +50,14 @@ type PolicyDoc struct {
 }
 
 type Tenant struct {
-	ID       string                     `json:"id"`
-	Name     string                     `json:"name"`
-	IDP      IDP                        `json:"idp"`
-	Segments map[string]broker.Segment  `json:"segments"`
-	Policies map[policy.Kind]*PolicyDoc `json:"policies"`
-	Users    map[string]policy.User     `json:"users"`
-	Devices  map[string]Device          `json:"devices"`
+	ID          string                     `json:"id"`
+	Name        string                     `json:"name"`
+	IDP         IDP                        `json:"idp"`
+	AlertEmails []string                   `json:"alert_emails,omitempty"`
+	Segments    map[string]broker.Segment  `json:"segments"`
+	Policies    map[policy.Kind]*PolicyDoc `json:"policies"`
+	Users       map[string]policy.User     `json:"users"`
+	Devices     map[string]Device          `json:"devices"`
 }
 
 type adminRec struct {
@@ -451,4 +452,24 @@ func (s *Store) Snapshot() *Snapshot {
 		out.Tenants[id] = ts
 	}
 	return out
+}
+
+func (s *Store) SetAlertEmails(tenant string, emails []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	t.AlertEmails = emails
+	return s.save()
+}
+
+func (s *Store) AlertEmails(tenant string) []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if t, err := s.tenant(tenant); err == nil {
+		return append([]string(nil), t.AlertEmails...)
+	}
+	return nil
 }

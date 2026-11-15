@@ -322,3 +322,27 @@ func TestSegmentValidationAndUnknownFields(t *testing.T) {
 		}
 	}
 }
+
+func TestAlertSettings(t *testing.T) {
+	e := newEnv(t)
+	if c, b, _ := e.call("PUT", "/v1/alert-settings", e.adminA, map[string]any{"emails": []string{"owner@example.com"}}); c != 200 {
+		t.Fatalf("%d %s", c, b)
+	}
+	for _, bad := range []string{"no-at-sign", "a b@example.com", "x@example.com\r\nBcc: y@z", "a@b.c,d@e.f"} {
+		if c, _, _ := e.call("PUT", "/v1/alert-settings", e.adminA, map[string]any{"emails": []string{bad}}); c != 400 {
+			t.Errorf("%q accepted: %d", bad, c)
+		}
+	}
+	_, b, _ := e.call("GET", "/v1/alert-settings", e.adminA, nil)
+	if !strings.Contains(string(b), "owner@example.com") {
+		t.Fatalf("%s", b)
+	}
+	_, b, _ = e.call("GET", "/v1/alert-settings", e.adminB, nil)
+	if strings.Contains(string(b), "owner@example.com") {
+		t.Fatal("tenant b sees tenant a recipients")
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("PUT", "/v1/alert-settings", viewer, map[string]any{"emails": []string{"x@example.com"}}); c != 403 {
+		t.Fatalf("viewer changed settings: %d", c)
+	}
+}

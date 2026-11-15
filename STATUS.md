@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I7d (scenarios).
+**Last updated:** 2026-11-15, after I7e (email alerts).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -43,7 +43,7 @@ Implementation language: **Go** (chosen by the user).
 | I7b | PERF-006..008 measurements; EN sync default 5 s to 2 s; cache per-request cert-chain check in the proxy | done: all met | PERF-006..008 |
 | I7c | Fault-injecting proxy, RES-001..003, shortened soak RES-007 | done. RES-002 packet loss and RES-004 not tested; RES-007 ran 3 minutes, not 24 h | RES |
 | I7d | SCN-003 lost laptop, SCN-005 site outage, SCN-006 contractor, RES-001 with real processes (`make e2e`, 8 tests, about 35 s) | done | SCN |
-| I7e | Email alerts (ALR-004) | **next** | ALR |
+| I7e | Email alerts: SMTP notifier, per-tenant recipients (`PUT /v1/alert-settings`), `--smtp-*` flags on ztx-cp | done: ALR-004 against an in-process SMTP server; not tried against a real mail provider | ALR |
 | I7f | Usability checks and exit criteria review | pending (needs people) | USE |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
@@ -55,13 +55,13 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 - **Design deviation:** certificate renewal uses the current valid device certificate over mTLS, not an IdP refresh token (DESIGN D4.2). A stolen but unrevoked certificate can therefore renew itself indefinitely until the admin revokes it or disables the user. Fix: cap renewal chains (for example 7 days) or require a fresh IdP token.
 - **Design deviation:** ENs poll a full snapshot from the control plane every few seconds instead of holding a push stream (DESIGN D2.6). Fine for small tenants, not for scale. The snapshot carries every user and policy for every tenant, so an EN certificate can read all tenants: ENs are platform-trusted.
 - The binaries now run together in `test/e2e` (cp, en, connector, agent, with the in-process test IdP and a fake posture toolchain on PATH). The connector only uses the first `--en` address (no EN failover yet).
-- Alerts live in control-plane memory (lost on restart), are delivered only through the API (no email, no UI page yet), and the weekly digest (ADM-009, now Must) is not built.
+- Alerts live in control-plane memory (lost on restart). Delivery is the API plus email on a new alert; there is no UI page, and the weekly digest (ADM-009, now Must) is not built. Email has only been tested against a fake SMTP server.
 - Connector and EN certificates last 7 days and have no renewal in RB1.
 - Agent: Windows firewall posture probe is not implemented (stays unknown, so policies requiring it fail closed). No installers, tunnel driver or auto-update. The browser is launched by the caller (`openURL`), the CLI wiring comes with I5d.
 - Audit log: truncating the tail is not detectable from the file alone.
 - Posture probe parsers are tested on inline samples, not real captured output.
 - Web proxy sees host names only (no TLS inspection), and `warn` cannot be shown on HTTPS.
-- Test plan items not yet implemented: soak and failure injection (RES-001..005, 007), SCN-003, 005 and 006, usability checks (USE), the 30-minute nightly fuzz budget, and email alerts (ALR-004).
+- Test plan items not yet implemented: soak and failure injection (RES-001..005, 007), SCN-003, 005 and 006, usability checks (USE), the 30-minute nightly fuzz budget.
 
 ## Scope changes to know about
 

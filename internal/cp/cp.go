@@ -70,6 +70,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("POST /v1/users/{id}/disable", a.wrap(write, a.disableUser))
 	m.HandleFunc("GET /v1/audit", a.wrap(read, a.listAudit))
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
+	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
+	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
 	return m
 }
 
@@ -459,4 +461,35 @@ func (a *API) listAlerts(w http.ResponseWriter, r *http.Request, c ctxInfo) (any
 		return []alerts.Alert{}, nil
 	}
 	return a.Alerts.List(c.tenant, r.URL.Query().Get("open") == "1"), nil
+}
+
+func (a *API) putAlertSettings(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	var in struct {
+		Emails []string `json:"emails"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	for _, e := range in.Emails {
+		if !strings.Contains(e, "@") || strings.ContainsAny(e, " \r\n<>,") || len(e) > 254 {
+			return nil, fail(400, "invalid", "bad email address")
+		}
+	}
+	if len(in.Emails) > 20 {
+		return nil, fail(400, "invalid", "at most 20 recipients")
+	}
+	old := a.Store.AlertEmails(c.tenant)
+	if err := a.Store.SetAlertEmails(c.tenant, in.Emails); err != nil {
+		return nil, err
+	}
+	a.log(c, "alert-settings.update", "alerts", old, in.Emails)
+	return in, nil
+}
+
+func (a *API) getAlertSettings(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	e := a.Store.AlertEmails(c.tenant)
+	if e == nil {
+		e = []string{}
+	}
+	return map[string]any{"emails": e}, nil
 }

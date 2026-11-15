@@ -32,6 +32,8 @@ type Engine struct {
 	Now func() time.Time
 	// Name turns a subject into something a person recognises (email). Optional.
 	Name func(tenant, subject string) string
+	// OnOpen is called (in its own goroutine) when a new alert opens.
+	OnOpen func(Alert)
 
 	mu      sync.Mutex
 	next    int
@@ -78,6 +80,10 @@ func (e *Engine) openAlert(tenant, kind, key, msg, action string) *Alert {
 	a := &Alert{ID: e.next, Tenant: tenant, Kind: kind, Key: key, Message: msg, Action: action, Opened: e.now()}
 	e.alerts = append(e.alerts, a)
 	e.open[k] = a
+	if e.OnOpen != nil {
+		cp := *a
+		go e.OnOpen(cp)
+	}
 	return a
 }
 
