@@ -52,7 +52,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G15 | NFR-024 | Reproducible, checksummed release build with an SBOM | **done (S36)**; no code-signing certificates, no notarisation, no installers; found and fixed: the agent did not compile for Windows |
 | G16 | INT-006 | An OpenAPI description of every admin API route, generated from the route table | **done (S37)** for the description; no field schemas, no Terraform provider |
 | G17 | NFR-030 | Data subject access and erasure: export what is held about a person, and delete it | **done (S38)** for the technical part; the legal part (a DPA, a public sub-processor list, a lawful basis) is not software and is not done |
-| G18 | ADM-001 | Console simple mode (users, apps, alerts) | queued, a console change |
+| G18 | ADM-001 | Console simple mode (users, apps, alerts) | done: S39 |
 
 ## Not feasible without a new subsystem or an outside party (stays a gap)
 

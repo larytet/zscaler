@@ -2051,6 +2051,39 @@
         ]
       }
     },
+    "/v1/me": {
+      "get": {
+        "operationId": "me",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Me",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
     "/v1/openapi.json": {
       "get": {
         "operationId": "openAPI",

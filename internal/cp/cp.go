@@ -162,6 +162,7 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "POST /v1/support-access", admins, a.supportAccess)
 	a.route(m, "POST /v1/admins", admins, a.createAdmin)
 	a.route(m, "GET /v1/admins", admins, a.listAdmins)
+	a.route(m, "GET /v1/me", read, a.me)
 	a.route(m, "DELETE /v1/admins/{name}", admins, a.removeAdmin)
 	return m
 }

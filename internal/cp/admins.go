@@ -118,3 +118,15 @@ func (a *API) removeAdmin(w http.ResponseWriter, r *http.Request, c ctxInfo) (an
 	a.log(c, "admin.remove", name, nil, nil)
 	return map[string]string{"removed": name}, nil
 }
+
+// me tells the console who is signed in and what the role may do, so it shows only the screens and buttons
+// the role can use. The server still checks every call; this only spares people a refusal (ADM-001, ADM-002).
+func (a *API) me(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	perms := []store.Perm{}
+	for _, p := range []store.Perm{store.PermRead, store.PermLogs, store.PermAudit, store.PermSupport, store.PermWrite, store.PermSensitive, store.PermAdmins} {
+		if c.role.Can(p) {
+			perms = append(perms, p)
+		}
+	}
+	return map[string]any{"name": c.actor, "role": c.role, "permissions": perms}, nil
+}

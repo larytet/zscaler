@@ -11,7 +11,7 @@ import (
 
 func TestConsoleIsServedWithStrictHeaders(t *testing.T) {
 	e := newEnv(t)
-	for path, want := range map[string]string{"/": "SMB-ZTX console", "/ui/app.js": "use strict", "/ui/style.css": "--accent"} {
+	for path, want := range map[string]string{"/": "SMB-ZTX console", "/ui/app.js": "use strict", "/ui/modes.js": "visibleTabs", "/ui/style.css": "--accent"} {
 		resp, err := http.Get(e.srv.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -54,7 +54,11 @@ func TestConsoleScriptHasNoHTMLSinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	js := string(b)
+	m, err := os.ReadFile("ui/modes.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	js := string(b) + string(m)
 	for _, sink := range []string{"innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval(", "new Function", "setTimeout(\"", "createContextualFragment", "srcdoc", ".href =", "location ="} {
 		if strings.Contains(js, sink) {
 			t.Errorf("app.js uses %q", sink)

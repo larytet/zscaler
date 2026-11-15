@@ -36,6 +36,7 @@ var probes = []probe{
 	{"GET", "/v1/edm", store.PermSensitive},
 	{"GET", "/v1/captures", store.PermSensitive},
 	{"GET", "/v1/admins", store.PermAdmins},
+	{"GET", "/v1/me", store.PermRead},
 }
 
 func TestRolePermissionMatrix(t *testing.T) { // AGT-022 (ADM-002)

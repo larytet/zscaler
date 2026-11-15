@@ -5,6 +5,11 @@ const $ = (id) => document.getElementById(id);
 const el = (tag, text, cls) => { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; };
 const clear = (n) => { while (n.firstChild) n.removeChild(n.firstChild); };
 
+let me = { permissions: [] };
+let mode = 'simple'; // three screens (alerts, users, apps); 'advanced' shows all of them (ADM-001)
+try { if (localStorage.getItem('ztx-mode') === 'advanced') mode = 'advanced'; } catch (e) { mode = 'simple'; }
+const can = (p) => Modes.can(me.permissions, p);
+
 let token = null;
 try { token = sessionStorage.getItem('ztx-token'); } catch (e) { token = null; }
 
@@ -76,16 +81,16 @@ const tabs = {
     const riskOf = {}; risks.forEach((r) => { riskOf[r.user] = r; });
     const reload = () => tabs.People().catch(failure);
     const isRestricted = (x) => (x.Groups || []).indexOf('restricted') >= 0;
-    const actions = (x) => { const d = el('span'); if (x.Disabled) return d;
+    const actions = (x) => { const d = el('span'); if (x.Disabled || !can('support')) return d;
       d.appendChild(isRestricted(x)
         ? btn('Lift restriction', async () => { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/unrestrict'); await reload(); })
         : btn('Restrict', async () => { if (confirm('Restrict ' + x.Subject + '? The safe-default policy blocks them within seconds, without waiting for your identity provider.')) { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/restrict', { reason: 'restricted from the console' }); await reload(); } }));
-      d.appendChild(btn('Disable', async () => { if (confirm('Disable ' + x.Subject + '? Their sessions end within seconds.')) { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/disable'); await reload(); } }, 'danger'));
+      if (can('write')) d.appendChild(btn('Disable', async () => { if (confirm('Disable ' + x.Subject + '? Their sessions end within seconds.')) { await api('POST', '/v1/users/' + encodeURIComponent(x.Subject) + '/disable'); await reload(); } }, 'danger'));
       return d; };
     const riskText = (x) => { const r = riskOf[x.Subject]; return r ? r.score + ' (' + r.reasons.join('; ') + ')' : '0'; };
     const u = table(['User', 'Email', 'Groups', 'State', 'Risk', ''], users.map((x) => [x.Subject, x.Email, (x.Groups || []).join(', '), x.Disabled ? 'disabled' : (isRestricted(x) ? 'restricted' : 'active'), riskText(x), actions(x)]));
     const d = table(['Device', 'User', 'State', 'Health', ''], devices.map((x) => [x.id, x.user, x.revoked ? 'revoked' : 'active', healthText(x.id),
-      x.revoked ? '' : btn('Revoke', async () => { if (confirm('Revoke device ' + x.id + '?')) { await api('POST', '/v1/devices/' + encodeURIComponent(x.id) + '/revoke'); await reload(); } }, 'danger')]));
+      x.revoked || !can('support') ? '' : btn('Revoke', async () => { if (confirm('Revoke device ' + x.id + '?')) { await api('POST', '/v1/devices/' + encodeURIComponent(x.id) + '/revoke'); await reload(); } }, 'danger')]));
     show(el('h2', 'People'), u, el('h2', 'Devices'), d);
   },
   Approvals: async () => {
@@ -118,9 +123,14 @@ const tabs = {
       el('h2', 'Never decrypt these domains (one per line, subdomains included)'), ta, row);
   },
   Apps: async () => {
-    const segs = await api('GET', '/v1/segments');
-    show(el('h2', 'Private applications'), table(['Name', 'Connector group', 'Class', 'Targets'], segs.map((s) => [s.id, s.group, s.class || '', (s.targets || []).map((t) => t.host + ':' + (t.ports || []).join('/')).join(', ')])),
-      el('p', 'Apps are only reachable through the broker; their addresses are never sent to users.', 'muted'));
+    const [segs, pol] = await Promise.all([api('GET', '/v1/segments'), api('GET', '/v1/policies/private').catch(() => null)]);
+    const access = {}; Modes.appAccess(segs, pol && pol.policy ? pol.policy : pol).forEach((a) => { access[a.id] = a.access; });
+    const who = (id) => { const d = el('div'); (access[id] || []).forEach((l) => d.appendChild(el('div', l, l.indexOf('Nobody') === 0 || l.indexOf('Except') === 0 ? 'muted' : undefined))); return d; };
+    const simple = mode !== 'advanced';
+    const cols = simple ? ['App', 'Who can reach it'] : ['Name', 'Connector group', 'Class', 'Targets', 'Who can reach it'];
+    const rows = segs.map((s) => simple ? [s.id, who(s.id)] : [s.id, s.group, s.class || '', (s.targets || []).map((t) => t.host + ':' + (t.ports || []).join('/')).join(', '), who(s.id)]);
+    show(el('h2', 'Private applications'), table(cols, rows),
+      el('p', 'Apps are only reachable through the broker; their addresses are never sent to users. An app that no rule allows is out of reach for everyone.', 'muted'));
   },
   Policy: async () => {
     const out = el('div'), ta = el('textarea'), res = el('pre');
@@ -155,17 +165,22 @@ const tabs = {
 function signOut() { token = null; try { sessionStorage.removeItem('ztx-token'); } catch (e) {} render(); }
 
 async function open(name) {
-  Array.from($('tabs').children).forEach((b) => b.setAttribute('aria-current', b.textContent === name ? 'true' : 'false'));
+  Array.from($('tabs').children).forEach((b) => b.setAttribute('aria-current', b.dataset.tab === name ? 'true' : 'false'));
   try { await tabs[name](); } catch (e) { failure(e); }
 }
 
-function render() {
+async function render() {
   const nav = $('tabs'); clear(nav); clear($('who'));
   if (!token) { $('login').hidden = false; view().hidden = true; return; }
   $('login').hidden = true; view().hidden = false;
-  Object.keys(tabs).forEach((n) => { const b = el('button', n); b.addEventListener('click', () => open(n)); nav.appendChild(b); });
+  try { me = await api('GET', '/v1/me'); } catch (e) { if (!token) return; me = { permissions: ['read'] }; }
+  const list = Modes.visibleTabs(mode, me.permissions);
+  list.forEach((t) => { const b = el('button', t.label); b.dataset.tab = t.name; b.addEventListener('click', () => open(t.name)); nav.appendChild(b); });
+  const other = mode === 'advanced' ? 'simple' : 'advanced';
+  $('who').appendChild(el('span', (me.name || '') + (me.role ? ' (' + me.role + ') ' : ' '), 'muted'));
+  $('who').appendChild(btn(other === 'advanced' ? 'Show all screens' : 'Show fewer screens', async () => { mode = other; try { localStorage.setItem('ztx-mode', mode); } catch (e) {} await render(); }));
   $('who').appendChild(btn('Sign out', async () => signOut()));
-  open('Overview');
+  if (list.length) open(list[0].name); else show(el('p', 'This role has no screens.', 'muted'));
 }
 
 $('loginform').addEventListener('submit', async (ev) => {
