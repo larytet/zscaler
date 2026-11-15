@@ -30,13 +30,14 @@ import (
 )
 
 type state struct {
-	mu      sync.Mutex
-	pol     *policy.Policy
-	enabled bool
-	exempt  []string
-	ca      *pki.CA
-	secrets map[string]store.Secret
-	edm     map[string]*dlp.EDM
+	mu          sync.Mutex
+	pol         *policy.Policy
+	enabled     bool
+	exempt      []string
+	ca          *pki.CA
+	secrets     map[string]store.Secret
+	edm         map[string]*dlp.EDM
+	tenancyHost string // the one host the tenancy test restricts
 }
 
 func (s *state) EDM(string) map[string]*dlp.EDM {

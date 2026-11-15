@@ -33,7 +33,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G1 | ADM-004 | Policy change history, diff and rollback | **done (S16)**: last 50 versions kept per policy, who saved each, plain-language diff, rollback as a new version; no console page |
 | G2 | ADM-002 | Roles owner, admin, helpdesk, auditor, read-only with a permission matrix, and an owner-only API to manage administrators | **done (S23)**; no console page |
 | G3 | INT-004, ADM-006a | Log streaming to a SIEM (HTTPS and syslog) with a documented schema | **done (S24)**; no console page, no S3 or Blob target, no on-premises collector |
-| G4 | DATA-002a | Tenancy restriction (only the corporate tenant of Microsoft 365, Google Workspace, Slack), by adding the vendor's header on inspected traffic | queued |
+| G4 | DATA-002a | Tenancy restriction (only the corporate tenant of Microsoft 365, Google Workspace, Slack), by adding the vendor's header on inspected traffic | **done (S25), not checked against the live vendor services**; the general shadow-IT report (beyond AI tools) is still missing |
 | G5 | ZIA-013 | File type control on inspected uploads and downloads (by extension, content type and file signature) | queued |
 | G6 | ADM-006, FW-010, ADM-007 | Decision logs kept six months: today the control plane keeps 50,000 in memory and the node's file is not rotated or searchable by date | queued |
 | G7 | NFR-033, ADM-006b | Privacy mode that hides usernames (and paths) in logs | queued |

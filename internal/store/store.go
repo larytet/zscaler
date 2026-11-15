@@ -25,6 +25,7 @@ import (
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/siem"
+	"github.com/larytet/zscaler/internal/tenancy"
 )
 
 var (
@@ -166,7 +167,8 @@ type Tenant struct {
 	Inspect     InspectCfg                      `json:"inspect,omitempty"`
 	Secrets     map[string]Secret               `json:"secrets,omitempty"`
 	EDM         map[string]EDMSet               `json:"edm,omitempty"`
-	SIEM        *siem.Config                    `json:"siem,omitempty"` // where this tenant\'s logs are streamed (INT-004)
+	SIEM        *siem.Config                    `json:"siem,omitempty"`    // where this tenant\'s logs are streamed (INT-004)
+	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"` // tenancy restriction on SaaS sign-in (DATA-002a)
 	Devices     map[string]Device               `json:"devices"`
 }
 
@@ -653,6 +655,7 @@ type TenantSnap struct {
 	Inspect        *InspectSnap
 	Secrets        []Secret
 	EDM            []EDMSet // exact-data-match sets: salted hashes only
+	Tenancy        *tenancy.Config
 }
 
 // Grant is an admin-approved, time-limited access (just-in-time).
@@ -723,6 +726,7 @@ func (s *Store) Snapshot() *Snapshot {
 		for _, e := range t.EDM {
 			ts.EDM = append(ts.EDM, e)
 		}
+		ts.Tenancy = t.Tenancy
 		for _, sc := range t.Secrets {
 			ts.Secrets = append(ts.Secrets, sc)
 		}
@@ -1259,4 +1263,33 @@ func (s *Store) SIEMConfigs() map[string]siem.Config {
 		}
 	}
 	return out
+}
+
+// SetTenancy stores (or, with nil, removes) a tenant's tenancy restrictions.
+func (s *Store) SetTenancy(tenant string, c *tenancy.Config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if c.Empty() {
+		c = nil
+	}
+	t.Tenancy = c
+	return s.save()
+}
+
+// Tenancy returns a tenant's tenancy restrictions, or nil.
+func (s *Store) Tenancy(tenant string) *tenancy.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil || t.Tenancy == nil {
+		return nil
+	}
+	b, _ := json.Marshal(t.Tenancy)
+	var c tenancy.Config
+	json.Unmarshal(b, &c)
+	return &c
 }

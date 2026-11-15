@@ -20,6 +20,7 @@ import (
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
+	"github.com/larytet/zscaler/internal/tenancy"
 )
 
 // Inspector is an optional State extension: whether a tenant's web traffic is
@@ -195,6 +196,16 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	for _, hh := range hopHeaders {
 		out.Header.Del(hh)
 	}
+	if ts, ok := p.State.(TenancySource); ok {
+		if vendor, hs := ts.TenancyHeaders(id.Tenant, host); len(hs) > 0 {
+			for _, h := range hs {
+				out.Header.Set(h.Name, h.Value) // replaces any value the client sent: a person cannot lift the restriction
+			}
+			note := rec
+			note.Action, note.Reason = "info", "tenancy-restriction:"+vendor
+			p.Log(note)
+		}
+	}
 	var injected string // the secret value, kept only to scrub it from anything recorded or returned
 	if d.Inject != "" {
 		ss, _ := p.State.(SecretSource)
@@ -305,6 +316,11 @@ const MaxScanBytes = 1 << 20
 
 // scanBody reads at most MaxScanBytes of the request body, scans it, and puts the body
 // back so it can still be forwarded. skipped is true when the body was too large to scan.
+// TenancySource is an optional State extension: the sign-in restriction headers for a host (DATA-002a).
+type TenancySource interface {
+	TenancyHeaders(tenant, host string) (string, []tenancy.Header)
+}
+
 // EDMSource is an optional State extension: a tenant's exact-data-match sets (DATA-006).
 type EDMSource interface {
 	EDM(tenant string) map[string]*dlp.EDM

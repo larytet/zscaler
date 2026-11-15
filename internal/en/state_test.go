@@ -23,6 +23,7 @@ import (
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
+	"github.com/larytet/zscaler/internal/tenancy"
 )
 
 func pol(app string) *policy.Policy {
@@ -344,5 +345,36 @@ func TestInspectionReachesENAndBadCAStaysOff(t *testing.T) {
 	}
 	if on, _, _ := s2.Inspection("t1"); on {
 		t.Fatal("inspection must stay OFF when the CA is unusable (fail open to an opaque tunnel, never to a bad certificate)")
+	}
+}
+
+func TestTenancyRestrictionReachesTheNode(t *testing.T) { // AGT-024 (DATA-002a)
+	st := seed(t)
+	st.CreateTenant("t2", "Other")
+	cfg := tenancy.Config{Slack: &tenancy.Slack{Allowed: []string{"T01ABCDEF"}}}
+	if err := st.SetTenancy("t1", &cfg); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSyncState()
+	if errs := s.Apply(st.Snapshot()); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if v, hs := s.TenancyHeaders("t1", "acme.slack.com"); v != "slack" || len(hs) != 2 {
+		t.Fatalf("%q %v", v, hs)
+	}
+	if v, _ := s.TenancyHeaders("t1", "example.com"); v != "" {
+		t.Fatal("an unrelated host was restricted")
+	}
+	if v, _ := s.TenancyHeaders("t2", "acme.slack.com"); v != "" {
+		t.Fatal("tenant isolation: another tenant's restriction applies")
+	}
+	if v, _ := s.TenancyHeaders("nope", "acme.slack.com"); v != "" {
+		t.Fatal("an unknown tenant was restricted")
+	}
+	// removing the restriction removes it at the node
+	st.SetTenancy("t1", nil)
+	s.Apply(st.Snapshot())
+	if v, _ := s.TenancyHeaders("t1", "acme.slack.com"); v != "" {
+		t.Fatal("the restriction outlived its removal")
 	}
 }

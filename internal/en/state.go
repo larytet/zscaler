@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/larytet/zscaler/internal/dlp"
+	"github.com/larytet/zscaler/internal/tenancy"
 	"io"
 	"net/http"
 	"sync"
@@ -41,6 +42,7 @@ type tenantView struct {
 	leafKey *ecdsa.PrivateKey
 	secrets map[string]store.Secret
 	edm     map[string]*dlp.EDM
+	tenancy *tenancy.Config
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -94,6 +96,7 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		for _, sc := range t.Secrets {
 			tv.secrets[sc.Name] = sc
 		}
+		tv.tenancy = t.Tenancy
 		for _, e := range t.EDM {
 			if salt, err := hex.DecodeString(e.Salt); err == nil {
 				if e.Kind == "documents" {
@@ -189,6 +192,14 @@ func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
 		return true, t.exempt, t.ca
 	}
 	return false, nil, nil
+}
+
+// TenancyHeaders returns the sign-in restriction headers to add to a request to host (DATA-002a).
+func (s *SyncState) TenancyHeaders(tenant, host string) (string, []tenancy.Header) {
+	if t := s.t(tenant); t != nil {
+		return t.tenancy.HeadersFor(host)
+	}
+	return "", nil
 }
 
 // EDM returns the tenant's exact-data-match sets, compiled (DATA-006).
