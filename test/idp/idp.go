@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,20 +25,30 @@ type Server struct {
 	ClientID string
 	JWKSHits atomic.Int64
 
-	mu   sync.Mutex
-	keys map[string]*ecdsa.PrivateKey // advertised in JWKS
-	rsa  map[string]*rsa.PrivateKey
+	// Login is the identity returned by the authorization flow.
+	Sub, Email string
+	Groups     []string
+	// SkipPKCECheck makes /token accept any code_verifier (to test that the client sends one).
+	SkipPKCECheck bool
+
+	codes map[string]authCode
+	mu    sync.Mutex
+	keys  map[string]*ecdsa.PrivateKey // advertised in JWKS
+	rsa   map[string]*rsa.PrivateKey
 }
 
 var b64 = base64.RawURLEncoding
 
 func New(clientID string) *Server {
-	s := &Server{ClientID: clientID, keys: map[string]*ecdsa.PrivateKey{}, rsa: map[string]*rsa.PrivateKey{}}
+	s := &Server{ClientID: clientID, Sub: "u1", Email: "u1@example.com", Groups: []string{"all-staff"}, codes: map[string]authCode{}, keys: map[string]*ecdsa.PrivateKey{}, rsa: map[string]*rsa.PrivateKey{}}
 	s.AddKey("k1")
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"issuer": s.URL, "jwks_uri": s.URL + "/jwks"})
+		json.NewEncoder(w).Encode(map[string]string{"issuer": s.URL, "jwks_uri": s.URL + "/jwks",
+			"authorization_endpoint": s.URL + "/authorize", "token_endpoint": s.URL + "/token"})
 	})
+	mux.HandleFunc("/authorize", s.authorize)
+	mux.HandleFunc("/token", s.token)
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, r *http.Request) {
 		s.JWKSHits.Add(1)
 		s.mu.Lock()
@@ -130,4 +141,45 @@ func (s *Server) signWith(alg, kid string, c Claims, ek *ecdsa.PrivateKey, rk *r
 		}
 	}
 	return in + "." + b64.EncodeToString(sig)
+}
+
+type authCode struct{ challenge, nonce, redirect string }
+
+func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	if q.Get("client_id") != s.ClientID || q.Get("response_type") != "code" || q.Get("code_challenge_method") != "S256" ||
+		q.Get("code_challenge") == "" || q.Get("state") == "" || q.Get("nonce") == "" {
+		http.Error(w, "bad authorization request", 400)
+		return
+	}
+	b := make([]byte, 16)
+	rand.Read(b)
+	code := b64.EncodeToString(b)
+	s.mu.Lock()
+	s.codes[code] = authCode{q.Get("code_challenge"), q.Get("nonce"), q.Get("redirect_uri")}
+	s.mu.Unlock()
+	u, _ := url.Parse(q.Get("redirect_uri"))
+	v := u.Query()
+	v.Set("code", code)
+	v.Set("state", q.Get("state"))
+	u.RawQuery = v.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
+}
+
+func (s *Server) token(w http.ResponseWriter, r *http.Request) {
+	r.ParseForm()
+	s.mu.Lock()
+	ac, ok := s.codes[r.Form.Get("code")]
+	delete(s.codes, r.Form.Get("code")) // single use
+	s.mu.Unlock()
+	if !ok || r.Form.Get("grant_type") != "authorization_code" || r.Form.Get("client_id") != s.ClientID || r.Form.Get("redirect_uri") != ac.redirect {
+		http.Error(w, `{"error":"invalid_grant"}`, 400)
+		return
+	}
+	h := sha256.Sum256([]byte(r.Form.Get("code_verifier")))
+	if !s.SkipPKCECheck && b64.EncodeToString(h[:]) != ac.challenge {
+		http.Error(w, `{"error":"invalid_grant","error_description":"pkce"}`, 400)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"id_token": s.Sign("k1", s.Good(s.Sub, s.Email, ac.nonce, s.Groups...)), "token_type": "Bearer"})
 }

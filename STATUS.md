@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I5b-2 (enrolment endpoints).
+**Last updated:** 2026-11-15, after I5c (agent).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -33,8 +33,8 @@ Implementation language: **Go** (chosen by the user).
 | I5a | Store and control-plane admin API | done | STO, CP, VAL-012 |
 | I5b-1 | OIDC ID-token verifier and in-process test IdP | done | IDP |
 | I5b-2 | Device and connector enrolment endpoints (cert issuance) | done | AG-001, 002, 004, 005, 006, 014 (server side) |
-| I5c | Agent (local proxies, posture probes, renewal) | **next** | AG |
-| I5d | `cmd/` binaries for cp, en, connector, agent | pending | |
+| I5c | Agent: OIDC login with PKCE, enrolment, renewal, SOCKS and HTTP proxies, PAC, posture probes | done | AG-001, 003, 007..010, RES-006, SEC-016 |
+| I5d | `cmd/` binaries for cp, en, connector, agent | **next** | |
 | I6 | End-to-end scenarios, alerts, run instructions | pending | SCN, ALR |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
@@ -43,6 +43,7 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 
 - **PERF-005 missed:** policy evaluation about 59 us for 500 rules against a 50 us target. Fix is an index by group and app. Details in `RESULTS.md`.
 - **Design deviation:** certificate renewal uses the current valid device certificate over mTLS, not an IdP refresh token (DESIGN D4.2). A stolen but unrevoked certificate can therefore renew itself indefinitely until the admin revokes it or disables the user. Fix: cap renewal chains (for example 7 days) or require a fresh IdP token.
+- Agent: Windows firewall posture probe is not implemented (stays unknown, so policies requiring it fail closed). No installers, tunnel driver or auto-update. The browser is launched by the caller (`openURL`), the CLI wiring comes with I5d.
 - Audit log: truncating the tail is not detectable from the file alone.
 - Posture probe parsers are tested on inline samples, not real captured output.
 - Web proxy sees host names only (no TLS inspection), and `warn` cannot be shown on HTTPS.
