@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1485,4 +1486,74 @@ func TestScn013WorkspaceGracePeriod(t *testing.T) {
 	if d := time.Since(start); d < 3*time.Second {
 		t.Fatalf("locked too early: %v", d)
 	}
+}
+
+// SCN-014 (WB-002, WB-003): the workspace launcher with a REAL Chrome, run headless through a wrapper
+// script so no window opens. The page comes from a private HTTP app, reached via the proxy-auto-config
+// file the launcher serves, the agent's SOCKS proxy, the enforcement node and the connector.
+func TestScn014RealChromeWorkspace(t *testing.T) {
+	chrome, err := exec.LookPath("google-chrome")
+	if err != nil {
+		t.Skip("Google Chrome is not installed")
+	}
+	var seenHost, seenUA atomic.Value
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenHost.Store(r.Host)
+		seenUA.Store(r.UserAgent())
+		fmt.Fprint(w, "<html><body><h1 id=x>HR system reached through the workspace</h1></body></html>")
+	}))
+	defer origin.Close()
+	port := origin.Listener.Addr().(*net.TCPAddr).Port
+
+	s := newStack(t)
+	s.must("POST", "/v1/segments", map[string]any{"id": "hr", "group": "site1", "class": "sensitive",
+		"targets": []map[string]any{{"host": "127.0.0.1", "ports": []int{port}}}}, s.token)
+	s.must("POST", "/v1/policies/safe-defaults", nil, s.token)
+	dir := s.enrolWorkspace(t, "ws")
+
+	domFile := filepath.Join(s.dir, "dom.html")
+	wrapper := filepath.Join(s.dir, "chrome-headless.sh")
+	// the launcher accepts no extra flags; this test-only wrapper adds the headless ones around it
+	os.WriteFile(wrapper, []byte("#!/bin/sh\nexec "+chrome+" --headless=new --disable-gpu --dump-dom --virtual-time-budget=10000 \"$@\" > "+domFile+" 2>"+domFile+".err\n"), 0o755)
+
+	args := []string{"--dir", dir, "--browser", wrapper, "--posture-every", "1h", "--renew-every", "1h", "workspace", fmt.Sprintf("http://hr.ztx:%d/", port)}
+	cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), args...)
+	cmd.Env = append(os.Environ(), s.agentEnv()...)
+	out := &lockedBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		if t.Failed() {
+			b, _ := os.ReadFile(domFile + ".err")
+			t.Logf("--- launcher ---\n%s\n--- chrome stderr ---\n%s", out.String(), b)
+		}
+	})
+	select {
+	case <-done: // headless Chrome exits after dumping the page
+	case <-time.After(60 * time.Second):
+		t.Fatalf("Chrome did not finish; launcher output:\n%s", out.String())
+	}
+	dom, _ := os.ReadFile(domFile)
+	if !strings.Contains(string(dom), "HR system reached through the workspace") {
+		t.Fatalf("the real browser did not get the page through the workspace path.\nDOM: %.300s\nlauncher:\n%s", dom, out.String())
+	}
+	if h, _ := seenHost.Load().(string); h != fmt.Sprintf("hr.ztx:%d", port) {
+		t.Fatalf("the origin saw Host %q", h)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "workspace-profile")); err == nil {
+		t.Fatal("the profile was left behind after the browser exited")
+	}
+	eventually(t, "the workspace decision in the log", 10*time.Second, func() bool {
+		for _, d := range s.decisions() {
+			if d["app"] == "hr" && d["action"] == "allow" && d["workspace"] == true && d["rule"] == "sd-sensitive" {
+				return true
+			}
+		}
+		return false
+	})
 }

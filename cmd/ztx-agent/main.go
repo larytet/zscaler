@@ -46,8 +46,8 @@ func main() {
 	needFW := flag.Bool("require-firewall", true, "workspace: lock when the firewall is off or unknown")
 	noBrowser := flag.Bool("no-browser", false, "print the sign-in URL instead of opening a browser")
 	flag.Parse()
-	if flag.NArg() != 1 {
-		usage()
+	if flag.NArg() < 1 || (flag.Arg(0) != "workspace" && flag.NArg() != 1) {
+		usage() // only the workspace command takes a further argument: a start address
 	}
 	cp := *cfgPath
 	if cp == "" {
