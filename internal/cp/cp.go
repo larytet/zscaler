@@ -16,6 +16,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
 	"github.com/larytet/zscaler/internal/digest"
+	"github.com/larytet/zscaler/internal/evidence"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/store"
@@ -75,6 +76,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
+	m.HandleFunc("GET /v1/evidence", a.wrap(read, a.getEvidence))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
 	return m
@@ -587,4 +589,54 @@ func (a *API) getDigest(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 		return nil, nil
 	}
 	return d, nil
+}
+
+func (a *API) getEvidence(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	in := evidence.Inputs{Now: time.Now()}
+	segs, _ := a.Store.Segments(c.tenant)
+	in.Segments = len(segs)
+	in.Private, in.Web = a.Store.Policy(c.tenant, policy.Private), a.Store.Policy(c.tenant, policy.Web)
+	devs, _ := a.Store.Devices(c.tenant)
+	in.Devices = len(devs)
+	for _, d := range devs {
+		if d.Revoked {
+			in.RevokedDevices++
+		}
+	}
+	users, _ := a.Store.Users(c.tenant)
+	in.Users = len(users)
+	for _, u := range users {
+		if u.Disabled {
+			in.DisabledUsers++
+		}
+	}
+	if idp, err := a.Store.GetIDP(c.tenant); err == nil {
+		in.IDPConfigured = idp.Issuer != ""
+	}
+	in.Admins, in.Viewers = a.Store.AdminCounts(c.tenant)
+	if a.Alerts != nil {
+		for _, al := range a.Alerts.List(c.tenant, true) {
+			if al.Kind == "posture-failed" {
+				in.OpenPostureFail++
+			}
+		}
+	}
+	if a.Decisions != nil {
+		in.Decisions30d = len(a.Decisions.Since(c.tenant, time.Now().Add(-30*24*time.Hour)))
+	}
+	if a.AuditPath != "" {
+		if _, err := audit.Verify(a.AuditPath); err != nil {
+			in.AuditErr = err // the whole chain is checked; a break is reported to every tenant
+		} else {
+			ev, _ := audit.ReadAll(a.AuditPath, c.tenant)
+			in.AuditRecords = len(ev)
+		}
+	}
+	rep := evidence.Build(in)
+	if r.URL.Query().Get("format") == "text" {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		io.WriteString(w, rep.Text())
+		return nil, nil
+	}
+	return rep, nil
 }

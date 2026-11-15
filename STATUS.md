@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I8b (weekly digest).
+**Last updated:** 2026-11-15, after I8c (insurance evidence export).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -47,7 +47,7 @@ Implementation language: **Go** (chosen by the user).
 | I7f | Traceability check, 26 missing or unlabelled tests added, and four missing features built: minimum agent version, per-identity connection limit, refuse sessions when the log cannot be written, cursor pagination; SEC-009 no-secrets scan; policy rollback refusal | done | see RESULTS.md |
 | I8a | `/v1/decisions` search with filters and cursor paging; bounded in-memory history per tenant (DESIGN D5.1) | done. History is lost on control-plane restart (the EN file is the durable copy) | CP-011 |
 | I8b | Weekly digest (ADM-009): `GET /v1/digest` (JSON or `?format=text`), emailed Mondays 08:00 UTC to the alert recipients when SMTP is configured | done. The scheduler loop itself is not tested (the content, the endpoint and the send are); email only against a fake SMTP server | digest tests |
-| I8c | Insurance questionnaire evidence export (SMB-004, now Must), partial by necessity | **next** | |
+| I8c | Insurance questionnaire evidence export: `GET /v1/evidence` (JSON or `?format=text`). It marks MFA, endpoint protection and backups as not evidenced, because this product cannot see them | done. Not mapped to any specific insurer's questionnaire | evidence tests |
 | I7g | Exit-criteria review, three consecutive clean runs, lint and vulnerability scan | done: see the review below. RB1 does not meet its own exit criteria (USE-001 open) | T3.7 |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
@@ -94,5 +94,5 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 
 - CP-signed policy stream (DESIGN D5.5, SEC-007): ENs trust any authenticated control plane. Rollback to an older version is refused.
 - The admin UI (DESIGN D5.2) is not built: API only.
-- Guided investigation and rule suggestions (OPS-004, OPS-005), insurance export (SMB-004), policy simulation beyond dry-run (ZPA-028, ADM-020): requirements v0.5 made these Must. Not built (the weekly digest, ADM-009, now is).
+- Guided investigation and rule suggestions (OPS-004, OPS-005) and policy simulation beyond dry-run (ZPA-028, ADM-020): requirements v0.5 made these Must. Not built. (The weekly digest and the insurance evidence export now are, in simple form.)
 - Everything in ROADMAP.md.

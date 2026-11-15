@@ -485,3 +485,19 @@ func (s *Store) Tenants() []string {
 	sort.Strings(out)
 	return out
 }
+
+// AdminCounts returns how many admin and read-only tokens a tenant has.
+func (s *Store) AdminCounts(tenant string) (admins, viewers int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, a := range s.d.Admins {
+		if a.Tenant == tenant {
+			if a.Role == Admin {
+				admins++
+			} else {
+				viewers++
+			}
+		}
+	}
+	return
+}

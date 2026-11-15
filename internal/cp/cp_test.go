@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/decisions"
+	"github.com/larytet/zscaler/internal/evidence"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -454,5 +456,41 @@ func TestPagination(t *testing.T) { // CP-011
 	json.Unmarshal(b, &al2)
 	if len(al2) != 2 || al2[0].ID >= al[1].ID {
 		t.Fatalf("second page overlaps the first: %v then %v", al, al2)
+	}
+}
+
+func TestEvidenceEndpoint(t *testing.T) {
+	e := newEnv(t)
+	e.api.Decisions = decisions.New()
+	e.call("PUT", "/v1/idp", e.adminA, map[string]string{"issuer": "https://idp.example", "client_id": "c"})
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "class": "standard",
+		"targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	e.call("POST", "/v1/policies/safe-defaults", e.adminA, nil)
+	code, b, _ := e.call("GET", "/v1/evidence", e.adminA, nil)
+	var rep evidence.Report
+	json.Unmarshal(b, &rep)
+	if code != 200 || len(rep.Items) < 8 {
+		t.Fatalf("%d %s", code, b)
+	}
+	status := map[string]evidence.Status{}
+	for _, it := range rep.Items {
+		status[it.Control] = it.Status
+	}
+	if status["Network segmentation / least-privilege access to internal systems"] != evidence.Evidenced ||
+		status["Device health checks before access (encryption, firewall)"] != evidence.Evidenced ||
+		status["Web filtering / malicious-site blocking"] != evidence.Evidenced {
+		t.Fatalf("%v", status)
+	}
+	if status["Multi-factor authentication for staff"] != evidence.NotEvidenced {
+		t.Fatal("MFA must never be claimed")
+	}
+	// tenant b has configured nothing, and must not inherit a's configuration
+	_, bb, _ := e.call("GET", "/v1/evidence?format=text", e.adminB, nil)
+	if !strings.Contains(string(bb), "No private-access segments") || strings.Contains(string(bb), "1 application segments") {
+		t.Fatalf("tenant isolation: %s", bb)
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("GET", "/v1/evidence", viewer, nil); c != 200 {
+		t.Fatalf("viewer: %d", c)
 	}
 }
