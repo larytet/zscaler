@@ -12,8 +12,12 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -99,7 +103,13 @@ func (c *CA) Sign(pub crypto.PublicKey, id Identity, ttl time.Duration, dnsNames
 		NotAfter:    c.now().Add(ttl),
 		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: eku,
-		DNSNames:    dnsNames,
+	}
+	for _, n := range dnsNames {
+		if ip := net.ParseIP(n); ip != nil {
+			tpl.IPAddresses = append(tpl.IPAddresses, ip)
+		} else {
+			tpl.DNSNames = append(tpl.DNSNames, n)
+		}
 	}
 	return x509.CreateCertificate(rand.Reader, tpl, c.Cert, pub, c.Key)
 }
@@ -261,4 +271,52 @@ func (t *Tokens) Stored() []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// LoadOrCreateCA keeps the CA key and certificate in dir (ca.key, ca.pem, mode 0600).
+func LoadOrCreateCA(dir, name string, now Clock) (*CA, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	kp, cp := filepath.Join(dir, "ca.key"), filepath.Join(dir, "ca.pem")
+	kb, err1 := os.ReadFile(kp)
+	cb, err2 := os.ReadFile(cp)
+	if err1 == nil && err2 == nil {
+		kblk, _ := pem.Decode(kb)
+		cblk, _ := pem.Decode(cb)
+		if kblk == nil || cblk == nil {
+			return nil, errors.New("pki: ca files are unreadable")
+		}
+		key, err := x509.ParseECPrivateKey(kblk.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		cert, err := x509.ParseCertificate(cblk.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		if now == nil {
+			now = time.Now
+		}
+		pool := x509.NewCertPool()
+		pool.AddCert(cert)
+		return &CA{Cert: cert, Key: key, now: now, pool: pool}, nil
+	}
+	ca, err := NewCA(name, now)
+	if err != nil {
+		return nil, err
+	}
+	kder, _ := x509.MarshalECPrivateKey(ca.Key)
+	if err := os.WriteFile(kp, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: kder}), 0o600); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(cp, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Cert.Raw}), 0o600); err != nil {
+		return nil, err
+	}
+	return ca, nil
+}
+
+// PEM returns the CA certificate for distribution to endpoints.
+func (c *CA) PEM() []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Cert.Raw})
 }

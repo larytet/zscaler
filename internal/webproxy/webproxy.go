@@ -119,7 +119,7 @@ func (p *Proxy) identify(r *http.Request) (pki.Identity, policy.User, bool) {
 		return pki.Identity{}, policy.User{}, false
 	}
 	id, err := p.CA.Verify(r.TLS.PeerCertificates[0], p.Rev)
-	if err != nil || id.Role != pki.RoleDevice {
+	if err != nil || id.Role != pki.RoleDevice || broker.Revoked(p.State, nil, id) {
 		return id, policy.User{}, false
 	}
 	u, ok := p.State.User(id.Tenant, id.Subject)

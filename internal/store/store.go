@@ -415,3 +415,40 @@ func (s *Store) User(tenant, subject string) (policy.User, bool) {
 }
 
 var _ broker.State = (*Store)(nil)
+
+// Snapshot is the full state an enforcement node needs, per tenant.
+type TenantSnap struct {
+	Segments       []broker.Segment
+	Users          []policy.User
+	Policies       map[policy.Kind]*policy.Policy
+	RevokedDevices []string
+}
+
+type Snapshot struct {
+	Tenants map[string]*TenantSnap
+}
+
+func (s *Store) Snapshot() *Snapshot {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := &Snapshot{Tenants: map[string]*TenantSnap{}}
+	for id, t := range s.d.Tenants {
+		ts := &TenantSnap{Policies: map[policy.Kind]*policy.Policy{}}
+		for _, g := range t.Segments {
+			ts.Segments = append(ts.Segments, g)
+		}
+		for _, u := range t.Users {
+			ts.Users = append(ts.Users, u)
+		}
+		for k, d := range t.Policies {
+			ts.Policies[k] = d.Policy
+		}
+		for _, d := range t.Devices {
+			if d.Revoked {
+				ts.RevokedDevices = append(ts.RevokedDevices, d.ID)
+			}
+		}
+		out.Tenants[id] = ts
+	}
+	return out
+}

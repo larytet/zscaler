@@ -43,6 +43,28 @@ type State interface {
 	User(tenant, subject string) (policy.User, bool)
 }
 
+// Revoker is an optional State extension: devices revoked by an admin.
+type Revoker interface {
+	DeviceRevoked(tenant, device string) bool
+}
+
+// Staler is an optional State extension: true when the EN has not heard from
+// the control plane recently enough to trust its cache (DESIGN.md D3.6).
+type Staler interface {
+	Stale() bool
+}
+
+// Revoked reports whether a presented certificate must be refused.
+func Revoked(st State, rev *pki.Revocations, id pki.Identity) bool {
+	if rev != nil && rev.IsRevoked(id.Serial) {
+		return true
+	}
+	if r, ok := st.(Revoker); ok && id.Role == pki.RoleDevice && r.DeviceRevoked(id.Tenant, id.Device) {
+		return true
+	}
+	return false
+}
+
 // Record is one decision log entry (DESIGN.md D2.5).
 type Record struct {
 	TS       time.Time `json:"ts"`
@@ -170,7 +192,7 @@ func (e *EN) handle(raw net.Conn) {
 		return
 	}
 	id, err := e.CA.Verify(certs[0], e.Rev)
-	if err != nil {
+	if err != nil || Revoked(e.State, nil, id) {
 		e.Logger.Info("client cert rejected", "err", err)
 		raw.Close()
 		return
@@ -307,6 +329,10 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		e.logRec(rec)
 		st.Reject(code)
 	}
+	if st, ok := e.State.(Staler); ok && st.Stale() {
+		deny("unavailable", "state-stale")
+		return
+	}
 	if _, ok := e.State.User(id.Tenant, id.Subject); !ok {
 		deny("policy", "unknown-user")
 		return
@@ -333,7 +359,7 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 			u = policy.User{Disabled: true}
 		}
 		return policy.Request{Kind: policy.Private, User: u, App: rq.App, Now: time.Now(),
-			Device: policy.Device{ID: id.Device, Revoked: e.Rev.IsRevoked(id.Serial), Posture: ds.get()}}
+			Device: policy.Device{ID: id.Device, Revoked: Revoked(e.State, e.Rev, id), Posture: ds.get()}}
 	}
 	d := pol.Evaluate(mk())
 	rec.Version, rec.Rule, rec.Reason = pol.Version, d.RuleID, d.Reason

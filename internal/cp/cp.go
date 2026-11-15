@@ -50,6 +50,7 @@ func (a *API) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	m.HandleFunc("POST /v1/tenants", a.createTenant)
+	m.HandleFunc("POST /v1/ens/tokens", a.enToken)
 	read, write := store.Viewer, store.Admin
 	m.HandleFunc("PUT /v1/idp", a.wrap(write, a.putIDP))
 	m.HandleFunc("GET /v1/segments", a.wrap(read, a.listSegments))
@@ -429,4 +430,23 @@ func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
 			Match: policy.Match{Categories: []string{"newly-registered", "file-sharing-unsanctioned"}}},
 	}}
 	return
+}
+
+// enToken issues a one-time enforcement-node enrolment token. Platform-level:
+// guarded by the bootstrap token, not a tenant admin token.
+func (a *API) enToken(w http.ResponseWriter, r *http.Request) {
+	tok, _ := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+	if a.BootstrapToken == "" || subtle.ConstantTimeCompare([]byte(tok), []byte(a.BootstrapToken)) != 1 {
+		writeErr(w, fail(401, "unauthenticated", "bootstrap token required"))
+		return
+	}
+	var in struct {
+		Names []string `json:"names"`
+	}
+	if err := decode(r, &in); err != nil || len(in.Names) == 0 {
+		writeErr(w, fail(400, "invalid", "names (DNS names or IPs) are required"))
+		return
+	}
+	t := a.Tokens.Issue("", ENTokenPrefix+strings.Join(in.Names, ","))
+	writeJSON(w, 200, map[string]any{"token": t, "expires_in_seconds": 3600})
 }

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -58,8 +59,17 @@ func (e *Enrol) Handler() http.Handler {
 	m.HandleFunc("POST /enrol/renew", e.renew)
 	m.HandleFunc("POST /enrol/connector", e.connector)
 	m.HandleFunc("GET /enrol/targets", e.targets)
+	m.HandleFunc("POST /enrol/en", e.enrolEN)
+	m.HandleFunc("GET /sync/state", e.syncState)
 	return m
 }
+
+// InfraTTL is the lifetime of connector and enforcement-node certificates.
+// RB1 has no renewal for them: restart with a fresh token before expiry.
+const InfraTTL = 7 * 24 * time.Hour
+
+// EnrolResult is the exported name of the certificate response (used by tests and tools).
+type EnrolResult = certOut
 
 type certOut struct {
 	DeviceID string    `json:"device_id,omitempty"`
@@ -89,8 +99,8 @@ func deviceID(pubDER string) string {
 	return "d-" + hex.EncodeToString(h[:6])
 }
 
-func (e *Enrol) issue(pub any, id pki.Identity) (certOut, *x509.Certificate, error) {
-	der, err := e.CA.Sign(pub, id, pki.DeviceTTL)
+func (e *Enrol) issue(pub any, id pki.Identity, ttl time.Duration, names ...string) (certOut, *x509.Certificate, error) {
+	der, err := e.CA.Sign(pub, id, ttl, names...)
 	if err != nil {
 		return certOut{}, nil, err
 	}
@@ -144,7 +154,7 @@ func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	out, cert, err := e.issue(pub, pki.Identity{Tenant: in.Tenant, Subject: cl.Subject, Device: did, Role: pki.RoleDevice})
+	out, cert, err := e.issue(pub, pki.Identity{Tenant: in.Tenant, Subject: cl.Subject, Device: did, Role: pki.RoleDevice}, pki.DeviceTTL)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -194,7 +204,7 @@ func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	out, cert, err := e.issue(pub, id)
+	out, cert, err := e.issue(pub, id, pki.DeviceTTL)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -230,7 +240,7 @@ func (e *Enrol) connector(w http.ResponseWriter, r *http.Request) {
 	if in.Name == "" {
 		in.Name = deviceID(in.PublicKey)
 	}
-	out, _, err := e.issue(pub, pki.Identity{Tenant: tenant, Subject: group, Device: in.Name, Role: pki.RoleConnector})
+	out, _, err := e.issue(pub, pki.Identity{Tenant: tenant, Subject: group, Device: in.Name, Role: pki.RoleConnector}, InfraTTL)
 	if err != nil {
 		writeErr(w, err)
 		return
@@ -258,4 +268,52 @@ func (e *Enrol) targets(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, out)
+}
+
+// ENTokenPrefix marks a token as an enforcement-node enrolment token. The
+// "group" field carries the comma-separated DNS names or IPs for its certificate.
+const ENTokenPrefix = "en:"
+
+func (e *Enrol) enrolEN(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	var in struct {
+		Token     string `json:"token"`
+		Name      string `json:"name"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	pub, err := parsePub(in.PublicKey)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tenant, group, err := e.API.Tokens.Redeem(in.Token)
+	if err != nil || tenant != "" || !strings.HasPrefix(group, ENTokenPrefix) {
+		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
+		return
+	}
+	names := strings.Split(strings.TrimPrefix(group, ENTokenPrefix), ",")
+	if in.Name == "" {
+		in.Name = names[0]
+	}
+	out, _, err := e.issue(pub, pki.Identity{Tenant: "platform", Subject: "en", Device: in.Name, Role: pki.RoleEN}, InfraTTL, names...)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	writeJSON(w, 200, out)
+}
+
+// syncState gives an enforcement node the full cached state (DESIGN.md D2.6;
+// RB1 polls this instead of holding a push stream).
+func (e *Enrol) syncState(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := e.peer(r)
+	if !ok || id.Role != pki.RoleEN {
+		writeErr(w, fail(401, "unauthenticated", "an enforcement-node certificate is required"))
+		return
+	}
+	writeJSON(w, 200, e.API.Store.Snapshot())
 }

@@ -486,3 +486,55 @@ func TestRepeatedSessionsNoLeak(t *testing.T) { // PA-013
 		t.Fatalf("%d sessions leaked", n)
 	}
 }
+
+type staleState struct {
+	*fakeState
+	stale   atomic.Bool
+	revoked sync.Map
+}
+
+func (s *staleState) Stale() bool { return s.stale.Load() }
+func (s *staleState) DeviceRevoked(tenant, device string) bool {
+	_, ok := s.revoked.Load(tenant + "/" + device)
+	return ok
+}
+
+func TestStaleStateDeniesNewSessions(t *testing.T) { // CP-009
+	r := newRig(t)
+	ss := &staleState{fakeState: r.st}
+	r.en.State = ss
+	r.startConnector("c1", r.allowApp)
+	conn, _ := r.agent("alice", "d1", true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip(t, s, []byte("x")) // live session keeps working
+	ss.stale.Store(true)
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("new session with stale state: %v", err)
+	}
+	roundTrip(t, s, []byte("y")) // established session is not dropped (ARCH-002)
+	ss.stale.Store(false)
+	s2, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("recovery: %v", err)
+	}
+	s2.Close()
+}
+
+func TestAdminRevokedDeviceRefusedAtConnect(t *testing.T) {
+	r := newRig(t)
+	ss := &staleState{fakeState: r.st}
+	r.en.State = ss
+	ss.revoked.Store("t1/d1", true)
+	cr := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+	conn, err := Dial(r.enAddr, cr.tls)
+	if err == nil {
+		_, err = conn.OpenApp("seg-db", "", r.app.port())
+		conn.Close()
+	}
+	if err == nil {
+		t.Fatal("device revoked in the control plane was served")
+	}
+}
