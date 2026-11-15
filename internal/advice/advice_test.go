@@ -107,7 +107,7 @@ func TestInvestigateSummarises(t *testing.T) {
 	es = append(es, many(1, e("alice", "erp", "allow", "", []string{"hr"}, tr()))...)
 	es = append(es, many(9, e("bob", "erp", "deny", "default", []string{"hr"}, tr()))...)
 	inv := Investigate("alice", es)
-	if len(inv.Timeline) != 5 || !strings.Contains(inv.Summary, "blocked 4 of 5 times") || !strings.Contains(inv.Summary, `No rule allows group(s) "hr"`) {
+	if len(inv.Timeline) != 2 || inv.Timeline[0].Count+inv.Timeline[1].Count != 5 || !strings.Contains(inv.Summary, "blocked 4 of 5 times") || !strings.Contains(inv.Summary, `No rule allows group(s) "hr"`) {
 		t.Fatalf("%+v", inv)
 	}
 	for _, s := range inv.Timeline {
@@ -124,7 +124,14 @@ func TestInvestigateEdgeCases(t *testing.T) {
 	if inv := Investigate("alice", many(3, e("alice", "erp", "allow", "r", nil, tr()))); !strings.Contains(inv.Summary, "allowed every time") {
 		t.Fatalf("%+v", inv)
 	}
-	if inv := Investigate("alice", many(80, e("alice", "erp", "allow", "r", nil, tr()))); len(inv.Timeline) != 50 {
+	if inv := Investigate("alice", many(80, e("alice", "erp", "allow", "r", nil, tr()))); len(inv.Timeline) != 1 || inv.Timeline[0].Count != 80 {
+		t.Fatalf("a run of identical attempts must fold into one row: %+v", inv.Timeline)
+	}
+	var varied []decisions.Entry
+	for i := 0; i < 80; i++ {
+		varied = append(varied, e("alice", "app"+string(rune('a'+i%26))+string(rune('a'+i/26)), "allow", "r", nil, tr()))
+	}
+	if inv := Investigate("alice", varied); len(inv.Timeline) != 50 {
 		t.Fatalf("timeline length %d", len(inv.Timeline))
 	}
 	closeRec := e("alice", "erp", "deny", "default", nil, tr())

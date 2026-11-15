@@ -118,6 +118,7 @@ type Step struct {
 	Why     string    `json:"why"`
 	Fix     string    `json:"fix,omitempty"`
 	Outcome string    `json:"outcome"`
+	Count   int       `json:"count"` // consecutive identical attempts folded into this row
 }
 
 type Investigation struct {
@@ -236,7 +237,11 @@ func Investigate(user string, entries []decisions.Entry) Investigation {
 			why[s.Why]++
 			fix[s.Why] = s.Fix
 		}
-		if len(inv.Timeline) < 50 {
+		s.Count = 1
+		if n := len(inv.Timeline); n > 0 && same(inv.Timeline[n-1], s) {
+			inv.Timeline[n-1].Count++
+			inv.Timeline[n-1].TS = s.TS // show the most recent time of the run
+		} else if len(inv.Timeline) < 50 {
 			inv.Timeline = append(inv.Timeline, s)
 		}
 	}
@@ -261,3 +266,5 @@ func sumMap(m map[string]int) int {
 	}
 	return t
 }
+
+func same(a, b Step) bool { return a.What == b.What && a.Why == b.Why && a.Outcome == b.Outcome }

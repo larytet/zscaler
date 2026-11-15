@@ -131,7 +131,7 @@ const tabs = {
     const go = async () => {
       if (!u.value) return; const r = await api('GET', '/v1/investigate?user=' + encodeURIComponent(u.value));
       clear(out); out.appendChild(el('div', r.summary, 'card'));
-      out.appendChild(table(['Time', 'What', 'Result', 'Why', 'Fix'], r.timeline.map((s) => [when(s.ts), s.what, s.outcome, s.why, s.fix])));
+      out.appendChild(table(['Time', 'What', 'Result', 'Why', 'Fix'], r.timeline.map((s) => [when(s.ts), s.what + (s.count > 1 ? ' (x' + s.count + ')' : ''), s.outcome, s.why, s.fix])));
     };
     const row = el('div', undefined, 'row'); row.append(field('User', u), btn('Investigate', go, 'primary'));
     show(el('h2', 'Why was someone blocked?'), row, out);

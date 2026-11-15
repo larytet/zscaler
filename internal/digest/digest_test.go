@@ -83,7 +83,7 @@ func TestNoDataIsFlagged(t *testing.T) {
 func TestTextIsPlain(t *testing.T) {
 	d := Build("t1", t0, t0.Add(7*24*time.Hour), []decisions.Entry{ent("private", "deny", "alice", "erp", t0, "open")}, nil)
 	txt := d.Text()
-	for _, want := range []string{"Security summary, 9 Nov to 15 Nov 2026", "Private apps: 0 sessions allowed, 1 blocked.", "alice from erp: 1 times"} {
+	for _, want := range []string{"Security summary, 9 Nov to 15 Nov 2026", "Private apps: 0 sessions allowed, 1 blocked.", "alice from erp: 1 time\r\n"} {
 		if !strings.Contains(txt, want) {
 			t.Errorf("missing %q in:\n%s", want, txt)
 		}

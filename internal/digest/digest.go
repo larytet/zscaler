@@ -75,7 +75,7 @@ func Build(tenant string, from, to time.Time, entries []decisions.Entry, al []al
 	}
 	if len(d.TopDenied) > 0 && d.TopDenied[0].Count >= 5 {
 		t := d.TopDenied[0]
-		d.ThingsToFix = append(d.ThingsToFix, fmt.Sprintf("%s was blocked %d times from %s. Decide whether they should have access.", t.Who, t.Count, t.What))
+		d.ThingsToFix = append(d.ThingsToFix, fmt.Sprintf("%s was blocked %s from %s. Decide whether they should have access.", t.Who, times(t.Count), t.What))
 	}
 	if len(d.ThingsToFix) > 3 {
 		d.ThingsToFix = d.ThingsToFix[:3]
@@ -101,7 +101,7 @@ func (d Digest) Text() string {
 	if len(d.TopDenied) > 0 {
 		b.WriteString("\r\nMost blocked:\r\n")
 		for _, p := range d.TopDenied {
-			fmt.Fprintf(&b, "  - %s from %s: %d times\r\n", p.Who, p.What, p.Count)
+			fmt.Fprintf(&b, "  - %s from %s: %s\r\n", p.Who, p.What, times(p.Count))
 		}
 	}
 	if len(d.OpenAlerts) > 0 {
@@ -119,4 +119,11 @@ func (d Digest) Text() string {
 		b.WriteString("\r\nNothing needs your attention this week.\r\n")
 	}
 	return b.String()
+}
+
+func times(n int) string {
+	if n == 1 {
+		return "1 time"
+	}
+	return fmt.Sprintf("%d times", n)
 }

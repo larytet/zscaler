@@ -65,4 +65,4 @@ Not done or only partly done, stated plainly:
 | RES-007 | 3 minutes, not 24 hours |
 | SEC-019 | 30 s per fuzz target, not 30 minutes |
 | `/v1/decisions` search | Built in I8a (in-memory, bounded, lost on restart) |
-| Policy signing, `/v1/decisions`, admin console | Built in I9a, I8a and I9b. The console has never been opened in a real browser |
+| Policy signing, `/v1/decisions`, admin console | Built in I9a, I8a and I9b. The console was checked by hand in Chrome in I11 (see STATUS.md for what that did and did not cover) |
