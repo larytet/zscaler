@@ -119,6 +119,8 @@ Traffic capture (needs inspection on): a web rule with `"capture": true` (and co
 
 Incidents: `GET /v1/incidents` (and the Incidents tab) puts together what happened to one person in the last 24 hours (a failing device, repeated blocks, blocked transfers of sensitive data) into one sentence with a severity and what to do.
 
+On-site enforcement node (private service edge): run `ztx-en` on the office network beside the connector, enrol it with its own token (`POST /v1/ens/tokens`), and list it first in the office agents' `en_addrs`. Office users then reach local apps through it without leaving the site, and it keeps enforcing its cached policy if the internet or the control plane is down. It is customer-run; list a second node after it for failover.
+
 Redundancy: run two or more enforcement nodes, list them all in the connector's `--en` (comma separated) and in each agent's `en_addrs`. If a node dies, access continues through the others within seconds.
 
 Device health and experience: `GET /v1/health` also gives each device an experience score (0 to 100) built from how long the agent took to connect and to open apps, with a one-sentence cause: device, network or app side. It shows each device's CPU load, memory and disk use as last reported by the agent (Linux agents only) with plain-language findings such as a nearly full disk.

@@ -1886,6 +1886,15 @@ func TestScn017EnforcementNodeRedundancy(t *testing.T) {
 	s.runInst(a)
 	eventually(t, "access through the first node", 25*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
 
+	// local first: while the first node is up it carries everything and the second sees no sessions
+	// (an on-site node listed first keeps office traffic off the wider network, ZPA-043)
+	if b, _ := os.ReadFile(filepath.Join(s.dir, "en2", "decisions.jsonl")); strings.Contains(string(b), `"kind":"private"`) {
+		t.Fatalf("the second node served private sessions while the first was healthy:\n%s", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(s.dir, "en", "decisions.jsonl")); !strings.Contains(string(b), `"action":"allow"`) {
+		t.Fatal("the first node recorded no allowed session")
+	}
+
 	// the first enforcement node dies; access carries on through the second
 	s.enProc.Process.Kill()
 	s.enProc.Wait()
