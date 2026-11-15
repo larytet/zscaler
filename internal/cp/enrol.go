@@ -1,0 +1,261 @@
+package cp
+
+import (
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/pem"
+	"net/http"
+	"sync"
+	"time"
+
+	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/idp"
+	"github.com/larytet/zscaler/internal/pki"
+	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/store"
+)
+
+// Enrol serves the device and connector endpoints. Run it on its own
+// listener, separate from the admin API (DESIGN.md D5.1). The listener should
+// request, but not require, a client certificate (renew and targets need one).
+type Enrol struct {
+	API  *API
+	CA   *pki.CA
+	Rev  *pki.Revocations
+	HTTP *http.Client // for IdP calls (tests)
+
+	mu        sync.Mutex
+	verifiers map[string]*idp.Verifier
+}
+
+func (e *Enrol) verifier(tenant string) (*idp.Verifier, error) {
+	cfg, err := e.API.Store.GetIDP(tenant)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Issuer == "" {
+		return nil, fail(409, "idp_not_configured", "the tenant has no identity provider configured")
+	}
+	key := tenant + "|" + cfg.Issuer + "|" + cfg.ClientID + "|" + cfg.GroupClaim
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.verifiers == nil {
+		e.verifiers = map[string]*idp.Verifier{}
+	}
+	v, ok := e.verifiers[key]
+	if !ok {
+		v = &idp.Verifier{Issuer: cfg.Issuer, ClientID: cfg.ClientID, GroupClaim: cfg.GroupClaim, HTTP: e.HTTP}
+		e.verifiers[key] = v
+	}
+	return v, nil
+}
+
+func (e *Enrol) Handler() http.Handler {
+	m := http.NewServeMux()
+	m.HandleFunc("POST /enrol/device", e.device)
+	m.HandleFunc("POST /enrol/renew", e.renew)
+	m.HandleFunc("POST /enrol/connector", e.connector)
+	m.HandleFunc("GET /enrol/targets", e.targets)
+	return m
+}
+
+type certOut struct {
+	DeviceID string    `json:"device_id,omitempty"`
+	Cert     string    `json:"cert"` // base64 DER
+	CA       string    `json:"ca"`   // PEM
+	Expires  time.Time `json:"expires"`
+}
+
+func (e *Enrol) caPEM() string {
+	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: e.CA.Cert.Raw}))
+}
+
+func parsePub(b64s string) (any, error) {
+	der, err := base64.StdEncoding.DecodeString(b64s)
+	if err != nil {
+		return nil, fail(400, "invalid", "public_key must be base64 PKIX DER")
+	}
+	pub, err := x509.ParsePKIXPublicKey(der)
+	if err != nil {
+		return nil, fail(400, "invalid", "public_key is not a valid PKIX key")
+	}
+	return pub, nil
+}
+
+func deviceID(pubDER string) string {
+	h := sha256.Sum256([]byte(pubDER))
+	return "d-" + hex.EncodeToString(h[:6])
+}
+
+func (e *Enrol) issue(pub any, id pki.Identity) (certOut, *x509.Certificate, error) {
+	der, err := e.CA.Sign(pub, id, pki.DeviceTTL)
+	if err != nil {
+		return certOut{}, nil, err
+	}
+	c, _ := x509.ParseCertificate(der)
+	return certOut{Cert: base64.StdEncoding.EncodeToString(der), CA: e.caPEM(), Expires: c.NotAfter}, c, nil
+}
+
+// device: OIDC login result in, short-lived device certificate out.
+func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	var in struct {
+		Tenant    string `json:"tenant"`
+		IDToken   string `json:"id_token"`
+		Nonce     string `json:"nonce"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	v, err := e.verifier(in.Tenant)
+	if err != nil {
+		// do not reveal whether the tenant exists
+		writeErr(w, fail(401, "unauthenticated", "enrolment failed"))
+		return
+	}
+	cl, err := v.Verify(in.IDToken, in.Nonce)
+	if err != nil {
+		e.API.log(ctxInfo{tenant: in.Tenant, actor: "anonymous"}, "enrol.device.failed", "", nil, nil)
+		writeErr(w, fail(401, "unauthenticated", "enrolment failed"))
+		return
+	}
+	pub, err := parsePub(in.PublicKey)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	if u, ok := e.API.Store.User(in.Tenant, cl.Subject); ok && u.Disabled {
+		writeErr(w, fail(403, "user_disabled", "this account is disabled"))
+		return
+	}
+	if err := e.API.Store.UpsertUser(in.Tenant, policy.User{Subject: cl.Subject, Email: cl.Email, Groups: cl.Groups}); err != nil {
+		writeErr(w, err)
+		return
+	}
+	did := deviceID(in.PublicKey)
+	devs, _ := e.API.Store.Devices(in.Tenant)
+	for _, d := range devs {
+		if d.ID == did && d.Revoked {
+			writeErr(w, fail(403, "device_revoked", "this device was revoked"))
+			return
+		}
+	}
+	out, cert, err := e.issue(pub, pki.Identity{Tenant: in.Tenant, Subject: cl.Subject, Device: did, Role: pki.RoleDevice})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	e.API.Store.PutDevice(in.Tenant, store.Device{ID: did, User: cl.Subject, Serial: cert.SerialNumber.String()})
+	e.API.log(ctxInfo{tenant: in.Tenant, actor: cl.Subject}, "enrol.device", did, nil, nil)
+	out.DeviceID = did
+	writeJSON(w, 200, out)
+}
+
+func (e *Enrol) peer(r *http.Request) (pki.Identity, *x509.Certificate, bool) {
+	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+		return pki.Identity{}, nil, false
+	}
+	c := r.TLS.PeerCertificates[0]
+	id, err := e.CA.Verify(c, e.Rev)
+	return id, c, err == nil
+}
+
+// renew: a valid, unrevoked device certificate gets a fresh one, as long as
+// the user is still enabled. (Deviation from DESIGN.md D4.2, which uses an
+// IdP refresh token; tracked in STATUS.md.)
+func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := e.peer(r)
+	if !ok || id.Role != pki.RoleDevice {
+		writeErr(w, fail(401, "unauthenticated", "a valid device certificate is required"))
+		return
+	}
+	var in struct {
+		PublicKey string `json:"public_key"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	if deviceID(in.PublicKey) != id.Device {
+		writeErr(w, fail(403, "key_mismatch", "renewal must use the enrolled key"))
+		return
+	}
+	u, ok := e.API.Store.User(id.Tenant, id.Subject)
+	if !ok || u.Disabled {
+		writeErr(w, fail(403, "user_disabled", "this account is disabled"))
+		return
+	}
+	pub, err := parsePub(in.PublicKey)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out, cert, err := e.issue(pub, id)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	e.API.Store.PutDevice(id.Tenant, store.Device{ID: id.Device, User: id.Subject, Serial: cert.SerialNumber.String()})
+	out.DeviceID = id.Device
+	writeJSON(w, 200, out)
+}
+
+// connector: one-time token in, connector certificate out. The tenant and
+// group come from the token, never from the request.
+func (e *Enrol) connector(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	var in struct {
+		Token     string `json:"token"`
+		Name      string `json:"name"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	pub, err := parsePub(in.PublicKey)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tenant, group, err := e.API.Tokens.Redeem(in.Token)
+	if err != nil {
+		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
+		return
+	}
+	if in.Name == "" {
+		in.Name = deviceID(in.PublicKey)
+	}
+	out, _, err := e.issue(pub, pki.Identity{Tenant: tenant, Subject: group, Device: in.Name, Role: pki.RoleConnector})
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	e.API.log(ctxInfo{tenant: tenant, actor: "connector:" + in.Name}, "enrol.connector", group, nil, nil)
+	writeJSON(w, 200, out)
+}
+
+// targets returns the allow-list for the calling connector's group only.
+func (e *Enrol) targets(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := e.peer(r)
+	if !ok || id.Role != pki.RoleConnector {
+		writeErr(w, fail(401, "unauthenticated", "a valid connector certificate is required"))
+		return
+	}
+	segs, err := e.API.Store.Segments(id.Tenant)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	out := []broker.Target{}
+	for _, s := range segs {
+		if s.Group == id.Subject {
+			out = append(out, s.Targets...)
+		}
+	}
+	writeJSON(w, 200, out)
+}
