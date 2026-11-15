@@ -994,3 +994,63 @@ func TestCapturesAreNeverPersistedByTheNode(t *testing.T) { // ZIA-022b
 		}
 	}
 }
+
+func TestAgentCannotExceedItsOperator(t *testing.T) { // AGT-009, AGT-010 (AGS-004)
+	r := newRig(t)
+	r.startConnector("c1", r.allowApp)
+	set := func(finance bool) {
+		rules := []policy.Rule{{ID: "agents", Priority: 1, Action: policy.Allow, Match: policy.Match{Groups: []string{"ai-agent"}, Apps: []string{"seg-db"}}}}
+		if finance {
+			rules = append(rules, policy.Rule{ID: "fin", Priority: 2, Action: policy.Allow, Match: policy.Match{Groups: []string{"finance"}, Apps: []string{"seg-db"}}})
+		}
+		p := &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny, Version: 20, Rules: rules}
+		if err := p.Compile(nil); err != nil {
+			t.Fatal(err)
+		}
+		r.st.mu.Lock()
+		r.st.pol = p
+		r.st.mu.Unlock()
+	}
+	r.st.setUser("t1", policy.User{Subject: "agent:bot", Groups: []string{"ai-agent"}, Operator: "alice"})
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"hr"}})
+	// the operator has no access of her own to the app: the agent is refused although its rule allows it
+	set(false)
+	conn, _ := r.agent("agent:bot", "d1", true)
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil {
+		t.Fatal("an agent reached an app its operator cannot")
+	}
+	if r.logs.find(func(x Record) bool { return x.Reason == "operator-lacks-access" && x.Action == "deny" }) == nil {
+		t.Fatal("the refusal must say the operator lacks access")
+	}
+	if r.app.conns.Load() != 0 {
+		t.Fatal("the app was contacted")
+	}
+	// the operator is given access: the agent can go through, and a person is not affected by any of this
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"finance"}})
+	set(true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("agent refused although its operator has access: %v", err)
+	}
+	roundTrip(t, s, []byte("x"))
+	// the operator loses access (restricted or removed from the group): live sessions close
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"hr"}})
+	if n := r.en.ReevalNow(); n != 1 {
+		t.Fatalf("expected the agent's session to close, closed %d", n)
+	}
+	// the operator is disabled
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"finance"}})
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err != nil {
+		t.Fatal(err)
+	}
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"finance"}, Disabled: true})
+	if n := r.en.ReevalNow(); n != 1 {
+		t.Fatalf("disabling the operator must close the agent's session, closed %d", n)
+	}
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil {
+		t.Fatal("agent of a disabled operator opened a session")
+	}
+	if r.logs.find(func(x Record) bool { return x.Reason == "operator-disabled" }) == nil {
+		t.Fatal("reason operator-disabled not logged")
+	}
+}

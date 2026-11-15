@@ -71,6 +71,24 @@ func resolve(st State, tenant, user, app string, d policy.Decision, now time.Tim
 	return policy.Decision{Action: policy.Deny, RuleID: d.RuleID, Reason: "approval-required"}
 }
 
+// operatorCap enforces AGS-004: an AI agent can reach nothing its operator cannot. It returns a
+// denial reason, or "" when the agent may go on. Devices are not compared: only who may reach what.
+func operatorCap(st State, pol *policy.Policy, tenant, user, app string, now time.Time) string {
+	u, ok := st.User(tenant, user)
+	if !ok || u.Operator == "" {
+		return ""
+	}
+	op, ok := st.User(tenant, u.Operator)
+	if !ok || op.Disabled {
+		return "operator-disabled"
+	}
+	d := resolve(st, tenant, op.Subject, app, pol.Evaluate(policy.Request{Kind: policy.Private, User: op, App: app, Now: now, AssumeDevice: true}), now)
+	if d.Action != policy.Allow {
+		return "operator-lacks-access"
+	}
+	return ""
+}
+
 // Revoked reports whether a presented certificate must be refused.
 func Revoked(st State, rev *pki.Revocations, id pki.Identity) bool {
 	if rev != nil && rev.IsRevoked(id.Serial) {
@@ -470,6 +488,12 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 	}
 	d := resolve(e.State, id.Tenant, id.Subject, rq.App, pol.Evaluate(mk()), time.Now())
 	rec.Version, rec.Rule, rec.Reason = pol.Version, d.RuleID, d.Reason
+	if d.Action == policy.Allow {
+		if why := operatorCap(e.State, pol, id.Tenant, id.Subject, rq.App, time.Now()); why != "" {
+			d = policy.Decision{Action: policy.Deny, RuleID: d.RuleID, Reason: why}
+			rec.Reason = why
+		}
+	}
 	if d.Action != policy.Allow {
 		deny("policy", d.Reason)
 		return
@@ -606,7 +630,8 @@ func (e *EN) ReevalNow() int {
 	n := 0
 	for _, s := range all {
 		p := s.pol()
-		if p == nil || resolve(e.State, s.tenant, s.user, s.app, p.Evaluate(s.req()), time.Now()).Action != policy.Allow {
+		if p == nil || resolve(e.State, s.tenant, s.user, s.app, p.Evaluate(s.req()), time.Now()).Action != policy.Allow ||
+			operatorCap(e.State, p, s.tenant, s.user, s.app, time.Now()) != "" {
 			s.a.Close()
 			s.b.Close()
 			n++

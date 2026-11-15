@@ -52,6 +52,9 @@ type User struct {
 	Email    string
 	Groups   []string
 	Disabled bool
+	// Operator is the person an AI agent runs for ("agent:" identities only). An agent can reach
+	// nothing its operator cannot (AGS-004).
+	Operator string
 	// Risk is a 0 to 100 score computed by the control plane (0 when unknown).
 	Risk int
 }
@@ -81,6 +84,9 @@ type Request struct {
 	// ResponseDLPHits is set only for the second evaluation, made once the response is known.
 	ResponseDLPHits []string
 	ResponsePhase   bool
+	// AssumeDevice skips the checks that belong to a device (network, workspace, posture). Used when
+	// asking whether a person could reach something, without having one of their devices at hand.
+	AssumeDevice bool
 }
 
 type Decision struct {
@@ -328,7 +334,7 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 			}
 		}
 	}
-	if len(c.cidrs) > 0 {
+	if len(c.cidrs) > 0 && !r.AssumeDevice {
 		ok := false
 		for _, pf := range c.cidrs {
 			if r.SrcIP.IsValid() && pf.Contains(r.SrcIP.Unmap()) {
@@ -339,7 +345,7 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 			return false
 		}
 	}
-	if m.Workspace != nil && *m.Workspace != r.Workspace {
+	if m.Workspace != nil && !r.AssumeDevice && *m.Workspace != r.Workspace {
 		return false
 	}
 	if len(m.DLPResponse) > 0 { // a response rule matches only in the response phase, on what the response held
@@ -404,7 +410,7 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 	if m.Time != nil && !c.timeOK(r.Now) {
 		return false
 	}
-	if m.Posture != nil && !postureOK(m.Posture, r.Device.Posture, r.Now) {
+	if m.Posture != nil && !r.AssumeDevice && !postureOK(m.Posture, r.Device.Posture, r.Now) {
 		return false
 	}
 	return true

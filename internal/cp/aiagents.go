@@ -56,7 +56,7 @@ func (a *API) createAIAgent(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 		}
 	}
 	subject := "agent:" + in.Name
-	if err := a.Store.UpsertUser(c.tenant, policy.User{Subject: subject, Groups: []string{AIAgentGroup},
+	if err := a.Store.UpsertUser(c.tenant, policy.User{Subject: subject, Groups: []string{AIAgentGroup}, Operator: op.Subject,
 		Email: "AI agent " + in.Name + " run by " + op.Subject}); err != nil {
 		return nil, err
 	}

@@ -1206,7 +1206,10 @@ func TestScn010AIAgent(t *testing.T) {
 	human := s.newAgent(t, "alice-laptop") // creates the person (u1) the agent will be run by
 	_ = human
 	s.ifMatch = "1"
+	// the operator (u1) may reach erp by her own rule; an agent can never exceed that (AGS-004)
 	s.must("PUT", "/v1/policies/private", map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "operator", "priority": 5, "action": "allow",
+		"match": map[string]any{"users": []string{"u1"}, "apps": []string{"erp"}}}, {
 		"id": "agents-jit", "priority": 10, "action": "require_approval",
 		"match": map[string]any{"groups": []string{"ai-agent"}, "apps": []string{"erp", "wiki"}}}}}, s.token)
 	code, b := s.api("POST", "/v1/ai-agents", map[string]any{"name": "code-helper", "operator": "u1", "apps": []string{"erp"}, "minutes": 30}, s.token)
