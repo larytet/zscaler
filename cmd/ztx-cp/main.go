@@ -166,6 +166,7 @@ func main() {
 	if *devTTL != 0 && (*devTTL < 30*time.Second || *devTTL > 7*24*time.Hour) {
 		log.Fatal("--device-cert-ttl must be between 30s and 7 days")
 	}
+	api.RootCACert, api.PolicyPub, api.AtRestSealed = ca.Cert, &signer.PublicKey, mk != nil
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent, PolicyKey: signer, DeviceTTL: *devTTL}
 
 	if notifier != nil {

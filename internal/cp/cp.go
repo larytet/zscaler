@@ -2,7 +2,9 @@
 package cp
 
 import (
+	"crypto/ecdsa"
 	"crypto/subtle"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -52,7 +54,11 @@ type API struct {
 	// OnApprovalRequest is called when a new access request is created.
 	OnApprovalRequest func(approvals.Request)
 	OnRevokeDevice    func(tenant string, d store.Device)
-	OnDisableUser     func(tenant, subject string)
+	// What GET /v1/keys reports about the platform's own keys; the program that starts the control plane sets them.
+	RootCACert    *x509.Certificate
+	PolicyPub     *ecdsa.PublicKey
+	AtRestSealed  bool // the CA key, signing key and store are encrypted with a master key
+	OnDisableUser func(tenant, subject string)
 }
 
 type apiErr struct {
@@ -129,6 +135,9 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "PUT /v1/inspection", write, a.putInspection)
 	a.route(m, "GET /v1/inspection", read, a.getInspection)
 	a.route(m, "GET /v1/inspection/ca.pem", read, a.getInspectionCA)
+	a.route(m, "POST /v1/inspection/rotate", write, a.rotateInspection)
+	a.route(m, "GET /v1/keys", audit, a.keyStatus)
+	a.route(m, "POST /v1/me/rotate", read, a.rotateOwnToken)
 	a.route(m, "GET /v1/approvals", read, a.listApprovals)
 	a.route(m, "POST /v1/approvals/{id}/approve", support, a.approve)
 	a.route(m, "POST /v1/approvals/{id}/deny", support, a.denyRequest)
@@ -163,6 +172,7 @@ func (a *API) Handler() http.Handler {
 	a.route(m, "POST /v1/support-access", admins, a.supportAccess)
 	a.route(m, "POST /v1/admins", admins, a.createAdmin)
 	a.route(m, "GET /v1/admins", admins, a.listAdmins)
+	a.route(m, "POST /v1/admins/{name}/rotate", admins, a.rotateAdminToken)
 	a.route(m, "GET /v1/me", read, a.me)
 	a.route(m, "DELETE /v1/admins/{name}", admins, a.removeAdmin)
 	return m
@@ -1078,13 +1088,20 @@ func inspectionView(cfg store.InspectCfg) map[string]any {
 	if exempt == nil {
 		exempt = []string{}
 	}
-	return map[string]any{"enabled": cfg.Enabled, "exempt": exempt,
+	v := map[string]any{"enabled": cfg.Enabled, "exempt": exempt,
 		"managed_exemptions": !cfg.ManagedOff, "managed_domains": exemptions.Pinned,
 		"exempt_categories": cfg.EffectiveExemptCategories(),
 		"notes": []string{
 			"Never decrypted: your own exempt list; when managed_exemptions is true, the built-in list of applications that break when intercepted (managed_domains, hand-made and not exhaustive); and sites in exempt_categories.",
 			"A category exemption covers the sites that the enforcement node's category list puts in that category. This platform ships no banking or health list: without one, those categories exempt nothing.",
 		}}
+	if cfg.CACert != "" { // public facts only: which certificate devices must trust, and when it was replaced
+		v["ca_fingerprint"] = store.Fingerprint(cfg.CACert)
+		if !cfg.Rotated.IsZero() {
+			v["rotated"] = cfg.Rotated.UTC().Format(time.RFC3339)
+		}
+	}
+	return v
 }
 
 func (a *API) getInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {

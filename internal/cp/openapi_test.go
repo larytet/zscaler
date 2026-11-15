@@ -124,6 +124,10 @@ func TestEveryDescribedRouteEnforcesItsPermission(t *testing.T) { // AGT-036 (IN
 		if c, _, _ := e.call(r.Method, path, "", nil); c != 401 {
 			t.Errorf("%s %s with no token: %d", r.Method, r.Path, c)
 		}
+		if r.Path == "/v1/me/rotate" { // it ends the very token used to call it, so it cannot be tried as every role in turn; TestAdminTokensCanBeReplaced does
+			checked++
+			continue
+		}
 		for _, role := range roles {
 			code, _, _ := e.call(r.Method, path, tok[role], map[string]any{})
 			switch {

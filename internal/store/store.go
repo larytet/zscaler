@@ -202,6 +202,7 @@ type adminRec struct {
 	// token past Expires no longer works. Support marks access given to the vendor. LastUsed is when the
 	// token was last used, to the minute, so the customer can see whether it was.
 	Created  time.Time `json:"created,omitempty"`
+	Rotated  time.Time `json:"rotated,omitempty"` // when the token was last replaced (GAP-REQ-05)
 	Expires  time.Time `json:"expires,omitempty"`
 	Note     string    `json:"note,omitempty"`
 	Support  bool      `json:"support,omitempty"`
@@ -349,6 +350,7 @@ type AdminInfo struct {
 	Name     string    `json:"name"`
 	Role     Role      `json:"role"`
 	Created  time.Time `json:"created,omitempty"`
+	Rotated  time.Time `json:"rotated,omitempty"`
 	Expires  time.Time `json:"expires,omitempty"`
 	Expired  bool      `json:"expired,omitempty"`
 	Note     string    `json:"note,omitempty"`
@@ -363,7 +365,7 @@ func (s *Store) Admins(tenant string) []AdminInfo {
 	out := []AdminInfo{}
 	for _, a := range s.d.Admins {
 		if a.Tenant == tenant {
-			out = append(out, AdminInfo{Name: a.Name, Role: a.Role, Created: a.Created, Expires: a.Expires, Expired: !a.Expires.IsZero() && !a.Expires.After(s.now()),
+			out = append(out, AdminInfo{Name: a.Name, Role: a.Role, Created: a.Created, Rotated: a.Rotated, Expires: a.Expires, Expired: !a.Expires.IsZero() && !a.Expires.After(s.now()),
 				Note: a.Note, Support: a.Support, LastUsed: a.LastUsed})
 		}
 	}
@@ -799,6 +801,7 @@ type InspectCfg struct {
 	LeafKey string `json:"leaf_key,omitempty"`
 	// ManagedOff turns the built-in list of pinned applications off (it is on by default). ExemptCats are
 	// the categories never decrypted; nil means the defaults (banking and health), an empty list none.
+	Rotated    time.Time `json:"rotated,omitempty"` // when the inspection CA and leaf key were last replaced
 	ManagedOff bool      `json:"managed_off,omitempty"`
 	ExemptCats *[]string `json:"exempt_categories,omitempty"`
 }

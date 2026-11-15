@@ -599,6 +599,55 @@
         ]
       }
     },
+    "/v1/admins/{name}/rotate": {
+      "post": {
+        "operationId": "rotateAdminToken",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Rotate admin token",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
     "/v1/ai-agents": {
       "get": {
         "operationId": "listAIAgents",
@@ -2018,6 +2067,46 @@
         ]
       }
     },
+    "/v1/inspection/rotate": {
+      "post": {
+        "operationId": "rotateInspection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Rotate inspection",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
     "/v1/investigate": {
       "get": {
         "operationId": "investigate",
@@ -2051,6 +2140,37 @@
         ]
       }
     },
+    "/v1/keys": {
+      "get": {
+        "operationId": "keyStatus",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission audit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Key status",
+        "x-required-permission": "audit",
+        "x-roles": [
+          "owner",
+          "admin",
+          "auditor"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "operationId": "me",
@@ -2074,6 +2194,49 @@
           }
         ],
         "summary": "Me",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/me/rotate": {
+      "post": {
+        "operationId": "rotateOwnToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Rotate own token",
         "x-required-permission": "read",
         "x-roles": [
           "owner",
