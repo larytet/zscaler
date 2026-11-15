@@ -812,3 +812,21 @@ func TestLogSinkUnhealthyRefusesNewSessions(t *testing.T) { // SEC-014
 	}
 	s2.Close()
 }
+
+func TestRecordsCarryDecisionInputs(t *testing.T) { // feeds the simulator
+	r := newRig(t)
+	r.startConnector("c1", r.allowApp)
+	conn, _ := r.agent("alice", "d1", true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	rec := r.logs.find(func(x Record) bool { return x.Action == "allow" && x.Event == "open" })
+	if rec == nil || len(rec.Groups) != 1 || rec.Groups[0] != "finance" {
+		t.Fatalf("groups missing: %+v", rec)
+	}
+	if rec.Posture == nil || rec.Posture.DiskEncrypted == nil || !*rec.Posture.DiskEncrypted || rec.Posture.ReportedAt.IsZero() {
+		t.Fatalf("posture missing: %+v", rec)
+	}
+}

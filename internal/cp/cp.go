@@ -19,6 +19,7 @@ import (
 	"github.com/larytet/zscaler/internal/evidence"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/simulate"
 	"github.com/larytet/zscaler/internal/store"
 )
 
@@ -66,6 +67,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/policies/{kind}", a.wrap(read, a.getPolicy))
 	m.HandleFunc("PUT /v1/policies/{kind}", a.wrap(write, a.putPolicy))
 	m.HandleFunc("POST /v1/policies/{kind}/dry-run", a.wrap(read, a.dryRun))
+	m.HandleFunc("POST /v1/policies/{kind}/simulate", a.wrap(read, a.simulate))
 	m.HandleFunc("POST /v1/policies/safe-defaults", a.wrap(write, a.safeDefaults))
 	m.HandleFunc("POST /v1/connectors/tokens", a.wrap(write, a.connectorToken))
 	m.HandleFunc("GET /v1/devices", a.wrap(read, a.listDevices))
@@ -639,4 +641,36 @@ func (a *API) getEvidence(w http.ResponseWriter, r *http.Request, c ctxInfo) (an
 		return nil, nil
 	}
 	return rep, nil
+}
+
+// simulate replays recent private-access decisions against a draft policy. Nothing is stored.
+func (a *API) simulate(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	k, err := kindOf(r)
+	if err != nil {
+		return nil, err
+	}
+	if k != policy.Private {
+		return nil, fail(400, "unsupported", "simulation covers private-access policies only")
+	}
+	var in struct {
+		Policy *policy.Policy `json:"policy"`
+		Days   int            `json:"days"`
+	}
+	if err := decode(r, &in); err != nil {
+		return nil, err
+	}
+	if in.Policy == nil {
+		return nil, fail(400, "invalid", "a draft policy is required")
+	}
+	in.Policy.Kind = k
+	if err := in.Policy.Compile(a.Store.SegmentIDs(c.tenant)); err != nil {
+		return nil, err
+	}
+	if in.Days <= 0 || in.Days > 90 {
+		in.Days = 7
+	}
+	if a.Decisions == nil {
+		return simulate.Run(in.Policy, nil), nil
+	}
+	return simulate.Run(in.Policy, a.Decisions.Since(c.tenant, time.Now().Add(-time.Duration(in.Days)*24*time.Hour))), nil
 }

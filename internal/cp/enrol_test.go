@@ -412,3 +412,41 @@ func TestDigestEndpoint(t *testing.T) {
 		t.Fatalf("tenant b must see only its own activity: %s", other)
 	}
 }
+
+func TestSimulateEndpoint(t *testing.T) {
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	now := time.Now()
+	var recs []broker.Record
+	for i := 0; i < 3; i++ {
+		recs = append(recs, broker.Record{Tenant: "a", Kind: "private", Event: "open", Action: "deny", Reason: "default", User: "bob", App: "erp", Groups: []string{"hr"}, TS: now})
+	}
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	draft := map[string]any{"policy": map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "hr-erp", "priority": 1, "action": "allow", "match": map[string]any{"groups": []string{"hr"}, "apps": []string{"erp"}}}}}}
+	code, b, _ := e.call("POST", "/v1/policies/private/simulate", e.adminA, draft)
+	if code != 200 || !strings.Contains(string(b), `"newly_allowed":3`) || !strings.Contains(string(b), `"draft_rule":"hr-erp"`) {
+		t.Fatalf("%d %s", code, b)
+	}
+	if c, _, _ := e.call("GET", "/v1/policies/private", e.adminA, nil); c != 404 {
+		t.Fatal("simulation stored the draft")
+	}
+	if code, _, _ := e.call("POST", "/v1/policies/web/simulate", e.adminA, draft); code != 400 {
+		t.Fatalf("web simulation should be refused: %d", code)
+	}
+	if code, _, _ := e.call("POST", "/v1/policies/private/simulate", e.adminA, map[string]any{}); code != 400 {
+		t.Fatalf("missing draft: %d", code)
+	}
+	bad := map[string]any{"policy": map[string]any{"default_action": "allow", "rules": []any{}}}
+	if code, _, _ := e.call("POST", "/v1/policies/private/simulate", e.adminA, bad); code != 400 {
+		t.Fatalf("invalid draft accepted: %d", code)
+	}
+	// tenant b has no history and must not see a's decisions replayed
+	_, bb, _ := e.call("POST", "/v1/policies/private/simulate", e.adminB, draft)
+	if strings.Contains(string(bb), `"newly_allowed":3`) {
+		t.Fatalf("tenant isolation: %s", bb)
+	}
+}

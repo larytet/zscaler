@@ -82,6 +82,19 @@ type Record struct {
 	BytesUp  int64     `json:"bytes_up,omitempty"`
 	BytesDwn int64     `json:"bytes_down,omitempty"`
 	Event    string    `json:"event,omitempty"` // "open" or "close"
+	// Inputs to the decision, so that a draft policy can be replayed against history.
+	Groups  []string     `json:"groups,omitempty"`
+	Posture *PostureSnap `json:"posture,omitempty"`
+}
+
+// PostureSnap is the posture that was in force for a decision.
+type PostureSnap struct {
+	OS            string    `json:"os,omitempty"`
+	OSVersion     string    `json:"os_version,omitempty"`
+	DiskEncrypted *bool     `json:"disk_encrypted,omitempty"`
+	FirewallOn    *bool     `json:"firewall_on,omitempty"`
+	ScreenLock    *bool     `json:"screen_lock,omitempty"`
+	ReportedAt    time.Time `json:"reported_at"`
 }
 
 type openReq struct {
@@ -384,6 +397,12 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		return
 	}
 	rec.Target = net.JoinHostPort(host, itoa(rq.Port))
+	if u, ok := e.State.User(id.Tenant, id.Subject); ok {
+		rec.Groups = u.Groups
+	}
+	if p := ds.get(); p != nil {
+		rec.Posture = &PostureSnap{OS: p.OS, OSVersion: p.OSVersion, DiskEncrypted: p.DiskEncrypted, FirewallOn: p.FirewallOn, ScreenLock: p.ScreenLock, ReportedAt: p.ReportedAt}
+	}
 	pol := e.State.Policy(id.Tenant, policy.Private)
 	if pol == nil {
 		deny("policy", "no-policy")
