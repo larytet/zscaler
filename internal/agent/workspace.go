@@ -21,6 +21,13 @@ import (
 // (kills the browser, erases the profile) when the device or the credential stops being
 // trustworthy. Limits are stated in WB-013: it cannot defend a compromised operating system.
 
+// WorkspaceNotice is printed every time the workspace starts. Version 1 is a proof of concept
+// with no data controls (requirements v0.7, WB-013); nothing may suggest otherwise.
+const WorkspaceNotice = "WORKSPACE BROWSER - PROOF OF CONCEPT. This browser is isolated from your personal profile, " +
+	"sends its traffic through your organisation's proxy, and locks itself if the device is revoked or falls below the baseline. " +
+	"It has NO data controls: no clipboard, download, upload, print, drag-and-drop or watermark restrictions, and no protection " +
+	"against a compromised operating system, a camera pointed at the screen, or a person retyping data."
+
 // ErrLocked is returned when the workspace was shut down by policy rather than by the user.
 var ErrLocked = errors.New("workspace locked")
 
@@ -156,6 +163,7 @@ func (a *Agent) RunWorkspace(ctx context.Context, o WorkspaceOptions) error {
 	}
 	exited := make(chan error, 1)
 	go func() { exited <- cmd.Wait() }()
+	o.Log(WorkspaceNotice)
 	o.Log("workspace started")
 
 	lock := func(reason string) error {

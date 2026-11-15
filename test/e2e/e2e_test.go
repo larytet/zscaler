@@ -1406,6 +1406,10 @@ func TestScn011WorkspaceBrowser(t *testing.T) {
 	w := s.startWorkspace(t, dir, "hr.ztx")
 	eventually(t, "the workspace page to reach the sensitive app", 25*time.Second, func() bool { return w.result() == "ok" })
 
+	// the user is told, at every start, that this is a proof of concept without data controls
+	if o := w.out.String(); !strings.Contains(o, "PROOF OF CONCEPT") || !strings.Contains(o, "NO data controls") {
+		t.Errorf("the launcher did not print the proof-of-concept notice:\n%s", o)
+	}
 	// the browser was started as designed, in an isolated profile
 	args, _ := os.ReadFile(filepath.Join(w.profile, "stub-args.txt"))
 	flags := string(args)

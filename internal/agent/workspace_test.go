@@ -107,3 +107,17 @@ func TestSPKIFlagOnlyWhenInspectionIsOn(t *testing.T) {
 		t.Fatalf("%v", with)
 	}
 }
+
+func TestWorkspaceNoticeIsHonestAboutWhatV1LacksAndClaimsNothingElse(t *testing.T) { // WB-013, WBT-020
+	n := strings.ToLower(WorkspaceNotice)
+	for _, must := range []string{"proof of concept", "no data controls", "clipboard", "download", "upload", "print", "drag-and-drop", "watermark", "compromised operating system"} {
+		if !strings.Contains(n, must) {
+			t.Errorf("the notice does not say %q", must)
+		}
+	}
+	for _, claim := range []string{"prevents data loss", "secure", "protects your data", "dlp", "encrypted download"} {
+		if strings.Contains(n, claim) {
+			t.Errorf("the notice claims %q, which v1 does not provide", claim)
+		}
+	}
+}

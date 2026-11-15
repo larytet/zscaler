@@ -612,6 +612,10 @@ Requirement DATA-001 (basic), AI-003 (request side). Package `dlp` holds the det
 
 ## D8. Workspace browser (requirements v0.6, WB-001..WB-013)
 
+> **Version 1 is a proof of concept (decision, requirements v0.7: option C).** Built in v1: the launcher, an isolated profile erased at every start and exit, all traffic through the agent's local proxies, inspection trust confined to the workspace by a key pin, the `workspace` certificate role, the `workspace` rule condition and `isolate` action, `sensitive` segments, and automatic locking on revocation, a failed baseline or a control-plane outage past the grace period.
+>
+> **v1 has no data controls.** Clipboard, download, upload, print, drag-and-drop and watermark controls, a per-launch proxy credential and an extension allow-list check are **not** in v1: they need an in-browser extension and Chrome 146 does not load one from the command line (D8.7). They are **deferred to a later version**, not failing. Options A (a Chromium build we ship) and B (an enterprise policy file) stay recorded in D8.7 as the way to deliver them. The launcher prints this notice every time it starts; nothing may describe the v1 workspace as protecting data inside the browser.
+
 Decision from the product owner, 2026-11-15: unmanaged devices and browser isolation are delivered by a **workspace browser** that runs on the user's own device. This replaces D6.3's open choice. What follows is the design position; items marked **PROTOTYPE** are not settled until a working launcher has been tried against a real browser (see the risks in D8.9).
 
 ### D8.1 What we build, and what we do not
@@ -662,7 +666,7 @@ Allow-list only. The launcher refuses to start the browser with extra extension 
 | B. Use the user's Chrome or Edge with an enterprise policy file that force-installs the extension | Smaller, the browser updates itself | Writing the policy needs administrator rights (breaks WB-001 for unmanaged personal devices), and it would apply to the user's whole browser, not only the workspace profile, unless profile-scoped policy is possible `[I]` |
 | C. No extension: keep the launcher and move the controls elsewhere | Nothing to ship in the browser | Clipboard, drag and drop and watermark controls are lost; download and upload control only at the proxy (partly possible with inspection and DLP, not for every flow); print control and the proxy credential are lost |
 
-Until it is taken, W3 is not started.
+**Decision (requirements v0.7): option C for v1.** No extension is built in this version, so the workspace is a proof of concept (see the notice at the top of D8). Options A and B stay recorded above as the ways to add the extension in a later version; choosing either reopens W3 and the deferred tests in TEST-PLAN T4.
 
 ### D8.8 Posture and locking (WB-007, WB-011)
 
@@ -674,7 +678,7 @@ The launcher reuses the agent's posture probes (D4.3) plus the browser's version
 |---|---|---|
 | W1 | **Built.** Launcher with an isolated profile, forced proxy (ephemeral ports, no per-launch credential: see D8.2), `workspace` certificate role, `workspace` condition and `isolate` action, decision records, profile erase, 90-second posture lock | A stub browser that records flags, environment and the profile directory, plus the real binaries |
 | W2 | Trust of the inspection CA inside the workspace (D8.5 prototype) | Real Chromium, by hand first |
-| W3 | Workspace extension with clipboard, download, upload, print controls and watermark | Real Chromium, browser automation |
-| W4 | Installers per OS, auto-update, minimum version | Clean machines, people |
+| W3 | **Deferred (decision C).** Workspace extension with clipboard, download, upload, print controls, watermark, per-launch proxy credential and extension allow-list | Real Chromium, browser automation |
+| W4 | **Deferred.** Installers per OS, auto-update, minimum version | Clean machines, people |
 
 Risks: the Chrome extension-loading restriction (D8.7); no portable trust-store isolation (D8.5); screenshot blocking (D8.6); a browser the user can also reach through the operating system's own copy of Chrome, which the policy cannot stop (WB-013). A compromised operating system defeats every control here.

@@ -108,6 +108,7 @@ func main() {
 		if path == "" {
 			log.Fatal("no Chromium-family browser found; install Chrome, Chromium or Edge, or pass --browser")
 		}
+		fmt.Fprintln(os.Stderr, agent.WorkspaceNotice)
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 		defer stop()
 		o := agent.WorkspaceOptions{Browser: path, PostureEvery: *postureEvery, RenewEvery: *renewEvery, Grace: *grace,
