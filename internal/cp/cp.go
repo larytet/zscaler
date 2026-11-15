@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/pki"
@@ -25,6 +26,7 @@ type API struct {
 	Tokens         *pki.Tokens
 	BootstrapToken string
 	// Hooks let enforcement nodes react immediately to revocations.
+	Alerts         *alerts.Engine
 	OnRevokeDevice func(tenant string, d store.Device)
 	OnDisableUser  func(tenant, subject string)
 }
@@ -67,6 +69,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/users", a.wrap(read, a.listUsers))
 	m.HandleFunc("POST /v1/users/{id}/disable", a.wrap(write, a.disableUser))
 	m.HandleFunc("GET /v1/audit", a.wrap(read, a.listAudit))
+	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	return m
 }
 
@@ -449,4 +452,11 @@ func (a *API) enToken(w http.ResponseWriter, r *http.Request) {
 	}
 	t := a.Tokens.Issue("", ENTokenPrefix+strings.Join(in.Names, ","))
 	writeJSON(w, 200, map[string]any{"token": t, "expires_in_seconds": 3600})
+}
+
+func (a *API) listAlerts(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	if a.Alerts == nil {
+		return []alerts.Alert{}, nil
+	}
+	return a.Alerts.List(c.tenant, r.URL.Query().Get("open") == "1"), nil
 }

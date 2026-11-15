@@ -132,3 +132,19 @@ func (rp *Replay) Check(r *Report) error {
 	rp.last[r.DeviceID] = r.TS
 	return nil
 }
+
+// Baseline checks the minimum security baseline used for alerts: disk
+// encryption and the host firewall must both be known to be on. Unknown fails.
+func Baseline(r *Report) (ok bool, failing []string) {
+	check := func(v *bool, name string) {
+		switch {
+		case v == nil:
+			failing = append(failing, name+" could not be checked")
+		case !*v:
+			failing = append(failing, name+" is off")
+		}
+	}
+	check(r.DiskEncrypted, "disk encryption")
+	check(r.FirewallOn, "the firewall")
+	return len(failing) == 0, failing
+}

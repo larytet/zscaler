@@ -59,11 +59,13 @@ func main() {
 		log.Fatal(err)
 	}
 	var lmu sync.Mutex
+	fwd := &en.Forwarder{URL: *cpURL, TLS: id.TLS(cli.HostOf(*cpURL))}
 	logRec := func(r broker.Record) {
 		lmu.Lock()
-		defer lmu.Unlock()
 		b, _ := json.Marshal(r)
 		lf.Write(append(b, '\n'))
+		lmu.Unlock()
+		fwd.Add(r)
 	}
 
 	node := &broker.EN{Name: *name, CA: verifier, Rev: rev, State: state, Log: logRec, Cert: id.Cert,
@@ -85,6 +87,7 @@ func main() {
 	}
 	stop := make(chan struct{})
 	go poller.Run(*every, stop, func(err error) { log.Printf("sync: %v", err) })
+	go fwd.Run(2*time.Second, stop, func(err error) { log.Printf("forward: %v", err) })
 
 	var classifier *webproxy.Classifier
 	lists := map[string][]string{}

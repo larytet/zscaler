@@ -138,3 +138,22 @@ func FuzzVerify(f *testing.F) {
 		}
 	})
 }
+
+func TestBaseline(t *testing.T) {
+	tr, fa := true, false
+	for name, c := range map[string]struct {
+		r    Report
+		ok   bool
+		want string
+	}{
+		"all good":         {Report{DiskEncrypted: &tr, FirewallOn: &tr}, true, ""},
+		"disk off":         {Report{DiskEncrypted: &fa, FirewallOn: &tr}, false, "disk encryption is off"},
+		"firewall unknown": {Report{DiskEncrypted: &tr}, false, "the firewall could not be checked"},
+		"both bad":         {Report{DiskEncrypted: &fa, FirewallOn: &fa}, false, "disk encryption is off"},
+	} {
+		ok, failing := Baseline(&c.r)
+		if ok != c.ok || (c.want != "" && (len(failing) == 0 || failing[0] != c.want)) {
+			t.Errorf("%s: ok=%v failing=%v", name, ok, failing)
+		}
+	}
+}

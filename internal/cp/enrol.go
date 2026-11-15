@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"net/http"
 	"strings"
@@ -61,6 +62,7 @@ func (e *Enrol) Handler() http.Handler {
 	m.HandleFunc("GET /enrol/targets", e.targets)
 	m.HandleFunc("POST /enrol/en", e.enrolEN)
 	m.HandleFunc("GET /sync/state", e.syncState)
+	m.HandleFunc("POST /ingest/records", e.ingest)
 	return m
 }
 
@@ -324,4 +326,25 @@ func (e *Enrol) syncState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, e.API.Store.Snapshot())
+}
+
+// ingest receives batches of decision and event records from an enforcement node.
+func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := e.peer(r)
+	if !ok || id.Role != pki.RoleEN {
+		writeErr(w, fail(401, "unauthenticated", "an enforcement-node certificate is required"))
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
+	var recs []broker.Record
+	if err := json.NewDecoder(r.Body).Decode(&recs); err != nil || len(recs) > 5000 {
+		writeErr(w, fail(400, "invalid", "expected a JSON array of at most 5000 records"))
+		return
+	}
+	if e.API.Alerts != nil {
+		for _, rec := range recs {
+			e.API.Alerts.Ingest(rec)
+		}
+	}
+	writeJSON(w, 200, map[string]int{"accepted": len(recs)})
 }

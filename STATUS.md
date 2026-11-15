@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I6a (end-to-end test with the real binaries).
+**Last updated:** 2026-11-15, after I6b (alerts).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -37,8 +37,8 @@ Implementation language: **Go** (chosen by the user).
 | I5d-1 | Support packages for the binaries: CA persistence, IP SANs, EN enrolment, polled state sync, stale and admin-revoked handling | done | CP-009, 010 (EN side), PKI |
 | I5d-2 | `cmd/` binaries for cp, en, connector, agent, plus Makefile | done (build and unit-tested pieces; not yet run together) | PKI persistence |
 | I6a | End-to-end test starting the real binaries | done: SCN-001, SCN-002, SCN-004 pass (`make e2e`). SCN-003, 005, 006 not written | SCN |
-| I6b | Alerts and plain-language summaries | **next** | ALR |
-| I6c | Run instructions in README, load and soak tools | pending | PERF, RES |
+| I6b | Alerts: repeated denies, connector offline, posture failed; EN event emission, record forwarding, `/v1/alerts` | done: ALR-001..003; SCN-004 also checks the alert end to end. ALR-004 (email) not built | ALR |
+| I6c | Run instructions in README, load and soak tools | **next** | PERF, RES |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
 
@@ -48,6 +48,7 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 - **Design deviation:** certificate renewal uses the current valid device certificate over mTLS, not an IdP refresh token (DESIGN D4.2). A stolen but unrevoked certificate can therefore renew itself indefinitely until the admin revokes it or disables the user. Fix: cap renewal chains (for example 7 days) or require a fresh IdP token.
 - **Design deviation:** ENs poll a full snapshot from the control plane every few seconds instead of holding a push stream (DESIGN D2.6). Fine for small tenants, not for scale. The snapshot carries every user and policy for every tenant, so an EN certificate can read all tenants: ENs are platform-trusted.
 - The binaries now run together in `test/e2e` (cp, en, connector, agent, with the in-process test IdP and a fake posture toolchain on PATH). The connector only uses the first `--en` address (no EN failover yet).
+- Alerts live in control-plane memory (lost on restart), are delivered only through the API (no email, no UI page yet), and the weekly digest (ADM-009, now Must) is not built.
 - Connector and EN certificates last 7 days and have no renewal in RB1.
 - Agent: Windows firewall posture probe is not implemented (stays unknown, so policies requiring it fail closed). No installers, tunnel driver or auto-update. The browser is launched by the caller (`openURL`), the CLI wiring comes with I5d.
 - Audit log: truncating the tail is not detectable from the file alone.

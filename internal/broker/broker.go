@@ -228,7 +228,9 @@ func (e *EN) serveConnector(id pki.Identity, sess *mux.Session) {
 	e.mu.Lock()
 	e.connectors[key] = append(e.connectors[key], c)
 	e.mu.Unlock()
+	e.logRec(Record{Tenant: id.Tenant, Kind: "connector", Event: "connected", App: id.Subject, Device: id.Device, Action: "info"})
 	<-sess.Done()
+	e.logRec(Record{Tenant: id.Tenant, Kind: "connector", Event: "disconnected", App: id.Subject, Device: id.Device, Action: "info"})
 	e.mu.Lock()
 	list := e.connectors[key]
 	for i, x := range list {
@@ -314,6 +316,12 @@ func (e *EN) onPosture(id pki.Identity, cert *x509.Certificate, ds *deviceState,
 	ds.mu.Unlock()
 	st.Accept()
 	st.Close()
+	ok, failing := posture.Baseline(r)
+	rec := Record{Tenant: id.Tenant, Kind: "posture", User: id.Subject, Device: id.Device, Action: "pass"}
+	if !ok {
+		rec.Action, rec.Reason = "fail", strings.Join(failing, " and ")
+	}
+	e.logRec(rec)
 }
 
 func (e *EN) logRec(r Record) {

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/cli"
 	"github.com/larytet/zscaler/internal/cp"
@@ -55,7 +56,19 @@ func main() {
 	}
 	cert := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 
-	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot}
+	eng := alerts.New()
+	eng.Name = func(tenant, subject string) string {
+		if u, ok := st.User(tenant, subject); ok && u.Email != "" {
+			return u.Email
+		}
+		return subject
+	}
+	go func() {
+		for range time.Tick(30 * time.Second) {
+			eng.Tick()
+		}
+	}()
+	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng}
 	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil)}
 
 	admin := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,

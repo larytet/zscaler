@@ -462,4 +462,9 @@ func TestScn004BadPosture(t *testing.T) {
 	if !found {
 		t.Fatal("no deny decision logged")
 	}
+	// the admin sees a plain-language alert naming the failed check (ALR-003)
+	eventually(t, "posture alert", 15*time.Second, func() bool {
+		code, b := s.api("GET", "/v1/alerts?open=1", nil, s.token)
+		return code == 200 && strings.Contains(string(b), "posture-failed") && strings.Contains(string(b), "disk encryption is off")
+	})
 }

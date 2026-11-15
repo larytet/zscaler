@@ -538,3 +538,28 @@ func TestAdminRevokedDeviceRefusedAtConnect(t *testing.T) {
 		t.Fatal("device revoked in the control plane was served")
 	}
 }
+
+func TestEmitsPostureAndConnectorEvents(t *testing.T) { // feeds ALR-002, ALR-003
+	r := newRig(t)
+	cancel := r.startConnector("c1", r.allowApp)
+	if r.logs.find(func(x Record) bool {
+		return x.Kind == "connector" && x.Event == "connected" && x.App == "site1" && x.Device == "c1"
+	}) == nil {
+		t.Fatal("no connector connected event")
+	}
+	conn, cr := r.agent("alice", "d1", true) // helper sends disk=true but no firewall flag: baseline fails
+	_ = conn
+	rec := r.logs.find(func(x Record) bool { return x.Kind == "posture" && x.Device == "d1" })
+	if rec == nil || rec.Action != "fail" || !strings.Contains(rec.Reason, "firewall") {
+		t.Fatalf("posture event: %+v", rec)
+	}
+	cancel()
+	deadline := time.Now().Add(3 * time.Second)
+	for r.logs.find(func(x Record) bool { return x.Kind == "connector" && x.Event == "disconnected" }) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("no connector disconnected event")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = cr
+}

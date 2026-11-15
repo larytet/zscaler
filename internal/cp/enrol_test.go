@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/pki"
 	tidp "github.com/larytet/zscaler/test/idp"
@@ -313,5 +314,44 @@ func TestRenewRefusedWhenAdminRevoked(t *testing.T) {
 	e.api.Store.RevokeDevice("a", out.DeviceID)
 	if c, _ := e.post("/enrol/renew", map[string]string{"public_key": pub}, tlsCert(t, out, k)); c != 403 {
 		t.Fatalf("renewal of an admin-revoked device: %d", c)
+	}
+}
+
+func enCert(t *testing.T, e *enrolEnv) *tls.Certificate {
+	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, err := e.ca.Sign(&k.PublicKey, pki.Identity{Tenant: "platform", Subject: "en", Device: "en1", Role: pki.RoleEN}, time.Hour, "en.local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}
+}
+
+func TestIngestAndAlertsEndpoint(t *testing.T) {
+	e := newEnrolEnv(t)
+	e.api.Alerts = alerts.New()
+	recs := []broker.Record{}
+	for i := 0; i < 10; i++ {
+		recs = append(recs, broker.Record{Tenant: "a", Kind: "private", Action: "deny", Event: "open", User: "u1", App: "erp"})
+	}
+	if c, _ := e.post("/ingest/records", recs, nil); c != 401 {
+		t.Fatalf("ingest without a certificate: %d", c)
+	}
+	dev, dk, _, _, _ := e.enrolDevice(t, "u1")
+	if c, _ := e.post("/ingest/records", recs, tlsCert(t, dev, dk)); c != 401 {
+		t.Fatalf("a device certificate may not ingest: %d", c)
+	}
+	if c, b := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatalf("ingest: %d %s", c, b)
+	}
+	if c, _ := e.post("/ingest/records", make([]broker.Record, 5001), enCert(t, e)); c != 400 {
+		t.Fatalf("oversize batch accepted: %d", c)
+	}
+	code, b, _ := e.call("GET", "/v1/alerts?open=1", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), "repeated-denies") || !strings.Contains(string(b), "recommended_action") {
+		t.Fatalf("alerts: %d %s", code, b)
+	}
+	code, b, _ = e.call("GET", "/v1/alerts", e.adminB, nil)
+	if code != 200 || strings.Contains(string(b), "repeated-denies") {
+		t.Fatalf("tenant b sees tenant a alerts: %s", b)
 	}
 }
