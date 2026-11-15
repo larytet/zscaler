@@ -28,6 +28,8 @@ const (
 	InitialWindow = 256 * 1024
 )
 
+var wbufs = sync.Pool{New: func() any { b := make([]byte, 0, 9+MaxFrame); return &b }}
+
 var (
 	ErrClosed   = errors.New("mux: session closed")
 	ErrRejected = errors.New("mux: stream rejected")
@@ -121,11 +123,15 @@ func (s *Session) writeFrame(t byte, id uint32, p []byte) error {
 	if len(p) > MaxFrame {
 		return fmt.Errorf("mux: frame too large")
 	}
-	buf := make([]byte, 9+len(p))
+	bp := wbufs.Get().(*[]byte)
+	defer wbufs.Put(bp)
+	buf := (*bp)[:0]
+	buf = append(buf, make([]byte, 9+len(p))...)
 	buf[0] = t
 	binary.BigEndian.PutUint32(buf[1:], id)
 	binary.BigEndian.PutUint32(buf[5:], uint32(len(p)))
 	copy(buf[9:], p)
+	*bp = buf
 	s.wmu.Lock()
 	_, err := s.conn.Write(buf)
 	s.wmu.Unlock()
@@ -191,6 +197,7 @@ func (s *Session) removeStream(id uint32) {
 
 func (s *Session) readLoop() {
 	var h [9]byte
+	rbuf := make([]byte, MaxFrame)
 	for {
 		if _, err := io.ReadFull(s.br, h[:]); err != nil {
 			s.fail(err)
@@ -203,7 +210,7 @@ func (s *Session) readLoop() {
 		}
 		var p []byte
 		if n > 0 {
-			p = make([]byte, n)
+			p = rbuf[:n] // reused: handlers that keep the bytes must copy
 			if _, err := io.ReadFull(s.br, p); err != nil {
 				s.fail(err)
 				return
@@ -218,12 +225,12 @@ func (s *Session) readLoop() {
 			s.writeFrame(tPong, 0, nil)
 		case tPong:
 		case tOpen:
-			s.onOpen(id, p)
+			s.onOpen(id, append([]byte(nil), p...))
 		case tAccept, tReject:
 			if st != nil && st.answer != nil {
 				code := ""
 				if t == tReject {
-					code = string(p)
+					code = string(p) // string() copies
 					if code == "" {
 						code = "rejected"
 					}

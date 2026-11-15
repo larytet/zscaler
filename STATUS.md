@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I6c (README, performance and security results).
+**Last updated:** 2026-11-15, after I7a (performance misses fixed).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -39,13 +39,18 @@ Implementation language: **Go** (chosen by the user).
 | I6a | End-to-end test starting the real binaries | done: SCN-001, SCN-002, SCN-004 pass (`make e2e`). SCN-003, 005, 006 not written | SCN |
 | I6b | Alerts: repeated denies, connector offline, posture failed; EN event emission, record forwarding, `/v1/alerts` | done: ALR-001..003; SCN-004 also checks the alert end to end. ALR-004 (email) not built | ALR |
 | I6c | README run instructions, performance tests (PERF-001..004), fuzz and vulnerability scan, toolchain pin | done. PERF-002 and PERF-005 missed (see RESULTS.md) | PERF, SEC-017..019 |
-| I7 | Remaining test-plan items: soak and failure injection (RES), SCN-003/005/006, USE checks, PERF-006..008 | **next, optional for RB1 exit** | RES, SCN, USE |
+| I7a | Fix PERF-005 (rule index) and PERF-002 (mux buffer reuse) | done: both targets now met | PERF-002, 005 |
+| I7b | PERF-006..008 measurements | **next** | PERF |
+| I7c | Failure injection and shortened soak (RES) | pending | RES |
+| I7d | SCN-003, 005, 006 | pending | SCN |
+| I7e | Email alerts (ALR-004) | pending | ALR |
+| I7f | Usability checks and exit criteria review | pending (needs people) | USE |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
 
 ## Known gaps and misses
 
-- **Two performance targets missed:** PERF-005 policy evaluation about 59 us for 500 rules (target 50 us), and PERF-002 single-stream throughput 460 Mbit/s (target 500). Details and likely fixes in `RESULTS.md`.
+- Performance: PERF-001..005 all met (`RESULTS.md`). PERF-006..008 not yet measured.
 - Go toolchain is pinned to go1.27.4 because go1.27.2 has two standard-library vulnerabilities that affect this code.
 - **Design deviation:** certificate renewal uses the current valid device certificate over mTLS, not an IdP refresh token (DESIGN D4.2). A stolen but unrevoked certificate can therefore renew itself indefinitely until the admin revokes it or disables the user. Fix: cap renewal chains (for example 7 days) or require a fresh IdP token.
 - **Design deviation:** ENs poll a full snapshot from the control plane every few seconds instead of holding a push stream (DESIGN D2.6). Fine for small tenants, not for scale. The snapshot carries every user and policy for every tenant, so an EN certificate can read all tenants: ENs are platform-trusted.

@@ -9,17 +9,15 @@ All components of the private path run in one process on loopback unless noted, 
 | ID | Target | Measured | Status |
 |---|---|---|---|
 | PERF-001 session setup | p95 under 20 ms | p50 0.93 ms, p95 1.4 ms, p99 1.8 ms | met |
-| PERF-002 single-stream throughput | at least 500 Mbit/s | 460 Mbit/s one way (was 362 before raising the mux frame size from 16 to 60 KiB) | **missed** |
+| PERF-002 single-stream throughput | at least 500 Mbit/s | 616 Mbit/s one way (362 originally; 460 after raising the mux frame size to 60 KiB; 616 after reusing read and write buffers) | met |
 | PERF-003 1000 concurrent sessions | heap under 300 MB, no errors | 1000 held, 0 errors, heap +131 MB (whole stack in one process, so an upper bound for the EN) | met |
 | PERF-004 connector idle memory | under 30 MB | 9.9 MB resident after 10 s idle (real process) | met |
-| PERF-005 / POL-028 policy evaluation | under 50 us for 500 rules | about 59 us (worst case: the matching rule is last, linear scan) | **missed** |
+| PERF-005 / POL-028 policy evaluation | under 50 us for 500 rules | 0.36 us (was 59 us with a linear scan; rules are now indexed by group and user, and a randomized test checks the index never changes a decision) | met |
 | PERF-006 policy push to 20 ENs | all within 5 s | not measured. ENs poll every 5 s by default, so the worst case is about 5 s plus transfer | untested |
 | PERF-007 web proxy throughput | 1000 requests/s per core | not measured | untested |
 | PERF-008 decision-log overhead | under 5% | not measured | untested |
 
 Reproduce: `go test -tags perf -v -run TestPerf ./internal/broker` and `go test -tags e2e -run TestPerf004 ./test/e2e`.
-
-Likely fixes for the misses: PERF-005 index rules by group and app at compile time. PERF-002 avoid the per-frame allocation and copy in the mux writer and reader, and try a larger stream window. Neither has been tried beyond the frame-size change.
 
 ## Security checks
 

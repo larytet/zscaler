@@ -1,6 +1,8 @@
 package policy
 
 import (
+	"fmt"
+	"math/rand"
 	"net/netip"
 	"sync"
 	"testing"
@@ -288,4 +290,50 @@ func FuzzParse(f *testing.F) { // FUZ-004
 			p.Evaluate(req("g"))
 		}
 	})
+}
+
+// The index must never change a decision: compare with a linear scan on random policies.
+func TestIndexEqualsLinearScan(t *testing.T) {
+	rnd := rand.New(rand.NewSource(7))
+	groups := []string{"a", "b", "c", "d", "e"}
+	users := []string{"alice@example.com", "bob@example.com", "carol@example.com"}
+	pick := func(from []string, max int) []string {
+		var out []string
+		for i := 0; i < rnd.Intn(max+1); i++ {
+			out = append(out, from[rnd.Intn(len(from))])
+		}
+		return out
+	}
+	for iter := 0; iter < 300; iter++ {
+		p := &Policy{Kind: Private, DefaultAction: Deny}
+		for i := 0; i < 1+rnd.Intn(20); i++ {
+			act := Allow
+			if rnd.Intn(3) == 0 {
+				act = Deny
+			}
+			m := Match{Users: pick(users, 2), Groups: pick(groups, 3)}
+			if rnd.Intn(2) == 0 {
+				m.Apps = []string{[]string{"s1", "s2"}[rnd.Intn(2)]}
+			}
+			p.Rules = append(p.Rules, Rule{ID: fmt.Sprint("r", i), Priority: rnd.Intn(1000)*100 + i, Action: act, Match: m})
+		}
+		if err := p.Compile(nil); err != nil {
+			continue // random policy happened to be invalid (for example an allow-all)
+		}
+		for j := 0; j < 20; j++ {
+			r := req(pick(groups, 3)...)
+			r.User.Email = users[rnd.Intn(len(users))]
+			r.App = []string{"s1", "s2", "s3"}[rnd.Intn(3)]
+			want := Decision{Action: Deny, Reason: "default"}
+			for k := range p.compiled {
+				if c := &p.compiled[k]; c.matches(p.Kind, r) {
+					want = Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
+					break
+				}
+			}
+			if got := p.Evaluate(r); got != want {
+				t.Fatalf("iter %d: indexed %+v, linear %+v", iter, got, want)
+			}
+		}
+	}
 }

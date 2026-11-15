@@ -112,6 +112,15 @@ type Policy struct {
 	Rules         []Rule `json:"rules"`
 
 	compiled []compiledRule
+	idx      index
+}
+
+// index narrows the rules worth checking for a request. Matching still runs
+// the full check on each candidate, so the result equals a linear scan.
+type index struct {
+	anyWho  []int            // rules with no users or groups
+	byGroup map[string][]int // rule positions by group
+	byUser  map[string][]int // rule positions by lower-cased email or subject
 }
 
 type compiledRule struct {
@@ -177,6 +186,19 @@ func (p *Policy) Compile(known map[string]bool) error {
 		}
 		p.compiled = append(p.compiled, c)
 	}
+	p.idx = index{byGroup: map[string][]int{}, byUser: map[string][]int{}}
+	for i, c := range p.compiled {
+		if len(c.Match.Users)+len(c.Match.Groups) == 0 {
+			p.idx.anyWho = append(p.idx.anyWho, i)
+			continue
+		}
+		for _, g := range c.Match.Groups {
+			p.idx.byGroup[g] = append(p.idx.byGroup[g], i)
+		}
+		for _, u := range c.Match.Users {
+			p.idx.byUser[strings.ToLower(u)] = append(p.idx.byUser[strings.ToLower(u)], i)
+		}
+	}
 	return nil
 }
 
@@ -197,7 +219,17 @@ func (p *Policy) Evaluate(r Request) (d Decision) {
 		return Decision{Action: Deny, Reason: "device-revoked"}
 	}
 	r.User.Email = strings.ToLower(r.User.Email) // once, not per rule
-	for i := range p.compiled {
+	var buf [16]int
+	cand := append(buf[:0], p.idx.anyWho...)
+	for _, g := range r.User.Groups {
+		cand = append(cand, p.idx.byGroup[g]...)
+	}
+	cand = append(cand, p.idx.byUser[r.User.Email]...)
+	if r.User.Subject != "" {
+		cand = append(cand, p.idx.byUser[strings.ToLower(r.User.Subject)]...)
+	}
+	sort.Ints(cand) // priority order; duplicates are harmless (same rule, same answer)
+	for _, i := range cand {
 		c := &p.compiled[i]
 		if c.matches(p.Kind, r) {
 			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
