@@ -654,7 +654,15 @@ Enforced by the workspace extension and browser policy: copy and paste in and ou
 
 ### D8.7 Extensions and debugging (WB-005)
 
-Allow-list only. The launcher refuses to start the browser with extra extension flags, remote-debugging ports or developer mode, and checks the profile's extension list every posture cycle. **PROTOTYPE:** recent branded Chrome builds restrict loading an extension from the command line `[I: to be verified against current Chrome]`. If that blocks WB-001 (install without administrator rights), the workspace must ship a Chromium it controls, or require a one-time administrator install for the policy file. This decision changes WB-001 and must be taken before the extension is written.
+Allow-list only. The launcher refuses to start the browser with extra extension flags, remote-debugging ports or developer mode, and checks the profile's extension list every posture cycle. **Tested, 2026-11-15: confirmed on Google Chrome 146.** A minimal extension (manifest v3, one content script) was loaded in headless Chrome with `--load-extension` alone, with `--disable-extensions-except`, and with `--disable-features=DisableLoadExtensionCommandLineSwitch` (alone and with a second feature name). In every case the content script did not run, while a control page's own script did. Not tested: a visible window, Microsoft Edge, Chromium or Chrome for Testing builds, macOS, Windows. So the workspace extension (W3) cannot be delivered by a launch flag on current branded Chrome. **A decision is needed**, and it changes WB-001 (install without administrator rights):
+
+| Option | Delivers | Cost |
+|---|---|---|
+| A. Ship a Chromium build the workspace controls (a bundle per OS, about 150 MB) | Extension by flag, no administrator rights, full control of policy | We own patching a browser: security updates must follow upstream within days; larger download; per-OS packaging |
+| B. Use the user's Chrome or Edge with an enterprise policy file that force-installs the extension | Smaller, the browser updates itself | Writing the policy needs administrator rights (breaks WB-001 for unmanaged personal devices), and it would apply to the user's whole browser, not only the workspace profile, unless profile-scoped policy is possible `[I]` |
+| C. No extension: keep the launcher and move the controls elsewhere | Nothing to ship in the browser | Clipboard, drag and drop and watermark controls are lost; download and upload control only at the proxy (partly possible with inspection and DLP, not for every flow); print control and the proxy credential are lost |
+
+Until it is taken, W3 is not started.
 
 ### D8.8 Posture and locking (WB-007, WB-011)
 
