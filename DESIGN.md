@@ -1,6 +1,6 @@
 # Software Design: SMB-ZTX
 
-**Status:** Draft v0.1, 2026-11-15
+**Status:** Draft v0.2, 2026-11-15
 **Input:** [REQUIREMENTS.md](REQUIREMENTS.md) v0.4 (IDs such as `ZPA-020` refer to it)
 **Next documents:** TEST-PLAN.md, then the implementation under `cmd/` and `internal/`
 
@@ -8,8 +8,8 @@ The design is written in parts. This file grows one subtask at a time:
 
 | Part | Content | Status |
 |---|---|---|
-| D1 | Scope of the first build, architecture, technology choices | this commit |
-| D2 | Policy engine and data model | pending |
+| D1 | Scope of the first build, architecture, technology choices | done |
+| D2 | Policy engine and data model | done |
 | D3 | Data plane: broker, connector stitching, forward proxy | pending |
 | D4 | Agent, posture, enrolment | pending |
 | D5 | Control-plane API, logging, security, deployment | pending |
@@ -136,3 +136,124 @@ test/
 - **Patents.** Connector stitching and handshake snooping are covered by patent families named in REQUIREMENTS.md section 15. RB1 uses a connector-initiated outbound link, which is a general technique, but claim scope was not read. A freedom-to-operate opinion is needed before any commercial use. RB1 is for evaluation.
 - **Inspection versus end-to-end encryption.** RB1 does not decrypt, which sidesteps ZPA-031 versus ZPA-041. It also means web policy works on host names only.
 - **Posture trust.** A self-signed posture report from an unmanaged device is only as honest as the device. RB1 treats it as a signal for the SMB case, and the threat model in D5 states this.
+
+---
+
+## D2. Policy engine and data model
+
+Requirements: ARCH-005, ARCH-006, ZPA-020..026 (subset), ZIA-010..014 (subset), SMB-002.
+
+### D2.1 Entities
+
+All entities carry `id` (string, unique within a tenant), `tenant_id`, `created_at`, `updated_at`, `version`.
+
+| Entity | Fields | Notes |
+|---|---|---|
+| Tenant | `name`, `idp` (issuer, client_id, group_claim), `ca` reference | Isolation boundary (ARCH-020) |
+| User | `subject` (OIDC `sub`), `email`, `groups[]`, `disabled` | Created at first login. Groups refreshed at each login |
+| Device | `user_id`, `public_key`, `posture` (last report), `enrolled_at`, `revoked` | Key generated on the device |
+| Connector | `name`, `cert_serial`, `site`, `last_seen`, `revoked` | Enrolled with a one-time token |
+| AppSegment | `name`, `connector_group`, `targets[]` (`host`, `ports[]`, `proto`) | Targets are never sent to the agent |
+| Rule | see D2.2 | Ordered in a policy |
+| Policy | `kind` (`private` or `web`), `rules[]`, `default_action`, `version` | One of each kind per tenant in RB1 |
+| CategoryList | `category` to `domains[]` | Static lists in RB1, feed later |
+| AuditEvent | `ts`, `actor`, `action`, `object`, `before`, `after` | Append-only |
+| DecisionLog | see D2.5 | Written by ENs |
+
+### D2.2 Rule model
+
+```json
+{
+  "id": "r-finance-db",
+  "priority": 10,
+  "action": "allow",
+  "match": {
+    "users":    ["alice@example.com"],
+    "groups":   ["finance"],
+    "apps":     ["seg-erp-db"],
+    "posture":  {"min_os": {"windows": "10.0.19045", "macos": "13.0"},
+                 "disk_encrypted": true, "firewall_on": true,
+                 "max_age_seconds": 3600},
+    "time":     {"days": ["mon","tue","wed","thu","fri"], "from": "07:00", "to": "20:00", "tz": "Europe/Berlin"},
+    "network":  {"src_cidrs": ["0.0.0.0/0"]}
+  },
+  "reason": "Finance staff reach the ERP database"
+}
+```
+
+Web rules replace `apps` with `domains[]` (suffix match), `categories[]`, and may use `action: "warn"`.
+
+**Semantics**
+
+1. Within one condition type, entries are OR. Across condition types, AND. An absent condition matches everything.
+2. Users and groups together: the rule matches if the user is in `users` **or** in any `groups` (OR within the "who" dimension). If both are absent, anyone authenticated matches.
+3. Rules are sorted by `priority` ascending. The first matching rule wins. If none match, `default_action` applies. For `private`, `default_action` must be `deny` and the validator rejects anything else.
+4. Actions: `allow`, `deny`, and for web `warn` (interstitial, user may continue, logged).
+5. `posture` conditions are all required. A missing or stale report fails the condition, so an `allow` rule does not match and evaluation continues (fail closed, principle 5).
+6. A disabled user, revoked device, or revoked connector short-circuits to `deny` before rule evaluation.
+
+### D2.3 Evaluator interface
+
+```go
+package policy
+
+type Request struct {
+    Kind     Kind       // Private or Web
+    User     User
+    Device   Device     // includes verified posture, and when it was verified
+    App      string     // segment ID, for private
+    Host     string     // lowercase host, for web
+    Port     int
+    SrcIP    netip.Addr
+    Now      time.Time
+}
+
+type Decision struct {
+    Action  Action // Allow, Deny, Warn
+    RuleID  string // "" means default
+    Reason  string
+}
+
+func (p *Policy) Evaluate(r Request) Decision
+func Validate(p *Policy) []error
+```
+
+Properties required of `Evaluate`:
+
+- **Pure:** no I/O, no clock reads (time comes from `Request.Now`), deterministic. This makes table-driven and property tests simple.
+- **Fast:** under 50 microseconds for 500 rules (rules are pre-indexed by `apps` and by domain suffix in a compiled form). Compilation happens once per policy version.
+- **Total:** always returns a decision. Internal errors turn into `Deny` with reason `evaluation-error`.
+
+### D2.4 Safe-defaults pack (SMB-002)
+
+Shipped as data, applied by the setup wizard:
+
+| Priority | Kind | Rule |
+|---|---|---|
+| 10 | web | deny categories `malware`, `phishing`, `command-and-control` |
+| 20 | web | warn categories `newly-registered`, `file-sharing-unsanctioned` |
+| 1000 | web | allow everything else (web default is `allow` in RB1) |
+| 10 | private | allow group `all-staff` to each app segment marked `standard`, posture required |
+| 20 | private | allow group `admins` to segments marked `admin`, posture required |
+| default | private | deny |
+
+### D2.5 Decision log record
+
+```json
+{"ts":"2026-11-15T10:00:00Z","tenant":"t1","kind":"private","user":"alice@example.com",
+ "device":"d-17","app":"seg-erp-db","target":"10.0.0.5:5432","action":"allow",
+ "rule":"r-finance-db","policy_version":42,"en":"en-eu-1","latency_ms":3,"bytes_up":0,"bytes_down":0}
+```
+
+Closing a session emits a second record with byte counts. Logs never contain request bodies or full URLs with query strings (host and port only in RB1), which keeps the "no payload" principle.
+
+### D2.6 Policy distribution
+
+- The CP stores policies versioned by a monotonically increasing integer per tenant.
+- ENs keep a long-lived stream to the CP. On connect, the EN sends the last version it holds and receives anything newer. A push carries the full compiled-policy input (not a diff) in RB1, since tenant policies are small (under 1 MB).
+- The EN swaps the compiled policy atomically (`atomic.Pointer`). In-flight sessions keep the version they started under, but long sessions are re-evaluated every 5 minutes or on a revocation event, so a revoked device loses access within 5 minutes at most (NFR target to be stated in the test plan).
+- Revocations (user disabled, device revoked, connector revoked) are pushed immediately as a separate event and close live sessions.
+
+### D2.7 Validation rules
+
+`Validate` rejects: duplicate rule IDs or priorities, an unknown action, a `private` default other than deny, an `allow` rule with no `users`, no `groups` and no `posture` and no `apps` (an accidental allow-all), unparsable CIDRs or time zones, references to unknown segments, and domain entries that contain schemes or paths. Warnings (not errors): a rule that can never match because an earlier rule shadows it.
