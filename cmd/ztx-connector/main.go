@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -80,15 +81,25 @@ func main() {
 			}
 		}
 	}()
-	c := &broker.Connector{TLS: tlsFor(id, *enName),
-		Allow:  func(h string, p int) bool { return (*allow.Load())[strings.ToLower(h)+":"+itoa(p)] },
-		Events: func(s string) { log.Print(s) }}
-	for _, a := range strings.Split(*ens, ",") {
-		c.Addr = a // first address; failover across ENs is a later improvement
-		break
+	// Connect to every listed enforcement node at once, so losing one does not cut the apps
+	// behind this connector (ZPA-044). Each link reconnects on its own.
+	allowFn := func(h string, p int) bool { return (*allow.Load())[strings.ToLower(h)+":"+itoa(p)] }
+	var wg sync.WaitGroup
+	for _, addr := range strings.Split(*ens, ",") {
+		addr = strings.TrimSpace(addr)
+		if addr == "" {
+			continue
+		}
+		wg.Add(1)
+		go func(addr string) {
+			defer wg.Done()
+			c := &broker.Connector{Addr: addr, TLS: tlsFor(id, *enName), Allow: allowFn,
+				Events: func(s string) { log.Printf("[%s] %s", addr, s) }}
+			c.Run(ctx)
+		}(addr)
 	}
-	log.Printf("connector %s running", *name)
-	c.Run(ctx)
+	log.Printf("connector %s running (%d enforcement node(s))", *name, len(strings.Split(*ens, ",")))
+	wg.Wait()
 }
 
 func tlsFor(id *cli.Identity, serverName string) *tls.Config { return id.TLS(serverName) }

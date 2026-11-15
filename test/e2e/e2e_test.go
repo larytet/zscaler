@@ -1823,3 +1823,62 @@ func TestDex001ExperienceFromRealMeasurements(t *testing.T) {
 		t.Fatalf("a loopback connection was blamed for slowness: %+v", got)
 	}
 }
+
+// SCN-017 (ZPA-044): two enforcement nodes. Killing one does not cut access to private apps.
+func TestScn017EnforcementNodeRedundancy(t *testing.T) {
+	s := newStack(t)
+	// a second enforcement node, enrolled with its own one-time token
+	code, b := s.api("POST", "/v1/ens/tokens", map[string]any{"names": []string{"localhost", "127.0.0.1"}}, bootTok)
+	var tk struct{ Token string }
+	json.Unmarshal(b, &tk)
+	if code != 200 {
+		t.Fatalf("%d %s", code, b)
+	}
+	s.secrets = append(s.secrets, tk.Token)
+	broker2, proxy2 := freePort(t), freePort(t)
+	s.start("ztx-en", []string{"ZTX_EN_TOKEN=" + tk.Token}, "--cp", s.enrolU, "--cp-ca", filepath.Join(s.dir, "cp", "ca.pem"),
+		"--data", filepath.Join(s.dir, "en2"), "--name", "en2", "--listen", fmt.Sprintf("127.0.0.1:%d", broker2),
+		"--proxy-listen", fmt.Sprintf("127.0.0.1:%d", proxy2), "--sync-every", "300ms")
+	waitPort(t, broker2)
+
+	// the connector links to both nodes
+	s.connProc.Process.Kill()
+	s.connProc.Wait()
+	args := append([]string(nil), s.connArgs...)
+	for i, a := range args {
+		if a == "--en" {
+			args[i+1] = fmt.Sprintf("127.0.0.1:%d,127.0.0.1:%d", s.ports["broker"], broker2)
+		}
+	}
+	s.connProc = s.start("ztx-connector", nil, args...)
+
+	// the agent knows both
+	a := s.newAgent(t, "laptop")
+	cfgPath := filepath.Join(a.dir, "config.json")
+	raw, _ := os.ReadFile(cfgPath)
+	var cfg map[string]any
+	json.Unmarshal(raw, &cfg)
+	cfg["en_addrs"] = []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]), fmt.Sprintf("127.0.0.1:%d", broker2)}
+	cfg["proxy_addrs"] = []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"]), fmt.Sprintf("127.0.0.1:%d", proxy2)}
+	raw, _ = json.Marshal(cfg)
+	os.WriteFile(cfgPath, raw, 0o600)
+	s.runInst(a)
+	eventually(t, "access through the first node", 25*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+
+	// the first enforcement node dies; access carries on through the second
+	s.enProc.Process.Kill()
+	s.enProc.Wait()
+	start := time.Now()
+	eventually(t, "access through the surviving node", 30*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	t.Logf("ZPA-044 access resumed %v after the first enforcement node was killed", time.Since(start).Round(100*time.Millisecond))
+
+	// and the second node is the one that decided it
+	eventually(t, "a decision by the second node", 10*time.Second, func() bool {
+		b, _ := os.ReadFile(filepath.Join(s.dir, "en2", "decisions.jsonl"))
+		return strings.Contains(string(b), `"action":"allow"`) && strings.Contains(string(b), `"en":"en2"`)
+	})
+	// nothing about policy was bypassed: a denied request is still denied by the surviving node
+	if s.reachable(a.socks(), "nope.ztx") {
+		t.Fatal("an unknown app was served by the surviving node")
+	}
+}

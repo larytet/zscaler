@@ -110,6 +110,8 @@ Data loss prevention (needs inspection on): a web rule can carry `"dlp": ["credi
 
 Just-in-time access: give a rule the action `require_approval` (it must name its apps). The first attempt is blocked and opens a request (emailed to the alert recipients when SMTP is set). Approve it with `POST /v1/approvals/{id}/approve {"minutes": 60}` or in the console; access starts within seconds and ends on its own, or earlier with `POST /v1/approvals/{id}/end`.
 
+Redundancy: run two or more enforcement nodes, list them all in the connector's `--en` (comma separated) and in each agent's `en_addrs`. If a node dies, access continues through the others within seconds.
+
 Device health and experience: `GET /v1/health` also gives each device an experience score (0 to 100) built from how long the agent took to connect and to open apps, with a one-sentence cause: device, network or app side. It shows each device's CPU load, memory and disk use as last reported by the agent (Linux agents only) with plain-language findings such as a nearly full disk.
 
 AI agents: `POST /v1/ai-agents {"name":"code-helper","operator":"alice","apps":["erp"],"minutes":120}` creates a named identity run by a person, allowed only those apps for that long, and returns a one-time token for `ztx-agent enrol-service`. Add a `require_approval` rule for the group `ai-agent` (naming the apps) or the agent gets nothing. `DELETE /v1/ai-agents/{name}` ends it at once.
