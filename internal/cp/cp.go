@@ -154,6 +154,7 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/siem", a.wrap(sensitive, a.getSIEM))
 	m.HandleFunc("DELETE /v1/siem", a.wrap(sensitive, a.deleteSIEM))
 	m.HandleFunc("POST /v1/siem/test", a.wrap(sensitive, a.testSIEM))
+	m.HandleFunc("POST /v1/support-access", a.wrap(admins, a.supportAccess))
 	m.HandleFunc("POST /v1/admins", a.wrap(admins, a.createAdmin))
 	m.HandleFunc("GET /v1/admins", a.wrap(admins, a.listAdmins))
 	m.HandleFunc("DELETE /v1/admins/{name}", a.wrap(admins, a.removeAdmin))

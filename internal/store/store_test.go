@@ -432,3 +432,99 @@ func TestLegacyFirstAdminIsTreatedAsOwner(t *testing.T) { // AGT-022: stores wri
 		t.Fatal("an unknown role was accepted")
 	}
 }
+
+func TestAdminAccountsCanExpireAndShowWhenUsed(t *testing.T) { // AGT-033 (NFR-023)
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	s, _ := Open("")
+	s.Now = func() time.Time { return now }
+	s.CreateTenant("a", "A")
+	tok, err := s.AddAdminOpts("a", "support-1", Auditor, AdminOpts{Expires: now.Add(2 * time.Hour), Note: "ticket 4711", Support: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, name, ok := s.Auth(tok); !ok || name != "support-1" {
+		t.Fatal("a temporary account must work until it expires")
+	}
+	// use is noted to the minute and not written on every request
+	first := s.Admins("a")[1].LastUsed
+	if first.IsZero() {
+		t.Fatal("the first use must be recorded")
+	}
+	now = now.Add(20 * time.Second)
+	s.Auth(tok)
+	if got := s.Admins("a")[1].LastUsed; !got.Equal(first) {
+		t.Fatalf("a use within a minute must not rewrite the record: %v then %v", first, got)
+	}
+	now = now.Add(3 * time.Minute)
+	s.Auth(tok)
+	if got := s.Admins("a")[1].LastUsed; !got.After(first) {
+		t.Fatalf("a later use must be noted: %v", got)
+	}
+	// after the end time the token is dead, and the account is listed as expired with its note
+	now = now.Add(2 * time.Hour)
+	if _, _, _, ok := s.Auth(tok); ok {
+		t.Fatal("an expired token must not work")
+	}
+	var info AdminInfo
+	for _, a := range s.Admins("a") {
+		if a.Name == "support-1" {
+			info = a
+		}
+	}
+	if !info.Expired || !info.Support || info.Note != "ticket 4711" || info.Created.IsZero() {
+		t.Fatalf("%+v", info)
+	}
+	// it stays until the grace has passed
+	if n := s.PurgeExpiredAdmins(7 * 24 * time.Hour); n != 0 {
+		t.Fatalf("purged %d too early", n)
+	}
+	now = now.Add(8 * 24 * time.Hour)
+	if n := s.PurgeExpiredAdmins(7 * 24 * time.Hour); n != 1 {
+		t.Fatalf("purged %d", n)
+	}
+	for _, a := range s.Admins("a") {
+		if a.Name == "support-1" {
+			t.Fatal("not purged")
+		}
+	}
+	// the owner is never purged, and cannot be given an expiry
+	if _, err := s.AddAdminOpts("a", "o2", Owner, AdminOpts{Expires: now.Add(time.Hour)}); err == nil {
+		t.Fatal("an owner with an expiry was accepted")
+	}
+	if _, err := s.AddAdminOpts("a", "late", Viewer, AdminOpts{Expires: now.Add(-time.Hour)}); err == nil {
+		t.Fatal("an expiry in the past was accepted")
+	}
+	if _, err := s.AddAdminOpts("a", "support-2", Viewer, AdminOpts{Expires: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	// an account that never expires is unaffected by the passing of time
+	tok3, _ := s.AddAdmin("a", "perm", Admin)
+	now = now.Add(365 * 24 * time.Hour)
+	if _, _, _, ok := s.Auth(tok3); !ok {
+		t.Fatal("a permanent account must not expire")
+	}
+}
+
+func TestExpiryAndLastUseSurviveARestart(t *testing.T) { // AGT-033
+	p := filepath.Join(t.TempDir(), "s.json")
+	now := time.Date(2026, 6, 1, 9, 0, 0, 0, time.UTC)
+	s, _ := Open(p)
+	s.Now = func() time.Time { return now }
+	s.CreateTenant("a", "A")
+	tok, _ := s.AddAdminOpts("a", "support-1", Auditor, AdminOpts{Expires: now.Add(time.Hour), Note: "n", Support: true})
+	s.Auth(tok)
+	s2, _ := Open(p)
+	s2.Now = func() time.Time { return now.Add(30 * time.Minute) }
+	if _, _, _, ok := s2.Auth(tok); !ok {
+		t.Fatal("the account must survive a restart")
+	}
+	s2.Now = func() time.Time { return now.Add(2 * time.Hour) }
+	if _, _, _, ok := s2.Auth(tok); ok {
+		t.Fatal("the expiry must survive a restart")
+	}
+	for _, a := range s2.Admins("a") {
+		if a.Name == "support-1" && (a.LastUsed.IsZero() || !a.Support) {
+			t.Fatalf("%+v", a)
+		}
+	}
+}

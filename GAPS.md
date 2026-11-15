@@ -47,7 +47,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | # | Requirement | Gap | State |
 |---|---|---|---|
 | G12 | ZIA-032, SMB-022 | Automatic exemption of pinned applications, banking and health from TLS inspection, with admin override | **done (S33)**; the built-in pinned list is small and unverified; banking and health depend on a category list the platform does not ship |
-| G13 | NFR-023 | Administrator and vendor support access that is time-boxed (tokens that expire), logged and visible to the customer | queued |
+| G13 | NFR-023 | Administrator and vendor support access that is time-boxed (tokens that expire), logged and visible to the customer | **done (S34)**; permanent administrators still do not expire; no SSO or MFA |
 | G14 | SMB-002 | Safe-defaults pack that also turns inspection on with the managed exemptions, refuses uploads to file-sharing apps and executables | queued |
 | G15 | NFR-024 | Reproducible, checksummed release build with an SBOM | queued |
 | G16 | INT-006 | An OpenAPI description of every admin API route, generated from the route table | queued |

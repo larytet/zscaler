@@ -110,6 +110,14 @@ func main() {
 			time.Sleep(6 * time.Hour)
 		}
 	}()
+	go func() {
+		for {
+			if n := st.PurgeExpiredAdmins(7 * 24 * time.Hour); n > 0 {
+				log.Printf("%d expired administrator accounts deleted", n)
+			}
+			time.Sleep(6 * time.Hour)
+		}
+	}()
 	api.SIEM = &siem.Streamer{AllowLoopback: os.Getenv("ZTX_SIEM_ALLOW_LOOPBACK") == "1"} // loopback targets are a lab-only switch
 	for tenant, c := range st.SIEMConfigs() {
 		c := c

@@ -186,6 +186,14 @@ type adminRec struct {
 	Tenant string `json:"tenant"`
 	Role   Role   `json:"role"`
 	Name   string `json:"name"`
+	// Created, Expires, Note and Support describe an account that is meant to be temporary (NFR-023): a
+	// token past Expires no longer works. Support marks access given to the vendor. LastUsed is when the
+	// token was last used, to the minute, so the customer can see whether it was.
+	Created  time.Time `json:"created,omitempty"`
+	Expires  time.Time `json:"expires,omitempty"`
+	Note     string    `json:"note,omitempty"`
+	Support  bool      `json:"support,omitempty"`
+	LastUsed time.Time `json:"last_used,omitempty"`
 }
 
 type file struct {
@@ -196,6 +204,9 @@ type file struct {
 }
 
 type Store struct {
+	// Now is the clock; nil means the real one. Tests set it.
+	Now func() time.Time
+
 	mu   sync.RWMutex
 	path string
 	d    file
@@ -273,6 +284,29 @@ func (s *Store) CreateTenant(id, name string) (adminToken string, err error) {
 }
 
 func (s *Store) AddAdmin(tenant, name string, role Role) (string, error) {
+	return s.AddAdminOpts(tenant, name, role, AdminOpts{})
+}
+
+// AdminOpts are the extra properties of an administrator account.
+type AdminOpts struct {
+	Expires time.Time // zero: never. An owner cannot be given an expiry.
+	Note    string
+	Support bool
+}
+
+// Time is the store's clock, for callers that must agree with it about what "now" is.
+func (s *Store) Time() time.Time { return s.now() }
+
+// now is the store's clock; tests replace it through Now.
+func (s *Store) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
+}
+
+// AddAdminOpts makes an administrator and returns their token, shown once.
+func (s *Store) AddAdminOpts(tenant, name string, role Role, o AdminOpts) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, err := s.tenant(tenant); err != nil {
@@ -281,20 +315,32 @@ func (s *Store) AddAdmin(tenant, name string, role Role) (string, error) {
 	if !ValidRole(role) {
 		return "", fmt.Errorf("unknown role %q", role)
 	}
+	if role == Owner && !o.Expires.IsZero() {
+		return "", fmt.Errorf("an owner cannot be given an expiry: a tenant must always have an owner")
+	}
+	if !o.Expires.IsZero() && !o.Expires.After(s.now()) {
+		return "", fmt.Errorf("the expiry must be in the future")
+	}
 	for _, a := range s.d.Admins {
 		if a.Tenant == tenant && a.Name == name {
 			return "", ErrExists
 		}
 	}
 	tok := newToken()
-	s.d.Admins[hash(tok)] = adminRec{Tenant: tenant, Role: role, Name: name}
+	s.d.Admins[hash(tok)] = adminRec{Tenant: tenant, Role: role, Name: name, Created: s.now().UTC(), Expires: o.Expires.UTC(), Note: o.Note, Support: o.Support}
 	return tok, s.save()
 }
 
 // AdminInfo describes an administrator without their token.
 type AdminInfo struct {
-	Name string `json:"name"`
-	Role Role   `json:"role"`
+	Name     string    `json:"name"`
+	Role     Role      `json:"role"`
+	Created  time.Time `json:"created,omitempty"`
+	Expires  time.Time `json:"expires,omitempty"`
+	Expired  bool      `json:"expired,omitempty"`
+	Note     string    `json:"note,omitempty"`
+	Support  bool      `json:"support,omitempty"`
+	LastUsed time.Time `json:"last_used,omitempty"`
 }
 
 // Admins lists a tenant's administrators, by name.
@@ -304,7 +350,8 @@ func (s *Store) Admins(tenant string) []AdminInfo {
 	out := []AdminInfo{}
 	for _, a := range s.d.Admins {
 		if a.Tenant == tenant {
-			out = append(out, AdminInfo{Name: a.Name, Role: a.Role})
+			out = append(out, AdminInfo{Name: a.Name, Role: a.Role, Created: a.Created, Expires: a.Expires, Expired: !a.Expires.IsZero() && !a.Expires.After(s.now()),
+				Note: a.Note, Support: a.Support, LastUsed: a.LastUsed})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -342,13 +389,46 @@ func (s *Store) RemoveAdmin(tenant, name string) error {
 // Auth maps a bearer token to its tenant and role. The tenant always comes
 // from here, never from the request.
 func (s *Store) Auth(tok string) (tenant string, role Role, name string, ok bool) {
+	h := hash(tok)
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	a, ok := s.d.Admins[hash(tok)]
-	if ok && a.Role == Admin && a.Name == "owner" {
+	a, ok := s.d.Admins[h]
+	now := s.now()
+	stale := ok && now.Sub(a.LastUsed) > time.Minute
+	s.mu.RUnlock()
+	if !ok || (!a.Expires.IsZero() && !a.Expires.After(now)) {
+		return "", "", "", false // unknown, or past its expiry (NFR-023)
+	}
+	if stale { // note when a token was last used, to the minute, without writing the file on every request
+		s.mu.Lock()
+		if cur, still := s.d.Admins[h]; still {
+			cur.LastUsed = now.UTC()
+			s.d.Admins[h] = cur
+			s.save()
+		}
+		s.mu.Unlock()
+	}
+	if a.Role == Admin && a.Name == "owner" {
 		a.Role = Owner // the first token of a tenant created before roles existed was an admin named owner
 	}
-	return a.Tenant, a.Role, a.Name, ok
+	return a.Tenant, a.Role, a.Name, true
+}
+
+// PurgeExpiredAdmins deletes accounts that expired more than grace ago and returns how many. Until then
+// an expired account stays in the list, marked expired, so the customer can see that it existed.
+func (s *Store) PurgeExpiredAdmins(grace time.Duration) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for h, a := range s.d.Admins {
+		if !a.Expires.IsZero() && s.now().Sub(a.Expires) > grace {
+			delete(s.d.Admins, h)
+			n++
+		}
+	}
+	if n > 0 {
+		s.save()
+	}
+	return n
 }
 
 // AdminHashes is for tests that check tokens are not stored in clear.

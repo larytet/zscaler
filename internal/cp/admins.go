@@ -1,9 +1,13 @@
 package cp
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"regexp"
+	"strings"
+	"time"
 
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -15,6 +19,9 @@ func (a *API) createAdmin(w http.ResponseWriter, r *http.Request, c ctxInfo) (an
 	var in struct {
 		Name string     `json:"name"`
 		Role store.Role `json:"role"`
+		// ExpiresInHours makes the account temporary (1 to 720 hours); 0 means it does not expire.
+		ExpiresInHours int    `json:"expires_in_hours"`
+		Note           string `json:"note"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
@@ -25,15 +32,71 @@ func (a *API) createAdmin(w http.ResponseWriter, r *http.Request, c ctxInfo) (an
 	if !store.ValidRole(in.Role) {
 		return nil, fail(400, "invalid", "role must be one of owner, admin, helpdesk, auditor, viewer")
 	}
-	tok, err := a.Store.AddAdmin(c.tenant, in.Name, in.Role)
+	if in.ExpiresInHours < 0 || in.ExpiresInHours > 720 {
+		return nil, fail(400, "invalid", "expires_in_hours must be 0 (never) or 1 to 720")
+	}
+	if len(in.Note) > 200 || strings.ContainsAny(in.Note, "\r\n\x00") {
+		return nil, fail(400, "invalid", "note: one line, at most 200 characters")
+	}
+	return a.makeAdmin(c, in.Name, in.Role, in.ExpiresInHours, in.Note, false)
+}
+
+// makeAdmin creates the account and answers with its token, once. It is used for administrators and for
+// the vendor's time-boxed support access.
+func (a *API) makeAdmin(c ctxInfo, name string, role store.Role, hours int, note string, support bool) (any, error) {
+	var o store.AdminOpts
+	if hours > 0 {
+		o.Expires = a.Store.Time().Add(time.Duration(hours) * time.Hour)
+	}
+	o.Note, o.Support = note, support
+	tok, err := a.Store.AddAdminOpts(c.tenant, name, role, o)
 	if errors.Is(err, store.ErrExists) {
 		return nil, fail(409, "exists", "an administrator with that name exists")
 	}
 	if err != nil {
+		return nil, fail(400, "invalid", err.Error())
+	}
+	after := map[string]any{"role": string(role), "support": support, "note": note}
+	out := map[string]any{"name": name, "role": string(role), "token": tok, "support": support, "note": note}
+	if hours > 0 {
+		after["expires"], out["expires"] = o.Expires.UTC(), o.Expires.UTC()
+	}
+	a.log(c, "admin.create", name, nil, after) // never the token
+	return out, nil
+}
+
+// supportAccess gives the vendor's support staff time-boxed access (NFR-023): a temporary account with a
+// limited role, a reason on record, an end time, and a name that shows in the audit log and the list of
+// administrators for as long as it exists and afterwards until it is purged.
+func (a *API) supportAccess(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	var in struct {
+		Hours  int        `json:"hours"`
+		Role   store.Role `json:"role"`
+		Reason string     `json:"reason"`
+	}
+	if err := decode(r, &in); err != nil {
 		return nil, err
 	}
-	a.log(c, "admin.create", in.Name, nil, map[string]string{"role": string(in.Role)}) // never the token
-	return map[string]string{"name": in.Name, "role": string(in.Role), "token": tok}, nil
+	if in.Hours == 0 {
+		in.Hours = 4
+	}
+	if in.Hours < 1 || in.Hours > 72 {
+		return nil, fail(400, "invalid", "hours must be 1 to 72")
+	}
+	if in.Role == "" {
+		in.Role = store.Auditor
+	}
+	switch in.Role {
+	case store.Auditor, store.Helpdesk, store.Viewer, store.Admin:
+	default:
+		return nil, fail(400, "invalid", "role must be auditor, helpdesk, viewer or admin")
+	}
+	if strings.TrimSpace(in.Reason) == "" || len(in.Reason) > 200 || strings.ContainsAny(in.Reason, "\r\n\x00") {
+		return nil, fail(400, "invalid", "reason is required: one line, at most 200 characters (a ticket number, say)")
+	}
+	b := make([]byte, 4)
+	rand.Read(b)
+	return a.makeAdmin(c, "support-"+hex.EncodeToString(b), in.Role, in.Hours, in.Reason, true)
 }
 
 func (a *API) listAdmins(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
