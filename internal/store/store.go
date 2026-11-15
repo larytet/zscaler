@@ -908,6 +908,7 @@ func (s *Store) Secret(tenant, name string) (Secret, bool) {
 // EDMSet is one exact-data-match list. Only salted hashes are kept; the values are not.
 type EDMSet struct {
 	Name    string    `json:"name"`
+	Kind    string    `json:"kind,omitempty"`   // "values" (default) or "documents"
 	Salt    string    `json:"salt,omitempty"`   // hex; never shown by the API
 	Hashes  []string  `json:"hashes,omitempty"` // never shown by the API
 	Count   int       `json:"count"`
@@ -998,4 +999,54 @@ func (s *Store) DeleteEDM(tenant, name string) error {
 	}
 	delete(t.EDM, name)
 	return s.save()
+}
+
+// PutEDMDocuments replaces a data set with the runs of words of the given documents (index
+// document match). The texts are hashed here and then forgotten.
+func (s *Store) PutEDMDocuments(tenant, name string, docs []string) (runs, skipped int, err error) {
+	if !dlp.ValidEDMName(name) {
+		return 0, 0, fmt.Errorf("invalid data set name")
+	}
+	if len(docs) > dlp.DocMaxSources {
+		return 0, 0, fmt.Errorf("at most %d documents per data set", dlp.DocMaxSources)
+	}
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return 0, 0, err
+	}
+	seen := map[string]bool{}
+	var all []string
+	for _, d := range docs {
+		r := dlp.DocRuns(salt, d)
+		if len(r) == 0 {
+			skipped++
+			continue
+		}
+		for _, h := range r {
+			if !seen[h] {
+				seen[h] = true
+				all = append(all, h)
+			}
+		}
+	}
+	if len(all) == 0 {
+		return 0, skipped, fmt.Errorf("no usable document: each needs at least %d words of text", dlp.DocWords)
+	}
+	if len(all) > dlp.DocMaxRuns {
+		return 0, skipped, fmt.Errorf("too much text: at most %d runs of words per data set", dlp.DocMaxRuns)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return 0, 0, err
+	}
+	if _, exists := t.EDM[name]; !exists && len(t.EDM) >= 5 {
+		return 0, 0, fmt.Errorf("at most 5 data sets")
+	}
+	if t.EDM == nil {
+		t.EDM = map[string]EDMSet{}
+	}
+	t.EDM[name] = EDMSet{Name: name, Kind: "documents", Salt: hex.EncodeToString(salt), Hashes: all, Count: len(all), Skipped: skipped, Updated: time.Now().UTC()}
+	return len(all), skipped, s.save()
 }

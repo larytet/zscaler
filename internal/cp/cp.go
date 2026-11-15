@@ -1098,11 +1098,24 @@ func (a *API) deleteSecret(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 func (a *API) putEDM(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
 	name := r.PathValue("name")
 	var in struct {
-		Values []string `json:"values"`
+		Values    []string `json:"values"`
+		Documents []string `json:"documents"`
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 2<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 4<<20)
 	if err := decode(r, &in); err != nil {
 		return nil, err
+	}
+	if len(in.Documents) > 0 {
+		if len(in.Values) > 0 {
+			return nil, fail(400, "invalid", "send either values or documents, not both")
+		}
+		runs, skipped, err := a.Store.PutEDMDocuments(c.tenant, name, in.Documents)
+		if err != nil {
+			return nil, fail(400, "invalid", err.Error())
+		}
+		a.log(c, "edm.put", name, nil, map[string]any{"kind": "documents", "runs": runs, "skipped": skipped})
+		return map[string]any{"name": name, "runs": runs, "skipped": skipped,
+			"note": fmt.Sprintf("only hashes of runs of %d words are kept; a rule with dlp edm:%s blocks text that repeats about %d words in a row from any document", dlp.DocWords, name, dlp.DocWords+dlp.DocMinRuns-1)}, nil
 	}
 	if len(in.Values) > dlp.EDMMaxValues {
 		return nil, fail(400, "invalid", fmt.Sprintf("at most %d values per data set", dlp.EDMMaxValues))

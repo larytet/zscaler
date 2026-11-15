@@ -2132,9 +2132,14 @@ func TestScn020ExactDataMatch(t *testing.T) {
 			t.Fatalf("%s showed values or hashes: %s", p, b)
 		}
 	}
+	const priceList = "Acme Corp price list for 2027. The enterprise plan costs forty nine dollars per seat per month, billed annually, with a minimum of ten seats."
+	s.must("PUT", "/v1/edm/pricelist", map[string]any{"documents": []string{priceList}}, s.token)
+	if _, b := s.api("GET", "/v1/edm", nil, s.token); strings.Contains(string(b), "enterprise plan") {
+		t.Fatalf("the document text was returned: %s", b)
+	}
 	s.ifMatch = "1"
 	s.must("PUT", "/v1/policies/web", map[string]any{"default_action": "allow", "rules": []map[string]any{{
-		"id": "no-customer-data", "priority": 10, "action": "deny", "match": map[string]any{"dlp": []string{"edm:customers"}}}}}, s.token)
+		"id": "no-customer-data", "priority": 10, "action": "deny", "match": map[string]any{"dlp": []string{"edm:customers", "edm:pricelist"}}}}}, s.token)
 	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
 	req, _ := http.NewRequest("GET", s.adminU+"/v1/inspection/ca.pem", nil)
 	req.Header.Set("Authorization", "Bearer "+s.token)
@@ -2188,6 +2193,9 @@ func TestScn020ExactDataMatch(t *testing.T) {
 	before := reached.Load()
 	if code, _ := post(`{"mail":"Jane.Doe@Example.com"}`); code != 403 {
 		t.Fatalf("a listed address in other case must be blocked: %d", code)
+	}
+	if code, _ := post(`{"text":"fyi: ` + priceList + `"}`); code != 403 {
+		t.Fatalf("a pasted copy of an indexed document must be blocked: %d", code)
 	}
 	if code, _ := post(`{"customer":"CUST-009999"}`); code != 200 {
 		t.Fatalf("a value not on the list must pass: %d", code)

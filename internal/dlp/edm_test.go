@@ -84,3 +84,49 @@ func itoa(n int) string {
 	}
 	return string(b)
 }
+
+const doc = `Acme Corp price list for 2027. The enterprise plan costs forty nine dollars per seat per month,
+billed annually, with a minimum of ten seats. Partners receive a discount of twenty percent on all plans
+and the discount is confidential and must not be shared outside the partner programme.`
+
+func docSet(t *testing.T) *EDM {
+	salt := []byte("doc-salt")
+	runs := DocRuns(salt, doc)
+	if len(runs) < 20 {
+		t.Fatalf("only %d runs", len(runs))
+	}
+	return NewDocSet(salt, runs)
+}
+
+func TestDocumentMatchFindsCopiesNotUnrelatedText(t *testing.T) { // AGT-020 (DATA-006, documents)
+	e := docSet(t)
+	for name, c := range map[string]struct {
+		body string
+		want bool
+	}{
+		"verbatim":                    {doc, true},
+		"inside other text":           {"hi team, " + doc + " thanks, bob", true},
+		"case and punctuation":        {strings.ToUpper(strings.ReplaceAll(doc, ",", ";")), true},
+		"json escaped lines":          {strings.ReplaceAll(doc, "\n", `\n`), true},
+		"a ten word excerpt":          {"the discount is confidential and must not be shared outside the partner programme", true},
+		"a short phrase":              {"the discount is confidential", false},
+		"unrelated":                   {"the quick brown fox jumps over the lazy dog many times in a row today", false},
+		"a word changed in every run": {"Acme Corp price list FOR 2028 The enterprise tier costs fifty nine dollars PER seat per month; billed yearly, with a maximum of twelve seats. Partners get a rebate of thirty percent on all plans and the rebate is private and should not be shared outside the reseller programme.", false},
+		"empty":                       {"", false},
+	} {
+		if got := e.Found([]byte(c.body)); got != c.want {
+			t.Errorf("%s: got %v want %v", name, got, c.want)
+		}
+	}
+	if len(DocRuns([]byte("s"), "too short to matter")) != 0 {
+		t.Fatal("a document shorter than a run has nothing to match")
+	}
+}
+
+func TestDocumentSpeed(t *testing.T) {
+	e := docSet(t)
+	body := []byte(strings.Repeat("lorem ipsum dolor sit amet consectetur adipiscing elit ", 20000)) // about 1 MB
+	if e.Found(body) {
+		t.Fatal("false match")
+	}
+}

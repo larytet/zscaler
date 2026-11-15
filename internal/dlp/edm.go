@@ -41,6 +41,7 @@ type edmKey [16]byte
 type EDM struct {
 	salt []byte
 	set  map[edmKey]struct{}
+	doc  bool // a document set: matched by runs of words, not by single tokens
 }
 
 func isTokenByte(c byte) bool {
@@ -130,6 +131,9 @@ func (e *EDM) Found(body []byte) bool {
 	if e == nil || len(e.set) == 0 {
 		return false
 	}
+	if e.doc {
+		return e.foundDoc(body)
+	}
 	i := 0
 	for i < len(body) {
 		for i < len(body) && !isTokenByte(body[i]) {
@@ -175,4 +179,104 @@ func ScanWith(body []byte, sets map[string]*EDM) []string {
 	}
 	sortStrings(hits)
 	return hits
+}
+
+// Index document match (DATA-006, second part). An organisation gives the platform documents it
+// must not lose (a price list, a contract template, source files). Each is cut into overlapping
+// runs of eight words; only salted hashes of the runs are kept. A request or response that
+// repeats at least DocMinRuns of those runs is reported like a value match.
+//
+// Limits: only text (the platform cannot read PDF or Word files, the admin pastes the text);
+// copying that changes more than one word in every eight, or pasting only a short excerpt, is
+// not found; matching is case-insensitive and ignores punctuation.
+
+const (
+	DocWords      = 8
+	DocMinRuns    = 3     // distinct matching runs needed to call it a copy (about ten words in a row)
+	DocMaxRuns    = 50000 // per data set
+	DocMaxSources = 20
+)
+
+// words splits text into lower-case alphanumeric words.
+func words(b []byte) [][]byte {
+	var out [][]byte
+	i := 0
+	for i < len(b) {
+		for i < len(b) && !isAlnum(b[i]) {
+			i++
+		}
+		j := i
+		for j < len(b) && isAlnum(b[j]) {
+			j++
+		}
+		if j > i {
+			w := make([]byte, j-i)
+			for k := range w {
+				c := b[i+k]
+				if c >= 'A' && c <= 'Z' {
+					c += 'a' - 'A'
+				}
+				w[k] = c
+			}
+			out = append(out, w)
+		}
+		i = j
+	}
+	return out
+}
+
+func isAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c >= 0x80
+}
+
+func runKey(salt []byte, ws [][]byte) edmKey {
+	h := sha256.New()
+	h.Write(salt)
+	for i, w := range ws {
+		if i > 0 {
+			h.Write([]byte{' '})
+		}
+		h.Write(w)
+	}
+	var k edmKey
+	copy(k[:], h.Sum(nil))
+	return k
+}
+
+// DocRuns returns the distinct hashed runs of a document (hex), or none if it is shorter than
+// DocWords words.
+func DocRuns(salt []byte, text string) []string {
+	ws := words([]byte(text))
+	seen := map[edmKey]bool{}
+	var out []string
+	for i := 0; i+DocWords <= len(ws); i++ {
+		k := runKey(salt, ws[i:i+DocWords])
+		if !seen[k] {
+			seen[k] = true
+			out = append(out, encodeKey(k))
+		}
+	}
+	return out
+}
+
+// NewDocSet compiles stored runs into a set that matches copies of the documents.
+func NewDocSet(salt []byte, runs []string) *EDM {
+	e := NewEDM(salt, runs)
+	e.doc = true
+	return e
+}
+
+func (e *EDM) foundDoc(body []byte) bool {
+	ws := words(body)
+	hits := map[edmKey]bool{}
+	for i := 0; i+DocWords <= len(ws); i++ {
+		k := runKey(e.salt, ws[i:i+DocWords])
+		if _, ok := e.set[k]; ok {
+			hits[k] = true
+			if len(hits) >= DocMinRuns {
+				return true
+			}
+		}
+	}
+	return false
 }

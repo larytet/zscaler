@@ -359,3 +359,25 @@ func TestExactDataMatchSetsKeepOnlyHashes(t *testing.T) { // AGT-017 (store)
 		t.Fatal("deleting a set a rule still uses must be refused")
 	}
 }
+
+func TestDocumentSetsKeepOnlyHashedRuns(t *testing.T) { // AGT-020 (store)
+	s, _, _ := twoTenants(t)
+	text := "Acme Corp price list for 2027. The enterprise plan costs forty nine dollars per seat per month, billed annually."
+	runs, skipped, err := s.PutEDMDocuments("a", "pricelist", []string{text, "too short"})
+	if err != nil || runs < 10 || skipped != 1 {
+		t.Fatalf("%d %d %v", runs, skipped, err)
+	}
+	if blob, _ := json.Marshal(s.Snapshot().Tenants["a"]); strings.Contains(strings.ToLower(string(blob)), "enterprise") {
+		t.Fatal("document text was stored")
+	}
+	list, _ := s.EDMSets("a")
+	if len(list) != 1 || list[0].Kind != "documents" || list[0].Hashes != nil {
+		t.Fatalf("%+v", list)
+	}
+	if _, _, err := s.PutEDMDocuments("a", "empty", []string{"short"}); err == nil {
+		t.Fatal("a set with no usable document must be refused")
+	}
+	if _, _, err := s.PutEDMDocuments("a", "x", make([]string, 21)); err == nil {
+		t.Fatal("too many documents accepted")
+	}
+}

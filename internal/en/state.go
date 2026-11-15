@@ -96,7 +96,11 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		}
 		for _, e := range t.EDM {
 			if salt, err := hex.DecodeString(e.Salt); err == nil {
-				tv.edm[e.Name] = dlp.NewEDM(salt, e.Hashes)
+				if e.Kind == "documents" {
+					tv.edm[e.Name] = dlp.NewDocSet(salt, e.Hashes)
+				} else {
+					tv.edm[e.Name] = dlp.NewEDM(salt, e.Hashes)
+				}
 			}
 		}
 		if t.Inspect != nil && t.Inspect.Enabled {
