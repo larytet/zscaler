@@ -16,10 +16,11 @@ import (
 
 	"github.com/larytet/zscaler/internal/agent"
 	"github.com/larytet/zscaler/internal/cli"
+	"github.com/larytet/zscaler/internal/devenv"
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ztx-agent [--config file] [--dir dir] enrol|enrol-service|enrol-workspace|workspace|run|status")
+	fmt.Fprintln(os.Stderr, "usage: ztx-agent [--config file] [--dir dir] enrol|enrol-service|enrol-workspace|workspace|dev-env|run|status")
 	os.Exit(2)
 }
 
@@ -116,6 +117,41 @@ func main() {
 		}
 		if err := a.RunWorkspace(ctx, o); err != nil {
 			log.Fatal(err)
+		}
+	case "dev-env":
+		if err := a.Load(); err != nil {
+			log.Fatalf("%v (run `ztx-agent enrol` first)", err)
+		}
+		caPEM, err := a.FetchInspectionCA()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if caPEM == nil {
+			fmt.Fprintln(os.Stderr, "TLS inspection is off for this organisation: developer tools need nothing.")
+			return
+		}
+		dir := filepath.Join(*dir, "devenv")
+		os.MkdirAll(dir, 0o700)
+		caFile, bundleFile := filepath.Join(dir, "inspection-ca.pem"), filepath.Join(dir, "ca-bundle.pem")
+		bundle, used := devenv.BuildBundle(caPEM, devenv.SystemBundlePaths)
+		os.WriteFile(caFile, caPEM, 0o600)
+		os.WriteFile(bundleFile, bundle, 0o600)
+		httpAddr := a.Cfg.HTTPAddr
+		if httpAddr == "" {
+			httpAddr = "127.0.0.1:3129"
+		}
+		if used == "" {
+			fmt.Fprintln(os.Stderr, "# WARNING: no system root bundle was found, so tools that REPLACE their roots are not configured (they would lose the public roots).")
+		} else {
+			fmt.Fprintln(os.Stderr, "# public roots taken from", used)
+		}
+		fmt.Fprintln(os.Stderr, "# Run:  eval \"$(ztx-agent dev-env)\"   (the agent must be running)")
+		for _, l := range devenv.Exports(caFile, bundleFile, used != "", "http://"+httpAddr) {
+			fmt.Println(l)
+		}
+		fmt.Fprintln(os.Stderr, "# Not covered:")
+		for _, u := range devenv.Uncovered {
+			fmt.Fprintln(os.Stderr, "#  -", u)
 		}
 	case "enrol-service":
 		tok, err := cli.Secret(*tokenFile, "ZTX_AGENT_TOKEN")

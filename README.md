@@ -104,6 +104,8 @@ Workspace browser (unmanaged devices): enrol it with `ztx-agent --dir ~/.ztx-wor
 
 TLS inspection: `PUT /v1/inspection {"enabled": true, "exempt": ["bank.example"]}` decrypts HTTPS (except the exempt domains) so web rules can use `paths` and `methods`. Download the tenant's inspection certificate from `GET /v1/inspection/ca.pem` and install it on devices (system or browser trust store); until then inspected sites show certificate errors. Sites that refuse a replaced certificate go on the exempt list; the decision log records `inspection-handshake-failed` for them. It is off by default. No WebSockets or HTTP/2 through inspected tunnels.
 
+Developer tools (needs inspection on): `eval "$(ztx-agent dev-env)"` points curl, git, pip, npm, Python, Go, AWS CLI and others at the proxy and at the tenant's inspection certificate (with the public roots kept). Java tools, Docker's daemon and certificate-pinning tools need manual steps; the command lists them.
+
 Data loss prevention (needs inspection on): a web rule can carry `"dlp": ["credit-card", "us-ssn", "iban", "aws-access-key", "private-key", "github-token"]` and block uploads whose body contains any of them. Only the data type is logged, never the data. It is pattern based and basic, scans bodies up to 1 MiB and does not open archives or documents.
 
 Just-in-time access: give a rule the action `require_approval` (it must name its apps). The first attempt is blocked and opens a request (emailed to the alert recipients when SMTP is set). Approve it with `POST /v1/approvals/{id}/approve {"minutes": 60}` or in the console; access starts within seconds and ends on its own, or earlier with `POST /v1/approvals/{id}/end`.

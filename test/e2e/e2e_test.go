@@ -1668,3 +1668,116 @@ func TestScn015InspectionTrustIsConfinedToTheWorkspace(t *testing.T) {
 		return false
 	})
 }
+
+// parseExports reads `export NAME='value'` lines as printed by `ztx-agent dev-env`.
+func parseExports(out string) map[string]string {
+	m := map[string]string{}
+	for _, l := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(l, "export "); ok {
+			if k, v, ok := strings.Cut(rest, "="); ok {
+				m[k] = strings.Trim(strings.ReplaceAll(v, `'\''`, "'"), "'")
+			}
+		}
+	}
+	return m
+}
+
+func envList(m map[string]string) []string {
+	var e []string
+	for k, v := range m {
+		e = append(e, k+"="+v)
+	}
+	return e
+}
+
+// SCN-016 (ZIA-034): real curl and real Python are made to work through TLS inspection by the
+// environment `ztx-agent dev-env` prints, and fail without it.
+func TestScn016DeveloperToolsThroughInspection(t *testing.T) {
+	curl, err := exec.LookPath("curl")
+	if err != nil {
+		t.Skip("curl is not installed")
+	}
+	py, _ := exec.LookPath("python3")
+	ip := lanIP()
+	if ip == "" {
+		t.Skip("no non-loopback address")
+	}
+	originCA, _ := pki.NewCA("origin CA", nil)
+	okey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	oder, _ := originCA.SignServer(&okey.PublicKey, ip, time.Hour)
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "DEV-TOOL-PAGE") }))
+	ln, err := net.Listen("tcp", ip+":0")
+	if err != nil {
+		t.Skip(err.Error())
+	}
+	origin.Listener = ln
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{oder}, PrivateKey: okey}}}
+	origin.StartTLS()
+	defer origin.Close()
+	hp := ln.Addr().String()
+	caFile := filepath.Join(t.TempDir(), "origin-ca.pem")
+	os.WriteFile(caFile, originCA.PEM(), 0o600)
+
+	s := newStack(t, "--lab-allow-dial", hp, "--lab-upstream-ca", caFile)
+	a := s.newAgent(t, "dev")
+	s.runInst(a)
+	eventually(t, "the agent", 25*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+
+	devEnv := func() (string, string) {
+		cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), "--dir", a.dir, "dev-env")
+		cmd.Env = append(os.Environ(), s.agentEnv()...)
+		var so, se bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &so, &se
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("dev-env: %v\n%s", err, se.String())
+		}
+		return so.String(), se.String()
+	}
+	// with inspection off there is nothing to configure
+	if out, msg := devEnv(); strings.TrimSpace(out) != "" || !strings.Contains(msg, "off") {
+		t.Fatalf("inspection off: stdout %q stderr %q", out, msg)
+	}
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
+	var exports map[string]string
+	eventually(t, "dev-env to produce an environment", 15*time.Second, func() bool {
+		out, _ := devEnv()
+		exports = parseExports(out)
+		return exports["HTTPS_PROXY"] != ""
+	})
+	// the agent's proxy address is in the exports: use the one this agent actually listens on
+	proxy := fmt.Sprintf("http://127.0.0.1:%d", a.ports["http"])
+	exports["HTTPS_PROXY"], exports["HTTP_PROXY"], exports["https_proxy"], exports["http_proxy"] = proxy, proxy, proxy, proxy
+	url := "https://" + hp + "/"
+	base := append(os.Environ(), "HOME="+t.TempDir()) // no personal curl or git config
+
+	// control: the proxy but no CA
+	ctl := exec.Command(curl, "-sS", "--max-time", "20", url)
+	ctl.Env = append(base, "HTTPS_PROXY="+proxy)
+	if out, err := ctl.CombinedOutput(); err == nil || strings.Contains(string(out), "DEV-TOOL-PAGE") {
+		t.Fatalf("curl trusted the inspection certificate without the environment: %s", out)
+	}
+	// with the environment
+	c := exec.Command(curl, "-sS", "--max-time", "20", url)
+	c.Env = append(base, envList(exports)...)
+	if out, err := c.CombinedOutput(); err != nil || string(out) != "DEV-TOOL-PAGE" {
+		t.Fatalf("curl with the generated environment: %v %q\nvars: %v", err, out, exports)
+	}
+	// a normal (non-inspected) HTTPS site is still reachable with the replaced roots: the public roots are in the bundle
+	bundle, _ := os.ReadFile(exports["CURL_CA_BUNDLE"])
+	if strings.Count(string(bundle), "BEGIN CERTIFICATE") < 2 {
+		t.Fatal("the bundle holds no public roots, so every other HTTPS site would break for the tool")
+	}
+	if py != "" {
+		script := "import urllib.request,sys\nprint(urllib.request.urlopen(sys.argv[1], timeout=20).read().decode())"
+		pc := exec.Command(py, "-c", script, url)
+		pc.Env = append(base, envList(exports)...)
+		if out, err := pc.CombinedOutput(); err != nil || !strings.Contains(string(out), "DEV-TOOL-PAGE") {
+			t.Fatalf("python with the generated environment: %v %s", err, out)
+		}
+		pctl := exec.Command(py, "-c", script, url)
+		pctl.Env = append(base, "HTTPS_PROXY="+proxy)
+		if out, err := pctl.CombinedOutput(); err == nil || strings.Contains(string(out), "DEV-TOOL-PAGE") {
+			t.Fatalf("python trusted the inspection certificate without the environment: %s", out)
+		}
+	}
+}

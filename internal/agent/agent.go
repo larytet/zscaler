@@ -275,6 +275,30 @@ func (a *Agent) InspectionSPKI() (string, error) {
 	return out.SPKI, nil
 }
 
+// FetchInspectionCA downloads the tenant's inspection CA certificate. It returns nil, nil when
+// inspection is off.
+func (a *Agent) FetchInspectionCA() ([]byte, error) {
+	resp, err := a.enrolClient(true).Get(a.Cfg.EnrolURL + "/enrol/inspection-ca")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == 404 {
+		return nil, nil
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("agent: control plane said %d", resp.StatusCode)
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Contains(b, []byte("BEGIN CERTIFICATE")) || bytes.Contains(b, []byte("PRIVATE KEY")) {
+		return nil, errors.New("agent: the control plane did not return a plain certificate")
+	}
+	return b, nil
+}
+
 // Load restores a previously issued certificate from disk.
 func (a *Agent) Load() error {
 	k, err := a.loadKey()

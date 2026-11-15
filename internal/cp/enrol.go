@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -70,6 +71,7 @@ func (e *Enrol) Handler() http.Handler {
 	m.HandleFunc("POST /enrol/connector", e.connector)
 	m.HandleFunc("GET /enrol/targets", e.targets)
 	m.HandleFunc("GET /enrol/inspection", e.inspection)
+	m.HandleFunc("GET /enrol/inspection-ca", e.inspectionCA)
 	m.HandleFunc("POST /enrol/en", e.enrolEN)
 	m.HandleFunc("POST /enrol/service", e.enrolService)
 	m.HandleFunc("GET /sync/state", e.syncState)
@@ -475,4 +477,21 @@ func (e *Enrol) inspection(w http.ResponseWriter, r *http.Request) {
 	}
 	spki, on := e.API.Store.InterceptSPKI(id.Tenant)
 	writeJSON(w, 200, map[string]any{"enabled": on, "spki_sha256": spki})
+}
+
+// inspectionCA gives a device the tenant's inspection CA certificate (never a key), so developer
+// tools can be told to trust it. 404 while inspection is off, so nothing is installed needlessly.
+func (e *Enrol) inspectionCA(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := e.peer(r)
+	if !ok || (id.Role != pki.RoleDevice && id.Role != pki.RoleWorkspace) {
+		writeErr(w, fail(401, "unauthenticated", "a valid device certificate is required"))
+		return
+	}
+	cfg, err := e.API.Store.Inspection(id.Tenant)
+	if err != nil || !cfg.Enabled || cfg.CACert == "" {
+		writeErr(w, fail(404, "not_found", "TLS inspection is not enabled for this tenant"))
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	io.WriteString(w, cfg.CACert)
 }

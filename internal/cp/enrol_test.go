@@ -844,3 +844,30 @@ func TestInspectionPinEndpoint(t *testing.T) { // WB-003 groundwork
 		t.Fatalf("connector certificate: %d", code)
 	}
 }
+
+func TestInspectionCAEndpointForDevices(t *testing.T) { // ZIA-034
+	e := newEnrolEnv(t)
+	k, pub := newKey(t)
+	tok := e.idp.Sign("k1", e.idp.Good("u1", "u1@example.com", "n1", "all-staff"))
+	_, b := e.post("/enrol/device", map[string]any{"tenant": "a", "id_token": tok, "nonce": "n1", "public_key": pub}, nil)
+	var out certOut
+	json.Unmarshal(b, &out)
+	if code, _ := e.get("/enrol/inspection-ca", tlsCert(t, out, k)); code != 404 {
+		t.Fatalf("CA offered while inspection is off: %d", code)
+	}
+	e.api.Store.SetInspection("a", true, nil)
+	code, body := e.get("/enrol/inspection-ca", tlsCert(t, out, k))
+	if code != 200 || !strings.Contains(string(body), "BEGIN CERTIFICATE") || strings.Contains(string(body), "PRIVATE KEY") {
+		t.Fatalf("%d %s", code, body)
+	}
+	if code, _ := e.get("/enrol/inspection-ca", nil); code != 401 {
+		t.Fatalf("no certificate: %d", code)
+	}
+	// another tenant's device gets its own CA, never this one
+	e.api.Store.SetInspection("b", true, nil)
+	ca, _ := e.api.Store.Inspection("a")
+	cb, _ := e.api.Store.Inspection("b")
+	if ca.CACert == cb.CACert {
+		t.Fatal("tenants share a CA")
+	}
+}
