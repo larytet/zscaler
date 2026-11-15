@@ -1299,3 +1299,57 @@ func TestCloudAppsEndpoints(t *testing.T) { // AGT-031 (ZIA-011)
 		t.Fatalf("%s", ab)
 	}
 }
+
+func TestInspectionManagedExemptionsEndpoint(t *testing.T) { // AGT-032 (ZIA-032)
+	e := newEnrolEnv(t)
+	c, b, _ := e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": true})
+	var v struct {
+		Managed bool     `json:"managed_exemptions"`
+		Cats    []string `json:"exempt_categories"`
+		Domains []string `json:"managed_domains"`
+		Notes   []string
+	}
+	json.Unmarshal(b, &v)
+	if c != 200 || !v.Managed || len(v.Cats) != 2 || len(v.Domains) < 5 || len(v.Notes) != 2 || !strings.Contains(strings.Join(v.Notes, " "), "ships no banking or health list") {
+		t.Fatalf("by default the managed exemptions are on, and the limits are stated: %d %s", c, b)
+	}
+	if strings.Contains(string(b), "BEGIN") || strings.Contains(string(b), "ca_key") {
+		t.Fatalf("a key or certificate in the answer: %s", b)
+	}
+	// override: the built-in list off, other categories
+	c, b, _ = e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": true, "managed_exemptions": false, "exempt_categories": []string{"Banking", "legal"}})
+	json.Unmarshal(b, &v)
+	if c != 200 || v.Managed || len(v.Cats) != 2 || v.Cats[0] != "banking" || v.Cats[1] != "legal" {
+		t.Fatalf("%d %s", c, b)
+	}
+	// a later update that does not mention them keeps them
+	e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": true, "exempt": []string{"x.example"}})
+	if _, b, _ = e.call("GET", "/v1/inspection", e.adminA, nil); !strings.Contains(string(b), `"managed_exemptions":false`) || !strings.Contains(string(b), `"legal"`) {
+		t.Fatalf("%s", b)
+	}
+	// an explicit empty list means none
+	e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": true, "exempt_categories": []string{}})
+	json.Unmarshal(mustBody(e.call("GET", "/v1/inspection", e.adminA, nil)), &v)
+	if len(v.Cats) != 0 {
+		t.Fatalf("an empty list is no categories: %v", v.Cats)
+	}
+	// the nodes' snapshot carries the effective settings
+	snap := e.api.Store.Snapshot().Tenants["a"]
+	if snap == nil || snap.Inspect == nil || !snap.Inspect.ManagedOff || len(snap.Inspect.ExemptCats) != 0 {
+		t.Fatalf("%+v", snap)
+	}
+	for name, body := range map[string]map[string]any{
+		"bad category":   {"enabled": true, "exempt_categories": []string{"a b"}},
+		"empty category": {"enabled": true, "exempt_categories": []string{""}},
+		"too many":       {"enabled": true, "exempt_categories": make([]string, 21)},
+	} {
+		if c, _, _ := e.call("PUT", "/v1/inspection", e.adminA, body); c != 400 {
+			t.Errorf("%s: %d", name, c)
+		}
+	}
+	if _, b, _ := e.call("GET", "/v1/inspection", e.adminB, nil); !strings.Contains(string(b), `"managed_exemptions":true`) {
+		t.Fatalf("tenant b keeps the defaults: %s", b)
+	}
+}
+
+func mustBody(_ int, b []byte, _ http.Header) []byte { return b }

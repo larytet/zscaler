@@ -23,6 +23,7 @@ import (
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/cloudapps"
 	"github.com/larytet/zscaler/internal/dlp"
+	"github.com/larytet/zscaler/internal/exemptions"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/privacy"
@@ -703,14 +704,21 @@ type InspectCfg struct {
 	// LeafKey is the one key every inspection certificate of this tenant is minted with, so its
 	// public-key hash is stable and the workspace browser can trust it (and only it).
 	LeafKey string `json:"leaf_key,omitempty"`
+	// ManagedOff turns the built-in list of pinned applications off (it is on by default). ExemptCats are
+	// the categories never decrypted; nil means the defaults (banking and health), an empty list none.
+	ManagedOff bool      `json:"managed_off,omitempty"`
+	ExemptCats *[]string `json:"exempt_categories,omitempty"`
 }
 
 type InspectSnap struct {
 	Enabled bool
 	Exempt  []string
-	CACert  string
-	CAKey   string
-	LeafKey string
+	// ManagedOff and ExemptCats are the effective managed-exemption settings (ZIA-032).
+	ManagedOff bool
+	ExemptCats []string
+	CACert     string
+	CAKey      string
+	LeafKey    string
 }
 
 type Snapshot struct {
@@ -738,7 +746,8 @@ func (s *Store) Snapshot() *Snapshot {
 			}
 		}
 		if t.Inspect.Enabled && t.Inspect.CAKey != "" {
-			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey, LeafKey: t.Inspect.LeafKey}
+			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey, LeafKey: t.Inspect.LeafKey,
+				ManagedOff: t.Inspect.ManagedOff, ExemptCats: t.Inspect.EffectiveExemptCategories()}
 		}
 		for _, e := range t.EDM {
 			ts.EDM = append(ts.EDM, e)
@@ -1475,4 +1484,30 @@ func (s *Store) DeleteCloudApp(tenant, id string) error {
 	}
 	delete(t.CloudApps, id)
 	return s.save()
+}
+
+// SetInspectionManaged sets the managed-exemption options. A nil cats leaves the categories as they are.
+func (s *Store) SetInspectionManaged(tenant string, managedOff *bool, cats *[]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	if managedOff != nil {
+		t.Inspect.ManagedOff = *managedOff
+	}
+	if cats != nil {
+		c := append([]string(nil), *cats...)
+		t.Inspect.ExemptCats = &c
+	}
+	return s.save()
+}
+
+// EffectiveExemptCategories returns the categories never decrypted: the tenant's choice, or the defaults.
+func (c InspectCfg) EffectiveExemptCategories() []string {
+	if c.ExemptCats != nil {
+		return append([]string{}, *c.ExemptCats...)
+	}
+	return append([]string{}, exemptions.DefaultCategories...)
 }

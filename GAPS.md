@@ -42,6 +42,18 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G10 | NFR-012 | Per-tenant fail-open or fail-closed setting, documented and tested | **done (S31)** for two faults: a node cut off from the control plane, and a node that cannot write its log; other faults are not covered |
 | G11 | ZIA-011 | Cloud app control: a catalogue of apps with actions (upload, post, share) as rule conditions | **done (S32)**; the built-in catalogue is small and unverified against the live services; no explicit-allow-skips-URL-filtering cascade; no instance or tenant awareness |
 
+## Work queue, second round (written after the first was finished)
+
+| # | Requirement | Gap | State |
+|---|---|---|---|
+| G12 | ZIA-032, SMB-022 | Automatic exemption of pinned applications, banking and health from TLS inspection, with admin override | **done (S33)**; the built-in pinned list is small and unverified; banking and health depend on a category list the platform does not ship |
+| G13 | NFR-023 | Administrator and vendor support access that is time-boxed (tokens that expire), logged and visible to the customer | queued |
+| G14 | SMB-002 | Safe-defaults pack that also turns inspection on with the managed exemptions, refuses uploads to file-sharing apps and executables | queued |
+| G15 | NFR-024 | Reproducible, checksummed release build with an SBOM | queued |
+| G16 | INT-006 | An OpenAPI description of every admin API route, generated from the route table | queued |
+| G17 | NFR-030 | Data subject access and erasure: export what is held about a person, and delete it | queued |
+| G18 | ADM-001 | Console simple mode (users, apps, alerts) | queued, a console change |
+
 ## Not feasible without a new subsystem or an outside party (stays a gap)
 
 - **Network and threat engines:** FW-001..003, FW-006 (IPS, Snort rules), FW-007 and ZIA-022a (DNS service), ZIA-020 (antivirus), ZIA-021, ZIA-023 (sandbox), ZIA-005 and ZIA-010 (cloud firewall and layered order), FW-011.

@@ -32,20 +32,22 @@ import (
 const DefaultSyncEvery = 2 * time.Second
 
 type tenantView struct {
-	segs    map[string]broker.Segment
-	users   map[string]policy.User
-	pols    map[policy.Kind]*policy.Policy
-	revoked map[string]bool
-	grants  map[string]time.Time // user|app -> expiry
-	inspect bool
-	exempt  []string
-	ca      *pki.CA
-	leafKey *ecdsa.PrivateKey
-	secrets map[string]store.Secret
-	edm     map[string]*dlp.EDM
-	tenancy *tenancy.Config
-	failure store.FailureMode
-	catalog *cloudapps.Catalog
+	segs       map[string]broker.Segment
+	users      map[string]policy.User
+	pols       map[policy.Kind]*policy.Policy
+	revoked    map[string]bool
+	grants     map[string]time.Time // user|app -> expiry
+	inspect    bool
+	managedOff bool
+	exemptCats []string
+	exempt     []string
+	ca         *pki.CA
+	leafKey    *ecdsa.PrivateKey
+	secrets    map[string]store.Secret
+	edm        map[string]*dlp.EDM
+	tenancy    *tenancy.Config
+	failure    store.FailureMode
+	catalog    *cloudapps.Catalog
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -122,6 +124,7 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		if t.Inspect != nil && t.Inspect.Enabled {
 			if ca, err := pki.CAFromPEM([]byte(t.Inspect.CACert), []byte(t.Inspect.CAKey), nil); err == nil {
 				tv.inspect, tv.exempt, tv.ca = true, t.Inspect.Exempt, ca
+				tv.managedOff, tv.exemptCats = t.Inspect.ManagedOff, t.Inspect.ExemptCats
 				if blk, _ := pem.Decode([]byte(t.Inspect.LeafKey)); blk != nil {
 					if k, err := x509.ParseECPrivateKey(blk.Bytes); err == nil {
 						tv.leafKey = k
@@ -248,6 +251,15 @@ func (s *SyncState) Secret(tenant, name string) (store.Secret, bool) {
 		return sc, ok
 	}
 	return store.Secret{}, false
+}
+
+// InspectionManaged reports the tenant's managed exemptions: whether the built-in list of pinned
+// applications is on, and the categories that are never decrypted (ZIA-032).
+func (s *SyncState) InspectionManaged(tenant string) (bool, []string) {
+	if t := s.t(tenant); t != nil && t.inspect {
+		return !t.managedOff, t.exemptCats
+	}
+	return false, nil
 }
 
 // InterceptKey is the tenant's stable key for inspection certificates (nil if none was shipped).

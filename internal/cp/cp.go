@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/larytet/zscaler/internal/dlp"
+	"github.com/larytet/zscaler/internal/exemptions"
 	"github.com/larytet/zscaler/internal/policydiff"
 	"io"
 	"net/http"
@@ -964,9 +965,25 @@ func (a *API) putInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 	var in struct {
 		Enabled bool     `json:"enabled"`
 		Exempt  []string `json:"exempt"`
+		// Managed exemptions (ZIA-032): the built-in list of pinned applications is on unless turned off,
+		// and the categories never decrypted default to banking and health.
+		ManagedExemptions *bool     `json:"managed_exemptions"`
+		ExemptCategories  *[]string `json:"exempt_categories"`
 	}
 	if err := decode(r, &in); err != nil {
 		return nil, err
+	}
+	if in.ExemptCategories != nil {
+		if len(*in.ExemptCategories) > 20 {
+			return nil, fail(400, "invalid", "at most 20 exempt categories")
+		}
+		for i, c := range *in.ExemptCategories {
+			c = strings.ToLower(strings.TrimSpace(c))
+			if c == "" || len(c) > 40 || strings.ContainsAny(c, " /:@*\r\n") {
+				return nil, fail(400, "invalid", "a category is one lower-case word such as banking")
+			}
+			(*in.ExemptCategories)[i] = c
+		}
 	}
 	if len(in.Exempt) > 500 {
 		return nil, fail(400, "invalid", "at most 500 exempt domains")
@@ -981,9 +998,33 @@ func (a *API) putInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 	if err := a.Store.SetInspection(c.tenant, in.Enabled, in.Exempt); err != nil {
 		return nil, err
 	}
+	var off *bool
+	if in.ManagedExemptions != nil {
+		v := !*in.ManagedExemptions
+		off = &v
+	}
+	if err := a.Store.SetInspectionManaged(c.tenant, off, in.ExemptCategories); err != nil {
+		return nil, err
+	}
 	a.log(c, "inspection.update", "tls-inspection", nil, map[string]any{"enabled": in.Enabled, "exempt": len(in.Exempt)})
 	cfg, _ := a.Store.Inspection(c.tenant)
-	return cfg, nil
+	return inspectionView(cfg), nil
+}
+
+// inspectionView is what the admin sees of the inspection setting: the effective managed exemptions
+// included, and what they cannot do.
+func inspectionView(cfg store.InspectCfg) map[string]any {
+	exempt := cfg.Exempt
+	if exempt == nil {
+		exempt = []string{}
+	}
+	return map[string]any{"enabled": cfg.Enabled, "exempt": exempt,
+		"managed_exemptions": !cfg.ManagedOff, "managed_domains": exemptions.Pinned,
+		"exempt_categories": cfg.EffectiveExemptCategories(),
+		"notes": []string{
+			"Never decrypted: your own exempt list; when managed_exemptions is true, the built-in list of applications that break when intercepted (managed_domains, hand-made and not exhaustive); and sites in exempt_categories.",
+			"A category exemption covers the sites that the enforcement node's category list puts in that category. This platform ships no banking or health list: without one, those categories exempt nothing.",
+		}}
 }
 
 func (a *API) getInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
@@ -991,11 +1032,7 @@ func (a *API) getInspection(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 	if err != nil {
 		return nil, err
 	}
-	cfg.CACert = "" // fetch it from /v1/inspection/ca.pem
-	if cfg.Exempt == nil {
-		cfg.Exempt = []string{}
-	}
-	return cfg, nil
+	return inspectionView(cfg), nil
 }
 
 // getInspectionCA serves the tenant's intercept CA certificate (never its key) so it

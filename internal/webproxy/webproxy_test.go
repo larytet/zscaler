@@ -40,6 +40,8 @@ type state struct {
 	edm         map[string]*dlp.EDM
 	tenancyHost string // the one host the tenancy test restricts
 	stale       bool
+	managedOff  bool
+	exemptCats  []string
 	catalog     *cloudapps.Catalog
 	onStale     string
 	onLog       string
@@ -58,6 +60,12 @@ func (s *state) CloudCatalog(string) *cloudapps.Catalog {
 		return cloudapps.NewCatalog(nil)
 	}
 	return s.catalog
+}
+
+func (s *state) InspectionManaged(string) (bool, []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return !s.managedOff, s.exemptCats
 }
 
 func (s *state) Stale() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stale }

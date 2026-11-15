@@ -405,3 +405,26 @@ func TestFailureModesReachTheNode(t *testing.T) { // AGT-030 (NFR-012)
 		t.Fatalf("%s %s", on, ol)
 	}
 }
+
+func TestManagedExemptionSettingsReachTheNode(t *testing.T) { // AGT-032 (ZIA-032)
+	st := seed(t)
+	if err := st.SetInspection("t1", true, []string{"mine.example"}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSyncState()
+	if errs := s.Apply(st.Snapshot()); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if managed, cats := s.InspectionManaged("t1"); !managed || len(cats) != 2 || cats[0] != "banking" {
+		t.Fatalf("the defaults: %v %v", managed, cats)
+	}
+	off, none := true, []string{}
+	st.SetInspectionManaged("t1", &off, &none)
+	s.Apply(st.Snapshot())
+	if managed, cats := s.InspectionManaged("t1"); managed || len(cats) != 0 {
+		t.Fatalf("the organisation's choice: %v %v", managed, cats)
+	}
+	if managed, cats := s.InspectionManaged("nobody"); managed || cats != nil {
+		t.Fatalf("an unknown tenant has no inspection: %v %v", managed, cats)
+	}
+}

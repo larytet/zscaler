@@ -17,6 +17,7 @@ import (
 
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/dlp"
+	"github.com/larytet/zscaler/internal/exemptions"
 	"github.com/larytet/zscaler/internal/filetype"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
@@ -36,6 +37,11 @@ type SecretSource interface {
 	Secret(tenant, name string) (store.Secret, bool)
 }
 
+// ManagedInspector is an optional State extension: the managed exemptions (ZIA-032).
+type ManagedInspector interface {
+	InspectionManaged(tenant string) (pinnedList bool, categories []string)
+}
+
 // interceptCA returns the CA to use for this connection, or nil to tunnel it untouched.
 func (p *Proxy) interceptCA(tenant, host string) *pki.CA {
 	in, ok := p.State.(Inspector)
@@ -48,7 +54,16 @@ func (p *Proxy) interceptCA(tenant, host string) *pki.CA {
 	}
 	for _, d := range exempt {
 		if host == d || strings.HasSuffix(host, "."+d) {
-			return nil // exempt: banking, health, certificate-pinned apps
+			return nil // exempt: the tenant's own list
+		}
+	}
+	if mi, ok := p.State.(ManagedInspector); ok {
+		pinned, cats := mi.InspectionManaged(tenant)
+		if pinned && exemptions.IsPinned(host) {
+			return nil // a built-in pinned application: decrypting it would break it
+		}
+		if len(cats) > 0 && p.Classifier != nil && exemptions.CategoryExempt(p.Classifier.Categories(host), cats) {
+			return nil // banking, health, or whatever the organisation chose: not read
 		}
 	}
 	return ca
