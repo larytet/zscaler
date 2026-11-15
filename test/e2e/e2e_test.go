@@ -2211,3 +2211,71 @@ func TestScn020ExactDataMatch(t *testing.T) {
 		t.Fatalf("deleting a set a rule uses must be refused, got %d", code)
 	}
 }
+
+// SCN-021 (INT-004, ADM-006a): log streaming. Real binaries; decisions made by a real enforcement node
+// reach a receiver the admin named, with the documented fields, and the credential and any capture stay in.
+func TestScn021LogStreaming(t *testing.T) {
+	t.Setenv("ZTX_SIEM_ALLOW_LOOPBACK", "1") // lab switch: the receiver is on loopback
+	var mu sync.Mutex
+	var events []map[string]any
+	var auth string
+	rcv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		sc := bufio.NewScanner(q.Body)
+		sc.Buffer(make([]byte, 1<<20), 1<<20)
+		mu.Lock()
+		defer mu.Unlock()
+		auth = q.Header.Get("Authorization")
+		for sc.Scan() {
+			var e map[string]any
+			if json.Unmarshal(sc.Bytes(), &e) == nil {
+				events = append(events, e)
+			}
+		}
+	}))
+	defer rcv.Close()
+	has := func(f func(map[string]any) bool) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, e := range events {
+			if f(e) {
+				return true
+			}
+		}
+		return false
+	}
+	s := newStack(t)
+	s.must("PUT", "/v1/siem", map[string]any{"kind": "https", "url": rcv.URL + "/in", "token": "Bearer SIEM-TOKEN-e2e",
+		"ca_pem": string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rcv.Certificate().Raw}))}, s.token)
+	if code, b := s.api("POST", "/v1/siem/test", nil, s.token); code != 200 {
+		t.Fatalf("test event: %d %s", code, b)
+	}
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 25*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	eventually(t, "a decision made by the real node to arrive", 20*time.Second, func() bool {
+		return has(func(m map[string]any) bool {
+			return m["type"] == "decision" && m["schema"] == "smbztx.v1" && m["kind"] == "private" && m["action"] == "allow" && m["app"] == "erp" && m["user"] != nil && m["en"] != nil
+		})
+	})
+	eventually(t, "an audit event to arrive", 10*time.Second, func() bool {
+		return has(func(m map[string]any) bool { return m["type"] == "audit" && m["action"] == "siem.put" })
+	})
+	mu.Lock()
+	got := auth
+	mu.Unlock()
+	if got != "Bearer SIEM-TOKEN-e2e" {
+		t.Fatalf("the receiver got authorization %q", got)
+	}
+	if has(func(m map[string]any) bool {
+		b, _ := json.Marshal(m)
+		return strings.Contains(string(b), "SIEM-TOKEN-e2e")
+	}) {
+		t.Fatal("the token was streamed")
+	}
+	if code, b := s.api("GET", "/v1/siem", nil, s.token); code != 200 || strings.Contains(string(b), "SIEM-TOKEN-e2e") || !strings.Contains(string(b), `"sent"`) {
+		t.Fatalf("%d %s", code, b)
+	}
+	if _, b := s.api("GET", "/v1/audit", nil, s.token); strings.Contains(string(b), "SIEM-TOKEN-e2e") {
+		t.Fatal("the audit log holds the token")
+	}
+}

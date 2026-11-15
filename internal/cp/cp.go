@@ -29,6 +29,7 @@ import (
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/risk"
+	"github.com/larytet/zscaler/internal/siem"
 	"github.com/larytet/zscaler/internal/simulate"
 	"github.com/larytet/zscaler/internal/store"
 )
@@ -45,6 +46,7 @@ type API struct {
 	Approvals *approvals.Store
 	Health    *devhealth.Store
 	Captures  *captures.Store
+	SIEM      *siem.Streamer // streams decision records and audit events to each tenant's own log system
 	// OnApprovalRequest is called when a new access request is created.
 	OnApprovalRequest func(approvals.Request)
 	OnRevokeDevice    func(tenant string, d store.Device)
@@ -131,6 +133,10 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/evidence", a.wrap(audit, a.getEvidence))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
+	m.HandleFunc("PUT /v1/siem", a.wrap(sensitive, a.putSIEM))
+	m.HandleFunc("GET /v1/siem", a.wrap(sensitive, a.getSIEM))
+	m.HandleFunc("DELETE /v1/siem", a.wrap(sensitive, a.deleteSIEM))
+	m.HandleFunc("POST /v1/siem/test", a.wrap(sensitive, a.testSIEM))
 	m.HandleFunc("POST /v1/admins", a.wrap(admins, a.createAdmin))
 	m.HandleFunc("GET /v1/admins", a.wrap(admins, a.listAdmins))
 	m.HandleFunc("DELETE /v1/admins/{name}", a.wrap(admins, a.removeAdmin))
@@ -199,7 +205,12 @@ func decode(r *http.Request, v any) error {
 
 func (a *API) log(c ctxInfo, action, object string, before, after any) {
 	if a.Audit != nil {
-		a.Audit.Append(c.tenant, c.actor, action, object, before, after)
+		ev, err := a.Audit.Append(c.tenant, c.actor, action, object, before, after)
+		if err == nil && a.SIEM != nil {
+			if e, err := siem.NewEvent("audit", ev); err == nil {
+				a.SIEM.Emit(c.tenant, e)
+			}
+		}
 	}
 }
 

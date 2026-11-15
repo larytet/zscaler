@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"github.com/larytet/zscaler/internal/siem"
 	"io"
 	"net/http"
 	"strings"
@@ -419,6 +420,11 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		}
 		if rec.Action == "allow" && rec.Event != "close" && strings.HasPrefix(rec.User, "agent:") {
 			e.API.Store.NoteAgentUse(rec.Tenant, rec.User, rec.TS)
+		}
+		if e.API.SIEM != nil && rec.Kind != "capture" && rec.Kind != "health" { // captures never leave the platform; health reports are not security events
+			if ev, err := siem.NewEvent("decision", rec, "capture", "health"); err == nil {
+				e.API.SIEM.Emit(rec.Tenant, ev)
+			}
 		}
 		if e.API.Decisions != nil {
 			e.API.Decisions.Add(rec)

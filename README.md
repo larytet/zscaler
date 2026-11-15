@@ -15,6 +15,8 @@ A small-business zero-trust platform, aimed at functional parity with the Zscale
 | [TEST-PLAN.md](TEST-PLAN.md) | Test plan for RB1 |
 | [ROADMAP.md](ROADMAP.md) | Features deferred beyond RB1, including newly-Must items |
 | [RESULTS.md](RESULTS.md) | Measured targets and misses |
+| [SIEM-SCHEMA.md](SIEM-SCHEMA.md) | What log streaming sends (HTTPS and syslog) and how |
+| [GAPS.md](GAPS.md) | Gaps between the requirements and the code, with the work queue |
 | [COMPETITIVE-ANALYSIS.md](COMPETITIVE-ANALYSIS.md) | Cato Networks and Palo Alto Networks |
 | `.doc/ZSCALER-IDEAS.md` | Low-hanging ideas for Zscaler. The source PDFs in `.doc/*/` are git-ignored |
 
@@ -161,6 +163,8 @@ Policy history: `GET /v1/policies/web/versions` lists the last 50 saved versions
 Certificate lifetime: `ztx-cp --device-cert-ttl 1h` sets how long a device certificate lives (default 12 hours, 30 seconds to 7 days). A shorter life means a revoked or disabled user loses access sooner, and agents renew a third of the lifetime before expiry (at most an hour).
 
 Administrator roles: an owner creates administrators with `POST /v1/admins` (`{"name": "carol", "role": "helpdesk"}`; the token is shown once). Roles: `owner` (everything, and manages administrators), `admin` (everything else), `helpdesk` (reads, decision records, approving access, revoking a device, restricting a user), `auditor` (reads everything including the audit log and evidence, changes nothing), `viewer` (read-only dashboards and configuration, no logs). `GET /v1/admins` lists them, `DELETE /v1/admins/{name}` removes one and ends their token; the last owner cannot be removed.
+
+Log streaming to your SIEM: `PUT /v1/siem` with `{"kind":"https","url":"https://siem.example.com/ingest","token":"Bearer abc"}` or `{"kind":"syslog","addr":"siem.example.com:6514","proto":"tls"}` streams decision records and admin audit events; `POST /v1/siem/test` sends a test event; `GET /v1/siem` shows how it is doing. Fields, transport and limits: [SIEM-SCHEMA.md](SIEM-SCHEMA.md).
 
 Credential injection (needs inspection on): store a credential with `PUT /v1/secrets/{name}` (`host`, `header`, `value`), then give a web rule `"inject": "name"` (action allow, domains inside the secret's host). The enforcement node adds the header to the decrypted request, replacing the agent's own, so an AI agent can call the API without ever holding the key. Values are write-only: `GET /v1/secrets` lists names, hosts and headers only, and the value is kept out of the audit log, decision log, captures and responses (it is scrubbed if the API echoes it back). The value is stored in clear in the control-plane store file and on enforcement nodes, as the inspection key is.
 

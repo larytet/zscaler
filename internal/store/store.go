@@ -24,6 +24,7 @@ import (
 	"github.com/larytet/zscaler/internal/dlp"
 	"github.com/larytet/zscaler/internal/pki"
 	"github.com/larytet/zscaler/internal/policy"
+	"github.com/larytet/zscaler/internal/siem"
 )
 
 var (
@@ -165,6 +166,7 @@ type Tenant struct {
 	Inspect     InspectCfg                      `json:"inspect,omitempty"`
 	Secrets     map[string]Secret               `json:"secrets,omitempty"`
 	EDM         map[string]EDMSet               `json:"edm,omitempty"`
+	SIEM        *siem.Config                    `json:"siem,omitempty"` // where this tenant\'s logs are streamed (INT-004)
 	Devices     map[string]Device               `json:"devices"`
 }
 
@@ -1219,4 +1221,42 @@ func (s *Store) PolicyVersion(tenant string, k policy.Kind, n int) (*PolicyVersi
 		return &PolicyVersion{Version: n, Policy: clonePolicy(d.Policy), Note: "current"}, nil
 	}
 	return nil, ErrNotFound
+}
+
+// SetSIEM stores (or, with nil, removes) a tenant's log sink. It holds the sink's token: it is
+// returned by no API.
+func (s *Store) SetSIEM(tenant string, c *siem.Config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return err
+	}
+	t.SIEM = c
+	return s.save()
+}
+
+// SIEM returns a copy of a tenant's log sink, or nil.
+func (s *Store) SIEM(tenant string) *siem.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil || t.SIEM == nil {
+		return nil
+	}
+	c := *t.SIEM
+	return &c
+}
+
+// SIEMConfigs returns every tenant's log sink, for starting them when the control plane starts.
+func (s *Store) SIEMConfigs() map[string]siem.Config {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := map[string]siem.Config{}
+	for id, t := range s.d.Tenants {
+		if t.SIEM != nil {
+			out[id] = *t.SIEM
+		}
+	}
+	return out
 }

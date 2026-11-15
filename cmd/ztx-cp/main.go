@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"flag"
+	"github.com/larytet/zscaler/internal/siem"
 	"log"
 	"net"
 	"net/http"
@@ -91,6 +92,13 @@ func main() {
 		}
 	}()
 	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng, Decisions: decisions.New(), Approvals: approvals.New(), Health: devhealth.New(), Captures: captures.New()}
+	api.SIEM = &siem.Streamer{AllowLoopback: os.Getenv("ZTX_SIEM_ALLOW_LOOPBACK") == "1"} // loopback targets are a lab-only switch
+	for tenant, c := range st.SIEMConfigs() {
+		c := c
+		if err := api.SIEM.Configure(tenant, &c); err != nil {
+			log.Printf("log sink of tenant %s not started: %v", tenant, err)
+		}
+	}
 	if *devTTL != 0 && (*devTTL < 30*time.Second || *devTTL > 7*24*time.Hour) {
 		log.Fatal("--device-cert-ttl must be between 30s and 7 days")
 	}
