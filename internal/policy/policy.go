@@ -78,6 +78,9 @@ type Request struct {
 	Path      string
 	Method    string
 	DLPHits   []string // data types found in the request body
+	// ResponseDLPHits is set only for the second evaluation, made once the response is known.
+	ResponseDLPHits []string
+	ResponsePhase   bool
 }
 
 type Decision struct {
@@ -124,6 +127,10 @@ type Match struct {
 	// DLP names data types (see package dlp). The rule matches when the decrypted request
 	// body contains any of them. Inspected web traffic only.
 	DLP []string `json:"dlp,omitempty"`
+	// DLPResponse names data types to look for in the RESPONSE body (for example an AI tool
+	// answering with a customer's card number). Inspected web traffic only; the proxy applies
+	// the rule after the origin has answered and before anything reaches the user.
+	DLPResponse []string `json:"dlp_response,omitempty"`
 	// MaxRisk and MinRisk bound the user's risk score (inclusive).
 	MaxRisk *int `json:"max_risk,omitempty"`
 	MinRisk *int `json:"min_risk,omitempty"`
@@ -327,6 +334,22 @@ func (c *compiledRule) matches(kind Kind, r Request) bool {
 	if m.Workspace != nil && *m.Workspace != r.Workspace {
 		return false
 	}
+	if len(m.DLPResponse) > 0 { // a response rule matches only in the response phase, on what the response held
+		if !r.ResponsePhase {
+			return false
+		}
+		ok := false
+		for _, want := range m.DLPResponse {
+			for _, got := range r.ResponseDLPHits {
+				if want == got {
+					ok = true
+				}
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
 	if len(m.DLP) > 0 {
 		ok := false
 		for _, want := range m.DLP {
@@ -492,6 +515,35 @@ func parseHM(s string) (int, error) {
 func (p *Policy) UsesDLP() bool {
 	for _, r := range p.Rules {
 		if len(r.Match.DLP) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// EvaluateResponse decides, once the origin has answered, whether the response may reach the
+// user. Only rules with a dlp_response condition take part; every other rule was already
+// applied to the request. No matching rule means allow.
+func (p *Policy) EvaluateResponse(r Request) (d Decision) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			d = Decision{Action: Deny, Reason: "evaluation-error"}
+		}
+	}()
+	r.ResponsePhase = true
+	for i := range p.compiled {
+		c := &p.compiled[i]
+		if len(c.Match.DLPResponse) > 0 && c.matches(p.Kind, r) {
+			return Decision{Action: c.Action, RuleID: c.ID, Reason: c.Reason}
+		}
+	}
+	return Decision{Action: Allow, Reason: "default"}
+}
+
+// UsesResponseDLP reports whether any rule needs response bodies scanned.
+func (p *Policy) UsesResponseDLP() bool {
+	for _, r := range p.Rules {
+		if len(r.Match.DLPResponse) > 0 {
 			return true
 		}
 	}

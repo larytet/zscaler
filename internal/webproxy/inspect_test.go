@@ -2,6 +2,8 @@ package webproxy
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -13,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -372,5 +375,107 @@ func TestInspectionCertificatesUseTheTenantKey(t *testing.T) { // WB-003 groundw
 	have, _ := x509.MarshalPKIXPublicKey(got.PublicKey)
 	if string(want) != string(have) {
 		t.Fatal("the minted certificate does not carry the tenant's stable key, so the workspace pin would not match")
+	}
+}
+
+func gzipped(s string) []byte {
+	var b bytes.Buffer
+	zw := gzip.NewWriter(&b)
+	zw.Write([]byte(s))
+	zw.Close()
+	return b.Bytes()
+}
+
+func TestResponseDLPBlocksWhatComesBack(t *testing.T) { // AI-003 (response side, basic)
+	r := newRig(t)
+	var hits atomic.Int64
+	o := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		hits.Add(1)
+		switch q.URL.Path {
+		case "/ok":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"answer":"The capital of France is Paris."}`)
+		case "/answer":
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{"answer":"Sure, the customer's card is 4111 1111 1111 1111."}`)
+		case "/gz":
+			w.Header().Set("Content-Type", "text/plain")
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(gzipped("hidden in a compressed body: 4111111111111111"))
+		case "/bin":
+			w.Header().Set("Content-Type", "application/octet-stream")
+			io.WriteString(w, "binary-ish 4111111111111111 not scanned")
+		case "/big":
+			w.Header().Set("Content-Type", "text/plain")
+			io.WriteString(w, strings.Repeat("y", MaxScanBytes+100)+" 4111111111111111")
+		}
+	}))
+	t.Cleanup(o.Close)
+	r.exemptAdd(hostport(o.URL))
+	r.up.AddCert(o.Certificate())
+	enableInspection(r)
+	host := strings.Split(hostport(o.URL), ":")[0]
+	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 7, Rules: []policy.Rule{
+		{ID: "no-pii-back", Priority: 1, Action: policy.Deny, Match: policy.Match{Domains: []string{host}, DLPResponse: []string{"credit-card"}}}}}
+	if err := pol.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	r.st.set(func(s *state) { s.pol = pol })
+	roots := x509.NewCertPool()
+	roots.AddCert(r.tenCA.Cert)
+	c, br, err := r.tunnel(t, hostport(o.URL), roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hp := hostport(o.URL)
+
+	if code, body := get(t, c, br, "GET", hp, "/ok", ""); code != 200 || !strings.Contains(body, "Paris") {
+		t.Fatalf("a clean answer must arrive intact: %d %q", code, body)
+	}
+	code, body := get(t, c, br, "GET", hp, "/answer", "")
+	if code != 403 || !strings.Contains(body, "credit-card") || strings.Contains(body, "4111") || strings.Contains(body, "capital") {
+		t.Fatalf("a response carrying a card number reached the user, or the page echoed it: %d %q", code, body)
+	}
+	if code, body := get(t, c, br, "GET", hp, "/gz", ""); code != 403 || strings.Contains(body, "4111") {
+		t.Fatalf("a compressed response was not scanned: %d %q", code, body)
+	}
+	if code, body := get(t, c, br, "GET", hp, "/bin", ""); code != 200 || !strings.Contains(body, "binary-ish") {
+		t.Fatalf("a non-text response is not scanned and passes: %d", code)
+	}
+	code, body = get(t, c, br, "GET", hp, "/big", "")
+	if code != 200 || len(body) != MaxScanBytes+100+len(" 4111111111111111") {
+		t.Fatalf("an oversize response must arrive complete: %d, %d bytes", code, len(body))
+	}
+	time.Sleep(50 * time.Millisecond)
+	if rec := r.find(func(x broker_Record) bool {
+		return x.Reason == "dlp-response" && x.Action == "deny" && x.Rule == "no-pii-back"
+	}); rec == nil || len(rec.DLP) != 1 || rec.DLP[0] != "credit-card" {
+		t.Fatalf("the log must name the rule and the data type: %+v", rec)
+	}
+	if r.find(func(x broker_Record) bool { return x.Reason == "dlp-response-skipped-too-large" }) == nil {
+		t.Fatal("the unscanned oversize response was not logged")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, l := range r.logs {
+		if strings.Contains(fmt.Sprint(l), "4111") {
+			t.Fatalf("sensitive data reached the decision log: %v", l)
+		}
+	}
+	// the request phase is untouched: sending a card TO the origin is not stopped by a response rule
+}
+
+func TestResponseRulesDoNotScanWhenNoRuleAsks(t *testing.T) {
+	r := newRig(t)
+	o := inspectOrigin(t, r)
+	enableInspection(r) // the rig's policy has no dlp_response rule
+	roots := x509.NewCertPool()
+	roots.AddCert(r.tenCA.Cert)
+	c, br, err := r.tunnel(t, hostport(o.URL), roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := get(t, c, br, "GET", hostport(o.URL), "/x", ""); code != 200 {
+		t.Fatalf("%d", code)
 	}
 }

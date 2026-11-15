@@ -61,7 +61,7 @@ func Validate(p *Policy, known map[string]bool) []error {
 			add("%s: unknown action %q", w, r.Action)
 		}
 		m := r.Match
-		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories)+len(m.Paths)+len(m.Methods)+len(m.DLP) == 0 && m.Workspace == nil && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
+		if r.Action == Allow && len(m.Users)+len(m.Groups)+len(m.Apps)+len(m.Domains)+len(m.Categories)+len(m.Paths)+len(m.Methods)+len(m.DLP)+len(m.DLPResponse) == 0 && m.Workspace == nil && m.Posture == nil && m.MaxRisk == nil && m.MinRisk == nil {
 			add("%s: allow rule matches everything", w)
 		}
 		for _, a := range m.Apps {
@@ -79,6 +79,17 @@ func Validate(p *Policy, known map[string]bool) []error {
 		}
 		if len(m.DLP) > 0 && p.Kind != Web {
 			add("%s: dlp is only valid in web policies", w)
+		}
+		if len(m.DLPResponse) > 0 && r.Action != Deny {
+			add("%s: a dlp_response rule must have the action deny (it can only block a response)", w)
+		}
+		if len(m.DLPResponse) > 0 && p.Kind != Web {
+			add("%s: dlp_response is only valid in web policies", w)
+		}
+		for _, dn := range m.DLPResponse {
+			if !dlp.Known(dn) {
+				add("%s: unknown dlp_response type %q (known: %s)", w, dn, strings.Join(dlp.Names(), ", "))
+			}
 		}
 		for _, dn := range m.DLP {
 			if !dlp.Known(dn) {

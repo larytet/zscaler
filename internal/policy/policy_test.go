@@ -495,3 +495,51 @@ func TestIsolateValidation(t *testing.T) { // WBT-002
 		t.Fatal(err)
 	}
 }
+
+func TestResponseDLPRules(t *testing.T) { // AI-003 (response side, basic)
+	p := mk(t, Web, Rule{ID: "no-pii-back", Priority: 1, Action: Deny, Match: Match{Domains: []string{"ai.example"}, DLPResponse: []string{"credit-card"}}})
+	req := Request{Kind: Web, Host: "ai.example", Now: t0, Inspected: true}
+	// the request phase ignores response rules, whatever the request body held
+	req.DLPHits = []string{"credit-card"}
+	if d := p.Evaluate(req); d.Action != Allow {
+		t.Fatalf("a response rule fired on the request: %+v", d)
+	}
+	if !p.UsesResponseDLP() || p.UsesDLP() {
+		t.Fatal("UsesResponseDLP / UsesDLP")
+	}
+	resp := Request{Kind: Web, Host: "ai.example", Now: t0, Inspected: true, ResponseDLPHits: []string{"credit-card", "us-ssn"}}
+	if d := p.EvaluateResponse(resp); d.Action != Deny || d.RuleID != "no-pii-back" {
+		t.Fatalf("%+v", d)
+	}
+	resp.ResponseDLPHits = []string{"aws-access-key"}
+	if d := p.EvaluateResponse(resp); d.Action != Allow {
+		t.Fatalf("an unlisted type must not match: %+v", d)
+	}
+	resp.ResponseDLPHits, resp.Host = []string{"credit-card"}, "other.example"
+	if d := p.EvaluateResponse(resp); d.Action != Allow {
+		t.Fatalf("the rule's other conditions still apply: %+v", d)
+	}
+	// ordinary rules are never re-run on the response
+	other := mk(t, Web, Rule{ID: "block-all-x", Priority: 1, Action: Deny, Match: Match{Domains: []string{"x.test"}}})
+	if d := other.EvaluateResponse(Request{Kind: Web, Host: "x.test", Now: t0, Inspected: true}); d.Action != Allow {
+		t.Fatalf("a request rule was applied to a response: %+v", d)
+	}
+}
+
+func TestResponseDLPValidation(t *testing.T) {
+	bad := map[string]*Policy{
+		"allow action":  {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Allow, Match: Match{DLPResponse: []string{"credit-card"}}}}},
+		"warn action":   {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Warn, Match: Match{DLPResponse: []string{"credit-card"}}}}},
+		"unknown type":  {Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Deny, Match: Match{DLPResponse: []string{"nonsense"}}}}},
+		"private rules": {Kind: Private, DefaultAction: Deny, Rules: []Rule{{ID: "a", Priority: 1, Action: Deny, Match: Match{Groups: []string{"g"}, DLPResponse: []string{"credit-card"}}}}},
+	}
+	for name, p := range bad {
+		if errs := Validate(p, nil); len(errs) == 0 {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	ok := &Policy{Kind: Web, DefaultAction: Allow, Rules: []Rule{{ID: "a", Priority: 1, Action: Deny, Match: Match{DLPResponse: []string{"credit-card"}}}}}
+	if errs := Validate(ok, nil); len(errs) != 0 {
+		t.Fatal(errs)
+	}
+}

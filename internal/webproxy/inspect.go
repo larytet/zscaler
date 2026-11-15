@@ -176,12 +176,21 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	for _, hh := range hopHeaders {
 		out.Header.Del(hh)
 	}
+	scanResp := pol != nil && pol.UsesResponseDLP()
+	if scanResp {
+		out.Header.Del("Accept-Encoding") // lets the transport ask for gzip itself and decompress, so the scan sees plain text
+	}
 	resp, err := p.tlsTransp.RoundTrip(out)
 	if err != nil {
 		http.Error(w, "bad gateway", http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
+	if scanResp && textual(resp.Header.Get("Content-Type")) {
+		if blocked := p.scanResponse(w, resp, pol, id, user, host, cats, rec); blocked {
+			return
+		}
+	}
 	for _, hh := range hopHeaders {
 		resp.Header.Del(hh)
 	}
@@ -276,6 +285,55 @@ func dlpBlockPage(w http.ResponseWriter, host string, types []string, ref string
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Upload blocked</h1>
 <p>What you sent to %s appears to contain sensitive data (%s) and your organisation does not allow that.</p>
+<p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
+		html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
+}
+
+// textual reports whether a content type is something a scan can read as text.
+func textual(ct string) bool {
+	ct = strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
+	return strings.HasPrefix(ct, "text/") || strings.HasSuffix(ct, "+json") || strings.HasSuffix(ct, "+xml") ||
+		ct == "application/json" || ct == "application/xml" || ct == "application/x-www-form-urlencoded" ||
+		ct == "application/javascript" || ct == "application/x-ndjson" || ct == "text/event-stream"
+}
+
+// scanResponse reads at most MaxScanBytes of the response, evaluates the response rules, and
+// either writes a block page (returning true) or leaves resp.Body ready to be copied to the
+// user. A response too large to scan is forwarded whole and the gap is logged.
+func (p *Proxy) scanResponse(w http.ResponseWriter, resp *http.Response, pol *policy.Policy, id pki.Identity, user policy.User,
+	host string, cats []string, base broker.Record) bool {
+	buf, _ := io.ReadAll(io.LimitReader(resp.Body, MaxScanBytes+1))
+	if len(buf) > MaxScanBytes {
+		resp.Body = readCloser{io.MultiReader(bytes.NewReader(buf), resp.Body), resp.Body}
+		note := base
+		note.Action, note.Reason, note.TS = "info", "dlp-response-skipped-too-large", time.Now().UTC()
+		p.Log(note)
+		return false
+	}
+	resp.Body = io.NopCloser(bytes.NewReader(buf))
+	resp.ContentLength = int64(len(buf))
+	resp.Header.Del("Content-Length")
+	hits := dlp.Scan(buf)
+	if len(hits) == 0 {
+		return false
+	}
+	d := pol.EvaluateResponse(policy.Request{Kind: policy.Web, User: user, Host: host, Categories: cats, Now: time.Now(),
+		Device: policy.Device{ID: id.Device}, Workspace: id.Role == pki.RoleWorkspace, Inspected: true, ResponseDLPHits: hits})
+	if d.Action != policy.Deny {
+		return false
+	}
+	rec := base
+	rec.TS, rec.Action, rec.Rule, rec.Reason, rec.DLP, rec.Inspected = time.Now().UTC(), "deny", d.RuleID, "dlp-response", hits, true
+	p.Log(rec)
+	responseBlockPage(w, host, hits, refID())
+	return true
+}
+
+func responseBlockPage(w http.ResponseWriter, host string, types []string, ref string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(http.StatusForbidden)
+	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Response blocked</h1>
+<p>What %s sent back appears to contain sensitive data (%s) and your organisation does not allow that to reach you.</p>
 <p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
 		html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
 }
