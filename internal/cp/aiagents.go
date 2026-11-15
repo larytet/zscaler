@@ -2,8 +2,11 @@ package cp
 
 import (
 	"github.com/larytet/zscaler/internal/agentpack"
+	"github.com/larytet/zscaler/internal/ruleoftwo"
+	"github.com/larytet/zscaler/internal/shadowai"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -157,4 +160,48 @@ func (a *API) readonlyPack(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 		return nil, fail(400, "invalid", err.Error())
 	}
 	return p, nil
+}
+
+// lintAIAgent runs the rule-of-two check for one agent (AGS-017). Advice only.
+func (a *API) lintAIAgent(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	subject := "agent:" + r.PathValue("name")
+	u, ok := a.Store.User(c.tenant, subject)
+	if !ok {
+		return nil, fail(404, "not_found", "no such AI agent")
+	}
+	var apps []string
+	now := time.Now()
+	if snap := a.Store.Snapshot().Tenants[c.tenant]; snap != nil {
+		for _, g := range snap.Grants {
+			if g.User == subject && g.Expires.After(now) {
+				apps = append(apps, g.App)
+			}
+		}
+	}
+	var web *policy.Policy
+	if d, err := a.Store.GetPolicy(c.tenant, policy.Web); err == nil {
+		web = d.Policy
+	}
+	return ruleoftwo.Check(u, apps, web), nil
+}
+
+// shadowAI reports AI tool use per person from recent web decisions (AGS-016).
+// Query: days (1 to 30, default 7), sanctioned=ChatGPT,Claude (tools the organisation approved).
+func (a *API) shadowAI(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	days := 7
+	if v := r.URL.Query().Get("days"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 1 || n > 30 {
+			return nil, fail(400, "invalid", "days must be 1 to 30")
+		}
+		days = n
+	}
+	var sanctioned []string
+	if v := r.URL.Query().Get("sanctioned"); v != "" {
+		sanctioned = strings.Split(v, ",")
+	}
+	if a.Decisions == nil {
+		return shadowai.Build(nil, sanctioned, nil), nil
+	}
+	return shadowai.Build(a.Decisions.Since(c.tenant, time.Now().Add(-time.Duration(days)*24*time.Hour)), sanctioned, nil), nil
 }

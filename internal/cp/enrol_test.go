@@ -1000,3 +1000,32 @@ func TestReadOnlyPackEndpoint(t *testing.T) { // AGT-007 (endpoint)
 }
 
 func b2s(b []byte) string { return string(b) }
+
+func TestShadowAIAndLintEndpoints(t *testing.T) { // AGT-011, AGT-012 (API)
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	e.api.Store.UpsertUser("a", policy.User{Subject: "alice", Email: "alice@example.com"})
+	e.call("POST", "/v1/ai-agents", e.adminA, map[string]any{"name": "bot", "operator": "alice", "apps": []string{"erp"}})
+	e.api.Decisions.Add(broker.Record{Tenant: "a", Kind: "web", User: "alice", Target: "chatgpt.com:443", Action: "allow", Event: "open", TS: time.Now()})
+	e.api.Decisions.Add(broker.Record{Tenant: "b", Kind: "web", User: "zed", Target: "chatgpt.com:443", Action: "allow", Event: "open", TS: time.Now()})
+	c, b, _ := e.call("GET", "/v1/shadow-ai?days=7", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), "ChatGPT") || !strings.Contains(string(b), "alice") || strings.Contains(string(b), "zed") {
+		t.Fatalf("%d %s", c, b)
+	}
+	if c, _, _ := e.call("GET", "/v1/shadow-ai?days=99", e.adminA, nil); c != 400 {
+		t.Fatalf("%d", c)
+	}
+	// with a permissive web policy the agent holds all three legs
+	e.call("PUT", "/v1/policies/web", e.adminA, map[string]any{"default_action": "allow", "rules": []any{}}, "If-Match", "0")
+	c, b, _ = e.call("GET", "/v1/ai-agents/bot/lint", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), `"warning":true`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	if c, _, _ := e.call("GET", "/v1/ai-agents/ghost/lint", e.adminA, nil); c != 404 {
+		t.Fatalf("%d", c)
+	}
+	if c, _, _ := e.call("GET", "/v1/ai-agents/bot/lint", e.adminB, nil); c != 404 {
+		t.Fatalf("another tenant sees the agent: %d", c)
+	}
+}

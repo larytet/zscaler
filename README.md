@@ -115,6 +115,8 @@ Data loss prevention (needs inspection on): a web rule can carry `"dlp": ["credi
 
 Just-in-time access: give a rule the action `require_approval` (it must name its apps). The first attempt is blocked and opens a request (emailed to the alert recipients when SMTP is set). Approve it with `POST /v1/approvals/{id}/approve {"minutes": 60}` or in the console; access starts within seconds and ends on its own, or earlier with `POST /v1/approvals/{id}/end`.
 
+Shadow AI and agent risk: `GET /v1/shadow-ai?days=7&sanctioned=ChatGPT,Claude` lists which well-known AI tools people (and agents) used through the proxy, unsanctioned first, with the limits in `notes`. `GET /v1/ai-agents/{name}/lint` warns when one agent can read private apps, read untrusted sites and send data to them, and says which leg to remove.
+
 AI agents never exceed their operator: an agent can reach a private app only if the person it runs for can reach it under the private policy (and is enabled and not restricted). When the operator loses access the agent's live sessions close at the next re-evaluation. Agents created before this rule have no operator recorded; re-create them to apply it.
 
 Read-only AI agent (needs inspection on): `GET /v1/ai-agents/{name}/readonly-pack?domains=api.crm.example&model=api.model.example` returns web rules that let that agent read the listed services, refuse writes (POST, PUT, PATCH, DELETE), allow the model provider, and refuse every other destination. Nothing is applied: put the rules in front of your web rules and save. Read the `warnings` in the answer: without inspection, or on exempt domains, writes are not seen.
