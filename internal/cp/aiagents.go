@@ -1,6 +1,7 @@
 package cp
 
 import (
+	"github.com/larytet/zscaler/internal/agentpack"
 	"net/http"
 	"regexp"
 	"strings"
@@ -121,4 +122,39 @@ func (a *API) removeAIAgent(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 	}
 	a.log(c, "ai-agent.remove", subject, nil, nil)
 	return map[string]string{"removed": subject}, nil
+}
+
+// readonlyPack returns web rules that make one agent read-only with default-deny egress (AGS-002,
+// AGS-003). It changes nothing: the admin puts the rules in front of the web policy and saves it.
+// Query: domains=a.com,b.com (services it may read), model=api.example.com (provider, fully
+// allowed), inject=<secret name> (optional).
+func (a *API) readonlyPack(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	subject := "agent:" + r.PathValue("name")
+	if u, ok := a.Store.User(c.tenant, subject); !ok || u.Disabled {
+		return nil, fail(404, "not_found", "no such AI agent")
+	}
+	split := func(s string) []string {
+		if s == "" {
+			return nil
+		}
+		return strings.Split(s, ",")
+	}
+	q := r.URL.Query()
+	inject := q.Get("inject")
+	if inject != "" {
+		found := false
+		list, _ := a.Store.Secrets(c.tenant)
+		for _, s := range list {
+			found = found || s.Name == inject
+		}
+		if !found {
+			return nil, fail(400, "invalid", "unknown secret "+inject)
+		}
+	}
+	cfg, _ := a.Store.Inspection(c.tenant)
+	p, err := agentpack.Build(agentpack.Options{Agent: subject, Domains: split(q.Get("domains")), Model: split(q.Get("model")), Inject: inject}, cfg.Enabled)
+	if err != nil {
+		return nil, fail(400, "invalid", err.Error())
+	}
+	return p, nil
 }

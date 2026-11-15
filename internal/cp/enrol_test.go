@@ -966,3 +966,37 @@ func TestCaptureEndpoints(t *testing.T) { // ZIA-022b
 		t.Fatal("purge not audited")
 	}
 }
+
+func TestReadOnlyPackEndpoint(t *testing.T) { // AGT-007 (endpoint)
+	e := newEnrolEnv(t)
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	e.api.Store.UpsertUser("a", policy.User{Subject: "alice", Email: "alice@example.com"})
+	e.call("POST", "/v1/ai-agents", e.adminA, map[string]any{"name": "bot", "operator": "alice", "apps": []string{"erp"}})
+	e.call("PUT", "/v1/secrets/crm", e.adminA, map[string]any{"host": "api.crm.example", "header": "Authorization", "value": "v"})
+	url := "/v1/ai-agents/bot/readonly-pack?domains=api.crm.example&model=api.model.example&inject=crm"
+	c, b, _ := e.call("GET", url, e.adminA, nil)
+	if c != 200 || !strings.Contains(b2s(b), "agent-read-only") || !strings.Contains(b2s(b), "NOT blocked") {
+		t.Fatalf("%d %s", c, b)
+	}
+	var pack struct{ Rules []policy.Rule }
+	json.Unmarshal(b, &pack)
+	// the returned rules are accepted by the policy endpoint as they are
+	if c, b, _ := e.call("PUT", "/v1/policies/web", e.adminA, map[string]any{"default_action": "allow", "rules": pack.Rules}, "If-Match", "0"); c != 200 {
+		t.Fatalf("pack rules refused: %d %s", c, b)
+	}
+	for url, want := range map[string]int{
+		"/v1/ai-agents/ghost/readonly-pack?domains=a.example":             404,
+		"/v1/ai-agents/bot/readonly-pack":                                 400,
+		"/v1/ai-agents/bot/readonly-pack?domains=a.example&inject=nosuch": 400,
+		"/v1/ai-agents/bot/readonly-pack?domains=https://a.example/x":     400,
+	} {
+		if c, _, _ := e.call("GET", url, e.adminA, nil); c != want {
+			t.Errorf("%s: %d, want %d", url, c, want)
+		}
+	}
+	if c, _, _ := e.call("GET", "/v1/ai-agents/bot/readonly-pack?domains=a.example", e.adminB, nil); c != 404 {
+		t.Fatalf("another tenant must not see the agent: %d", c)
+	}
+}
+
+func b2s(b []byte) string { return string(b) }

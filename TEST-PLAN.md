@@ -408,7 +408,7 @@ Written before the slices it covers. Priorities follow the requirements: Should 
 | AGT-004 | L4 | P1 | Secret scan over the agent's responses, the decision log, captures, block pages, the secrets list API and the audit log | The secret value appears nowhere | AGS-001 |
 | AGT-005 | L3 | P1 | Rule with `inject` on traffic that is not inspected | Denied with a reason that says inspection is needed | AGS-001 |
 | AGT-006 | L3 | P1 | Secrets API: create, list, replace, delete; viewer role; another tenant | List shows names and hosts only; writes need admin; tenants isolated; audited without the value | AGS-001 |
-| AGT-007 | L3 | P2 | Read-only pack: GET and HEAD allowed on listed domains, POST, PUT, PATCH and DELETE denied or sent to approval, other domains denied | Each case decided as stated, for agents only | AGS-002, AGS-003 |
+| AGT-007 | L3 | P2 | Read-only pack: GET and HEAD allowed on listed domains, POST, PUT, PATCH and DELETE denied (web rules cannot use approval), other domains denied, model provider allowed, warnings when inspection is off | Each case decided as stated, for agents only | AGS-002, AGS-003 |
 | AGT-008 | L3 | P2 | The same pack for a person | No effect on people | AGS-002 |
 | AGT-009 | L3 | P1 | Operator cap: the operator is disabled, restricted, or loses access to the app | The agent is denied at once | AGS-004 |
 | AGT-010 | L3 | P1 | An agent granted an app its operator may not reach | Denied, reason says the operator lacks access | AGS-004 |
