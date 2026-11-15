@@ -102,7 +102,7 @@ func TestTokensHashedAndTenantFromToken(t *testing.T) { // SEC-010
 			t.Fatal("token stored in clear")
 		}
 	}
-	if tenant, role, _, ok := s.Auth(ta); !ok || tenant != "a" || role != Admin {
+	if tenant, role, _, ok := s.Auth(ta); !ok || tenant != "a" || role != Owner {
 		t.Fatal("auth a")
 	}
 	if tenant, _, _, ok := s.Auth(tb); !ok || tenant != "b" {
@@ -412,5 +412,23 @@ func TestPolicyHistoryIsBoundedAndPersisted(t *testing.T) { // AGT-021 (store)
 	s3.d.Tenants["a"].PolicyHist = nil
 	if vs, _ := s3.PolicyVersions("a", policy.Web); len(vs) != 1 || vs[0].Version != 1 {
 		t.Fatalf("%+v", vs)
+	}
+}
+
+func TestLegacyFirstAdminIsTreatedAsOwner(t *testing.T) { // AGT-022: stores written before roles existed
+	s, _ := Open("")
+	s.CreateTenant("a", "A")
+	for k := range s.d.Admins { // only the legacy token remains
+		delete(s.d.Admins, k)
+	}
+	s.d.Admins[hash("legacy-token")] = adminRec{Tenant: "a", Role: Admin, Name: "owner"}
+	if _, role, name, ok := s.Auth("legacy-token"); !ok || role != Owner || name != "owner" {
+		t.Fatalf("%v %v %v", ok, role, name)
+	}
+	if err := s.RemoveAdmin("a", "owner"); err == nil {
+		t.Fatal("removing a tenant's only owner must be refused")
+	}
+	if _, err := s.AddAdmin("a", "x", "root"); err == nil {
+		t.Fatal("an unknown role was accepted")
 	}
 }

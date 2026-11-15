@@ -74,7 +74,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
 	m.HandleFunc("POST /v1/tenants", a.createTenant)
 	m.HandleFunc("POST /v1/ens/tokens", a.enToken)
-	read, write := store.Viewer, store.Admin
+	read, write := store.PermRead, store.PermWrite
+	logs, audit, support, sensitive, admins := store.PermLogs, store.PermAudit, store.PermSupport, store.PermSensitive, store.PermAdmins
 	m.HandleFunc("PUT /v1/idp", a.wrap(write, a.putIDP))
 	m.HandleFunc("GET /v1/segments", a.wrap(read, a.listSegments))
 	m.HandleFunc("POST /v1/segments", a.wrap(write, a.putSegment))
@@ -91,29 +92,29 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("POST /v1/policies/safe-defaults", a.wrap(write, a.safeDefaults))
 	m.HandleFunc("POST /v1/connectors/tokens", a.wrap(write, a.connectorToken))
 	m.HandleFunc("GET /v1/devices", a.wrap(read, a.listDevices))
-	m.HandleFunc("POST /v1/devices/{id}/revoke", a.wrap(write, a.revokeDevice))
+	m.HandleFunc("POST /v1/devices/{id}/revoke", a.wrap(support, a.revokeDevice))
 	m.HandleFunc("GET /v1/users", a.wrap(read, a.listUsers))
 	m.HandleFunc("POST /v1/users/{id}/disable", a.wrap(write, a.disableUser))
-	m.HandleFunc("POST /v1/users/{id}/restrict", a.wrap(write, a.restrictUser))
-	m.HandleFunc("POST /v1/users/{id}/unrestrict", a.wrap(write, a.unrestrictUser))
-	m.HandleFunc("GET /v1/audit", a.wrap(read, a.listAudit))
+	m.HandleFunc("POST /v1/users/{id}/restrict", a.wrap(support, a.restrictUser))
+	m.HandleFunc("POST /v1/users/{id}/unrestrict", a.wrap(support, a.unrestrictUser))
+	m.HandleFunc("GET /v1/audit", a.wrap(audit, a.listAudit))
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
-	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
+	m.HandleFunc("GET /v1/decisions", a.wrap(logs, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
 	m.HandleFunc("GET /v1/risk", a.wrap(read, a.getRisk))
 	m.HandleFunc("GET /v1/ai-agents/{name}/readonly-pack", a.wrap(read, a.readonlyPack))
 	m.HandleFunc("GET /v1/ai-agents/{name}/lint", a.wrap(read, a.lintAIAgent))
 	m.HandleFunc("GET /v1/shadow-ai", a.wrap(read, a.shadowAI))
-	m.HandleFunc("PUT /v1/edm/{name}", a.wrap(write, a.putEDM))
-	m.HandleFunc("GET /v1/edm", a.wrap(write, a.listEDM))
-	m.HandleFunc("DELETE /v1/edm/{name}", a.wrap(write, a.deleteEDM))
-	m.HandleFunc("PUT /v1/secrets/{name}", a.wrap(write, a.putSecret))
-	m.HandleFunc("GET /v1/secrets", a.wrap(write, a.listSecrets))
-	m.HandleFunc("DELETE /v1/secrets/{name}", a.wrap(write, a.deleteSecret))
-	m.HandleFunc("GET /v1/captures", a.wrap(write, a.listCaptures))
-	m.HandleFunc("GET /v1/captures/{id}", a.wrap(write, a.getCapture))
-	m.HandleFunc("DELETE /v1/captures", a.wrap(write, a.purgeCaptures))
-	m.HandleFunc("GET /v1/incidents", a.wrap(read, a.getIncidents))
+	m.HandleFunc("PUT /v1/edm/{name}", a.wrap(sensitive, a.putEDM))
+	m.HandleFunc("GET /v1/edm", a.wrap(sensitive, a.listEDM))
+	m.HandleFunc("DELETE /v1/edm/{name}", a.wrap(sensitive, a.deleteEDM))
+	m.HandleFunc("PUT /v1/secrets/{name}", a.wrap(sensitive, a.putSecret))
+	m.HandleFunc("GET /v1/secrets", a.wrap(sensitive, a.listSecrets))
+	m.HandleFunc("DELETE /v1/secrets/{name}", a.wrap(sensitive, a.deleteSecret))
+	m.HandleFunc("GET /v1/captures", a.wrap(sensitive, a.listCaptures))
+	m.HandleFunc("GET /v1/captures/{id}", a.wrap(sensitive, a.getCapture))
+	m.HandleFunc("DELETE /v1/captures", a.wrap(sensitive, a.purgeCaptures))
+	m.HandleFunc("GET /v1/incidents", a.wrap(logs, a.getIncidents))
 	m.HandleFunc("GET /v1/health", a.wrap(read, a.getHealth))
 	m.HandleFunc("POST /v1/ai-agents", a.wrap(write, a.createAIAgent))
 	m.HandleFunc("GET /v1/ai-agents", a.wrap(read, a.listAIAgents))
@@ -122,14 +123,17 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/inspection", a.wrap(read, a.getInspection))
 	m.HandleFunc("GET /v1/inspection/ca.pem", a.wrap(read, a.getInspectionCA))
 	m.HandleFunc("GET /v1/approvals", a.wrap(read, a.listApprovals))
-	m.HandleFunc("POST /v1/approvals/{id}/approve", a.wrap(write, a.approve))
-	m.HandleFunc("POST /v1/approvals/{id}/deny", a.wrap(write, a.denyRequest))
-	m.HandleFunc("POST /v1/approvals/{id}/end", a.wrap(write, a.endGrant))
+	m.HandleFunc("POST /v1/approvals/{id}/approve", a.wrap(support, a.approve))
+	m.HandleFunc("POST /v1/approvals/{id}/deny", a.wrap(support, a.denyRequest))
+	m.HandleFunc("POST /v1/approvals/{id}/end", a.wrap(support, a.endGrant))
 	m.HandleFunc("GET /v1/suggestions", a.wrap(read, a.getSuggestions))
 	m.HandleFunc("GET /v1/investigate", a.wrap(read, a.investigate))
-	m.HandleFunc("GET /v1/evidence", a.wrap(read, a.getEvidence))
+	m.HandleFunc("GET /v1/evidence", a.wrap(audit, a.getEvidence))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
+	m.HandleFunc("POST /v1/admins", a.wrap(admins, a.createAdmin))
+	m.HandleFunc("GET /v1/admins", a.wrap(admins, a.listAdmins))
+	m.HandleFunc("DELETE /v1/admins/{name}", a.wrap(admins, a.removeAdmin))
 	return m
 }
 
@@ -156,7 +160,7 @@ func writeErr(w http.ResponseWriter, err error) {
 	writeJSON(w, ae.status, ae)
 }
 
-func (a *API) wrap(min store.Role, h handler) http.HandlerFunc {
+func (a *API) wrap(min store.Perm, h handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok {
@@ -168,8 +172,8 @@ func (a *API) wrap(min store.Role, h handler) http.HandlerFunc {
 			writeErr(w, fail(401, "unauthenticated", "invalid token"))
 			return
 		}
-		if min == store.Admin && role != store.Admin {
-			writeErr(w, fail(403, "forbidden", "admin role required"))
+		if !role.Can(min) {
+			writeErr(w, fail(403, "forbidden", fmt.Sprintf("the %s role cannot do this (it needs the %q permission)", role, min)))
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)

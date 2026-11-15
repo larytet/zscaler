@@ -34,10 +34,48 @@ var (
 
 type Role string
 
+// Roles of the people who administer a tenant (ADM-002). What each may do is in Can.
 const (
-	Admin  Role = "admin"
-	Viewer Role = "viewer"
+	Owner    Role = "owner"    // everything, and the only role that manages other administrators
+	Admin    Role = "admin"    // everything except managing administrators
+	Helpdesk Role = "helpdesk" // reads, sees decision logs, and handles support: approvals, revoking a device, restricting a user
+	Auditor  Role = "auditor"  // reads everything, including the audit log and evidence, and changes nothing
+	Viewer   Role = "viewer"   // read-only dashboards and configuration, no logs
 )
+
+// Perm is a kind of action on the admin API.
+type Perm string
+
+const (
+	PermRead      Perm = "read"      // configuration and dashboards
+	PermLogs      Perm = "logs"      // decision records and incidents
+	PermAudit     Perm = "audit"     // the admin audit log and evidence
+	PermSupport   Perm = "support"   // approvals, revoking a device, restricting a user
+	PermWrite     Perm = "write"     // configuration changes
+	PermSensitive Perm = "sensitive" // secrets, data sets, captured traffic
+	PermAdmins    Perm = "admins"    // administrator accounts
+)
+
+var rolePerms = map[Role][]Perm{
+	Owner:    {PermRead, PermLogs, PermAudit, PermSupport, PermWrite, PermSensitive, PermAdmins},
+	Admin:    {PermRead, PermLogs, PermAudit, PermSupport, PermWrite, PermSensitive},
+	Helpdesk: {PermRead, PermLogs, PermSupport},
+	Auditor:  {PermRead, PermLogs, PermAudit},
+	Viewer:   {PermRead},
+}
+
+// Can reports whether the role may perform a kind of action.
+func (r Role) Can(p Perm) bool {
+	for _, x := range rolePerms[r] {
+		if x == p {
+			return true
+		}
+	}
+	return false
+}
+
+// ValidRole reports whether r is a role that can be given to an administrator.
+func ValidRole(r Role) bool { _, ok := rolePerms[r]; return ok }
 
 type IDP struct {
 	Issuer     string `json:"issuer"`
@@ -214,7 +252,7 @@ func (s *Store) CreateTenant(id, name string) (adminToken string, err error) {
 	s.d.Tenants[id] = &Tenant{ID: id, Name: name, Segments: map[string]broker.Segment{},
 		Policies: map[policy.Kind]*PolicyDoc{}, Users: map[string]policy.User{}, Devices: map[string]Device{}}
 	tok := newToken()
-	s.d.Admins[hash(tok)] = adminRec{Tenant: id, Role: Admin, Name: "owner"}
+	s.d.Admins[hash(tok)] = adminRec{Tenant: id, Role: Owner, Name: "owner"}
 	return tok, s.save()
 }
 
@@ -224,9 +262,65 @@ func (s *Store) AddAdmin(tenant, name string, role Role) (string, error) {
 	if _, err := s.tenant(tenant); err != nil {
 		return "", err
 	}
+	if !ValidRole(role) {
+		return "", fmt.Errorf("unknown role %q", role)
+	}
+	for _, a := range s.d.Admins {
+		if a.Tenant == tenant && a.Name == name {
+			return "", ErrExists
+		}
+	}
 	tok := newToken()
 	s.d.Admins[hash(tok)] = adminRec{Tenant: tenant, Role: role, Name: name}
 	return tok, s.save()
+}
+
+// AdminInfo describes an administrator without their token.
+type AdminInfo struct {
+	Name string `json:"name"`
+	Role Role   `json:"role"`
+}
+
+// Admins lists a tenant's administrators, by name.
+func (s *Store) Admins(tenant string) []AdminInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := []AdminInfo{}
+	for _, a := range s.d.Admins {
+		if a.Tenant == tenant {
+			out = append(out, AdminInfo{Name: a.Name, Role: a.Role})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// RemoveAdmin deletes an administrator and so ends their token. The last owner cannot be removed.
+func (s *Store) RemoveAdmin(tenant, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var key string
+	var rec adminRec
+	owners := 0
+	for k, a := range s.d.Admins {
+		if a.Tenant != tenant {
+			continue
+		}
+		if a.Role == Owner || a.Role == Admin && a.Name == "owner" {
+			owners++
+		}
+		if a.Name == name {
+			key, rec = k, a
+		}
+	}
+	if key == "" {
+		return ErrNotFound
+	}
+	if (rec.Role == Owner || rec.Role == Admin && rec.Name == "owner") && owners <= 1 {
+		return fmt.Errorf("the last owner cannot be removed")
+	}
+	delete(s.d.Admins, key)
+	return s.save()
 }
 
 // Auth maps a bearer token to its tenant and role. The tenant always comes
@@ -235,6 +329,9 @@ func (s *Store) Auth(tok string) (tenant string, role Role, name string, ok bool
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	a, ok := s.d.Admins[hash(tok)]
+	if ok && a.Role == Admin && a.Name == "owner" {
+		a.Role = Owner // the first token of a tenant created before roles existed was an admin named owner
+	}
 	return a.Tenant, a.Role, a.Name, ok
 }
 
@@ -676,7 +773,7 @@ func (s *Store) AdminCounts(tenant string) (admins, viewers int) {
 	defer s.mu.RUnlock()
 	for _, a := range s.d.Admins {
 		if a.Tenant == tenant {
-			if a.Role == Admin {
+			if a.Role == Admin || a.Role == Owner {
 				admins++
 			} else {
 				viewers++

@@ -490,8 +490,12 @@ func TestEvidenceEndpoint(t *testing.T) {
 		t.Fatalf("tenant isolation: %s", bb)
 	}
 	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
-	if c, _, _ := e.call("GET", "/v1/evidence", viewer, nil); c != 200 {
-		t.Fatalf("viewer: %d", c)
+	if c, _, _ := e.call("GET", "/v1/evidence", viewer, nil); c != 403 {
+		t.Fatalf("a read-only viewer must not read evidence: %d", c)
+	}
+	auditor, _ := e.api.Store.AddAdmin("a", "otto", store.Auditor)
+	if c, _, _ := e.call("GET", "/v1/evidence", auditor, nil); c != 200 {
+		t.Fatalf("auditor: %d", c)
 	}
 }
 

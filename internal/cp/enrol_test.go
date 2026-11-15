@@ -387,8 +387,12 @@ func TestDecisionSearch(t *testing.T) {
 		t.Fatalf("bad since accepted: %d", code)
 	}
 	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
-	if code, _, _ = e.call("GET", "/v1/decisions?user=u1", viewer, nil); code != 200 {
-		t.Fatalf("viewer: %d", code)
+	if code, _, _ = e.call("GET", "/v1/decisions?user=u1", viewer, nil); code != 403 {
+		t.Fatalf("a read-only viewer must not read decision records: %d", code)
+	}
+	helpdesk, _ := e.api.Store.AddAdmin("a", "hank", store.Helpdesk)
+	if code, _, _ = e.call("GET", "/v1/decisions?user=u1", helpdesk, nil); code != 200 {
+		t.Fatalf("helpdesk: %d", code)
 	}
 }
 
