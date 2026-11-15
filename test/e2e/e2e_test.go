@@ -1638,6 +1638,16 @@ func TestScn015InspectionTrustIsConfinedToTheWorkspace(t *testing.T) {
 		t.Fatalf("a plain Chrome profile trusted the inspection certificate; the control is invalid:\n%.300s", control)
 	}
 
+	// the control's rejection must be of the INSPECTION certificate, not of the origin's own: the log
+	// shows the proxy decrypted that request (otherwise "Privacy error" proves nothing about inspection)
+	eventually(t, "the control request to have been inspected", 10*time.Second, func() bool {
+		for _, d := range s.decisions() {
+			if d["reason"] == "inspection-handshake-failed" {
+				return true // the proxy presented an inspection certificate and the plain browser refused it
+			}
+		}
+		return false
+	})
 	// the workspace: the same URL works
 	dir := s.enrolWorkspace(t, "ws")
 	domFile := filepath.Join(s.dir, "ws-dom.html")
@@ -1761,10 +1771,17 @@ func TestScn016DeveloperToolsThroughInspection(t *testing.T) {
 		t.Fatalf("curl trusted the inspection certificate without the environment: %s", out)
 	}
 	// with the environment
-	c := exec.Command(curl, "-sS", "--max-time", "20", url)
-	c.Env = append(base, envList(exports)...)
-	if out, err := c.CombinedOutput(); err != nil || string(out) != "DEV-TOOL-PAGE" {
-		t.Fatalf("curl with the generated environment: %v %q\nvars: %v", err, out, exports)
+	// the enforcement node picks the setting up on its next sync, so wait until it is in effect
+	var curlOut []byte
+	var curlErr error
+	eventually(t, "curl to work through inspection with the generated environment", 20*time.Second, func() bool {
+		c := exec.Command(curl, "-sS", "--max-time", "20", url)
+		c.Env = append(base, envList(exports)...)
+		curlOut, curlErr = c.CombinedOutput()
+		return curlErr == nil && string(curlOut) == "DEV-TOOL-PAGE"
+	})
+	if curlErr != nil {
+		t.Fatalf("curl with the generated environment: %v %q\nvars: %v", curlErr, curlOut, exports)
 	}
 	// a normal (non-inspected) HTTPS site is still reachable with the replaced roots: the public roots are in the bundle
 	bundle, _ := os.ReadFile(exports["CURL_CA_BUNDLE"])

@@ -70,3 +70,8 @@ Not done or only partly done, stated plainly:
 ## Flaky test found and fixed (I16 regression)
 
 `TestHealthRidesInTheSignedPostureReport` failed once in a full run (passed 15 of 15 alone). Cause: the enforcement node acknowledged a posture report and only then logged the posture and health events, so a reader that acted on the acknowledgement could look too early. Fixed in the product, not only the test: events are now recorded before the acknowledgement (the same record-first principle used for denials), and the test also waits for the record.
+
+## Test races fixed after the capture regression
+
+- `TestScn016DeveloperToolsThroughInspection` failed once in a full run: it ran curl straight after enabling inspection, before the enforcement node had synced the setting, so curl saw an uninspected tunnel. It now waits until inspection is in effect.
+- `TestScn015` had a control that proved only that Chrome rejected some certificate. It now also requires the proxy's own record that a plain browser was shown, and refused, the inspection certificate.
