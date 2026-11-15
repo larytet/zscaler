@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/larytet/zscaler/internal/advice"
 	"github.com/larytet/zscaler/internal/alerts"
 	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
@@ -78,6 +79,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("GET /v1/alerts", a.wrap(read, a.listAlerts))
 	m.HandleFunc("GET /v1/decisions", a.wrap(read, a.listDecisions))
 	m.HandleFunc("GET /v1/digest", a.wrap(read, a.getDigest))
+	m.HandleFunc("GET /v1/suggestions", a.wrap(read, a.getSuggestions))
+	m.HandleFunc("GET /v1/investigate", a.wrap(read, a.investigate))
 	m.HandleFunc("GET /v1/evidence", a.wrap(read, a.getEvidence))
 	m.HandleFunc("PUT /v1/alert-settings", a.wrap(write, a.putAlertSettings))
 	m.HandleFunc("GET /v1/alert-settings", a.wrap(read, a.getAlertSettings))
@@ -673,4 +676,34 @@ func (a *API) simulate(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, 
 		return simulate.Run(in.Policy, nil), nil
 	}
 	return simulate.Run(in.Policy, a.Decisions.Since(c.tenant, time.Now().Add(-time.Duration(in.Days)*24*time.Hour))), nil
+}
+
+func (a *API) recent(r *http.Request, tenant string) []decisions.Entry {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	if days <= 0 || days > 90 {
+		days = 7
+	}
+	if a.Decisions == nil {
+		return nil
+	}
+	return a.Decisions.Since(tenant, time.Now().Add(-time.Duration(days)*24*time.Hour))
+}
+
+func (a *API) getSuggestions(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	out, dev := advice.Suggest(a.recent(r, c.tenant))
+	if out == nil {
+		out = []advice.Suggestion{}
+	}
+	if dev == nil {
+		dev = []string{}
+	}
+	return map[string]any{"rule_suggestions": out, "device_problems": dev}, nil
+}
+
+func (a *API) investigate(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
+	user := r.URL.Query().Get("user")
+	if user == "" {
+		return nil, fail(400, "invalid", "user is required")
+	}
+	return advice.Investigate(user, a.recent(r, c.tenant)), nil
 }

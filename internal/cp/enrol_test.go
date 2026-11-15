@@ -450,3 +450,35 @@ func TestSimulateEndpoint(t *testing.T) {
 		t.Fatalf("tenant isolation: %s", bb)
 	}
 }
+
+func TestSuggestionsAndInvestigate(t *testing.T) {
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	now := time.Now()
+	var recs []broker.Record
+	good := &broker.PostureSnap{DiskEncrypted: ptrTrue(), FirewallOn: ptrTrue()}
+	for i := 0; i < 4; i++ {
+		recs = append(recs, broker.Record{Tenant: "a", Kind: "private", Event: "open", Action: "deny", Reason: "default", User: "bob", App: "erp", Groups: []string{"hr"}, Posture: good, TS: now})
+	}
+	recs = append(recs, broker.Record{Tenant: "b", Kind: "private", Event: "open", Action: "deny", Reason: "default", User: "bob", App: "secret", Groups: []string{"x"}, Posture: good, TS: now})
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatal(c)
+	}
+	code, b, _ := e.call("GET", "/v1/suggestions", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), `"hr"`) || !strings.Contains(string(b), `"erp"`) || strings.Contains(string(b), "secret") {
+		t.Fatalf("%d %s", code, b)
+	}
+	code, b, _ = e.call("GET", "/v1/investigate?user=bob", e.adminA, nil)
+	if code != 200 || !strings.Contains(string(b), "blocked 4 of 4 times") || strings.Contains(string(b), "secret") {
+		t.Fatalf("%d %s", code, b)
+	}
+	if code, _, _ = e.call("GET", "/v1/investigate", e.adminA, nil); code != 400 {
+		t.Fatalf("user is required: %d", code)
+	}
+	_, b, _ = e.call("GET", "/v1/investigate?user=bob", e.adminB, nil)
+	if strings.Contains(string(b), "erp") || !strings.Contains(string(b), "blocked 1 of 1") {
+		t.Fatalf("tenant b sees only its own: %s", b)
+	}
+}
+
+func ptrTrue() *bool { b := true; return &b }

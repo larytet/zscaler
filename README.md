@@ -104,6 +104,8 @@ Weekly digest: `GET /v1/digest?days=7&format=text` returns the plain-language su
 
 Try a rule change safely: `POST /v1/policies/private/simulate` with `{"policy": {...draft...}, "days": 7}` replays recent private-access decisions against the draft and lists who would be newly allowed or blocked. Nothing is stored.
 
+Why was someone blocked? `GET /v1/investigate?user=alice` gives a plain-language timeline and the likely fix. `GET /v1/suggestions` proposes rules for repeated blocks (and flags unhealthy devices instead of widening access). Suggestions are drafts: simulate them first.
+
 Insurance questionnaire evidence: `GET /v1/evidence?format=text`. It reports only what this product can show and marks everything else (MFA, EDR, backups) as not evidenced.
 
 Secrets are read from files or environment variables and never from command-line arguments.
