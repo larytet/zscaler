@@ -199,6 +199,14 @@ func (e *Enrol) renew(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, fail(403, "user_disabled", "this account is disabled"))
 		return
 	}
+	if devs, _ := e.API.Store.Devices(id.Tenant); true {
+		for _, d := range devs {
+			if d.ID == id.Device && d.Revoked {
+				writeErr(w, fail(403, "device_revoked", "this device was revoked"))
+				return
+			}
+		}
+	}
 	pub, err := parsePub(in.PublicKey)
 	if err != nil {
 		writeErr(w, err)

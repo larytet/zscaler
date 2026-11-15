@@ -88,6 +88,9 @@ type Identity struct {
 // Sign issues a client-auth certificate for pub. The subject is
 // "tenant/subject/device"; usage is client auth, plus server auth for ENs.
 func (c *CA) Sign(pub crypto.PublicKey, id Identity, ttl time.Duration, dnsNames ...string) ([]byte, error) {
+	if c.Key == nil {
+		return nil, errors.New("pki: this CA is verify-only")
+	}
 	eku := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
 	if id.Role == RoleEN {
 		eku = append(eku, x509.ExtKeyUsageServerAuth)
@@ -319,4 +322,23 @@ func LoadOrCreateCA(dir, name string, now Clock) (*CA, error) {
 // PEM returns the CA certificate for distribution to endpoints.
 func (c *CA) PEM() []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: c.Cert.Raw})
+}
+
+// VerifierFromPEM builds a verify-only CA (no signing key) from a CA
+// certificate. Enforcement nodes use it: they never hold the CA key.
+func VerifierFromPEM(pemBytes []byte, now Clock) (*CA, error) {
+	blk, _ := pem.Decode(pemBytes)
+	if blk == nil {
+		return nil, errors.New("pki: no certificate in PEM")
+	}
+	cert, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		return nil, err
+	}
+	if now == nil {
+		now = time.Now
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return &CA{Cert: cert, now: now, pool: pool}, nil
 }

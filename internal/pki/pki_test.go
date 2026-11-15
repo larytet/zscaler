@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -132,5 +133,46 @@ func TestMalformedSubject(t *testing.T) {
 	c.Subject.CommonName = "noslashes"
 	if _, err := ParseIdentity(c); err == nil {
 		t.Fatal("malformed subject accepted")
+	}
+}
+
+func TestVerifyOnlyCA(t *testing.T) {
+	ca, _ := NewCA("ca", nil)
+	v, err := VerifierFromPEM(ca.PEM(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := issue(t, ca, RoleDevice, time.Hour)
+	if _, err := v.Verify(c, nil); err != nil {
+		t.Fatalf("verify-only CA rejected a valid cert: %v", err)
+	}
+	k := newKey(t)
+	if _, err := v.Sign(&k.PublicKey, Identity{Tenant: "t", Role: RoleDevice}, time.Hour); err == nil {
+		t.Fatal("a verify-only CA must not sign")
+	}
+	if _, err := VerifierFromPEM([]byte("junk"), nil); err == nil {
+		t.Fatal("junk PEM accepted")
+	}
+}
+
+func TestLoadOrCreateCAPersists(t *testing.T) {
+	dir := t.TempDir()
+	a, err := LoadOrCreateCA(dir, "ca", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := LoadOrCreateCA(dir, "ca", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.Cert.Equal(b.Cert) {
+		t.Fatal("CA changed between loads")
+	}
+	c := issue(t, a, RoleDevice, time.Hour)
+	if _, err := b.Verify(c, nil); err != nil {
+		t.Fatalf("reloaded CA cannot verify: %v", err)
+	}
+	if st, _ := os.Stat(dir + "/ca.key"); st.Mode().Perm() != 0o600 {
+		t.Fatalf("ca.key mode %v", st.Mode())
 	}
 }

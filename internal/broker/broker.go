@@ -448,6 +448,11 @@ func (e *EN) RevokeDevice(serial, tenant, device string, expires time.Time) {
 	e.closeWhere(func(s *session) bool { return s.tenant == tenant && s.device == device })
 }
 
+// CloseDevice closes live sessions of a device (used when the control plane reports a revocation).
+func (e *EN) CloseDevice(tenant, device string) {
+	e.closeWhere(func(s *session) bool { return s.tenant == tenant && s.device == device })
+}
+
 // DisableUser closes live sessions of a user. The caller must also mark the
 // user disabled in State so new sessions are denied.
 func (e *EN) DisableUser(tenant, user string) {

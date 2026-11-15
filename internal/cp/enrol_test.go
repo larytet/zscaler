@@ -306,3 +306,12 @@ func TestConnectorTokenExpires(t *testing.T) {
 		t.Fatalf("expired token: %d", code)
 	}
 }
+
+func TestRenewRefusedWhenAdminRevoked(t *testing.T) {
+	e := newEnrolEnv(t)
+	out, k, pub, _, _ := e.enrolDevice(t, "u1", "finance")
+	e.api.Store.RevokeDevice("a", out.DeviceID)
+	if c, _ := e.post("/enrol/renew", map[string]string{"public_key": pub}, tlsCert(t, out, k)); c != 403 {
+		t.Fatalf("renewal of an admin-revoked device: %d", c)
+	}
+}

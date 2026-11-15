@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I5d-1 (EN state sync, EN enrolment, CA persistence).
+**Last updated:** 2026-11-15, after I5d-2 (command-line binaries).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -35,8 +35,10 @@ Implementation language: **Go** (chosen by the user).
 | I5b-2 | Device and connector enrolment endpoints (cert issuance) | done | AG-001, 002, 004, 005, 006, 014 (server side) |
 | I5c | Agent: OIDC login with PKCE, enrolment, renewal, SOCKS and HTTP proxies, PAC, posture probes | done | AG-001, 003, 007..010, RES-006, SEC-016 |
 | I5d-1 | Support packages for the binaries: CA persistence, IP SANs, EN enrolment, polled state sync, stale and admin-revoked handling | done | CP-009, 010 (EN side), PKI |
-| I5d-2 | `cmd/` binaries for cp, en, connector, agent | **next** | |
-| I6 | End-to-end scenarios, alerts, run instructions | pending | SCN, ALR |
+| I5d-2 | `cmd/` binaries for cp, en, connector, agent, plus Makefile | done (build and unit-tested pieces; not yet run together) | PKI persistence |
+| I6a | End-to-end test starting the real binaries (SCN-001..004) | **next** | SCN |
+| I6b | Alerts and plain-language summaries | pending | ALR |
+| I6c | Run instructions in README, load and soak tools | pending | PERF, RES |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
 
@@ -45,6 +47,7 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 - **PERF-005 missed:** policy evaluation about 59 us for 500 rules against a 50 us target. Fix is an index by group and app. Details in `RESULTS.md`.
 - **Design deviation:** certificate renewal uses the current valid device certificate over mTLS, not an IdP refresh token (DESIGN D4.2). A stolen but unrevoked certificate can therefore renew itself indefinitely until the admin revokes it or disables the user. Fix: cap renewal chains (for example 7 days) or require a fresh IdP token.
 - **Design deviation:** ENs poll a full snapshot from the control plane every few seconds instead of holding a push stream (DESIGN D2.6). Fine for small tenants, not for scale. The snapshot carries every user and policy for every tenant, so an EN certificate can read all tenants: ENs are platform-trusted.
+- The `cmd/` binaries are compiled but have never been run together; I6a is where that gets proved. The connector only uses the first `--en` address (no EN failover yet).
 - Connector and EN certificates last 7 days and have no renewal in RB1.
 - Agent: Windows firewall posture probe is not implemented (stays unknown, so policies requiring it fail closed). No installers, tunnel driver or auto-update. The browser is launched by the caller (`openURL`), the CLI wiring comes with I5d.
 - Audit log: truncating the tail is not detectable from the file alone.
