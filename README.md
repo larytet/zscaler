@@ -147,7 +147,7 @@ sequenceDiagram
     C->>P: connect to the internal address (the connector's DNS resolves names)
     P-->>B: data flows both ways through the three hops
   else refused
-    EN-->>A: refusal with a reason; recorded as a decision; repeated refusals raise an alert
+    EN-->>A: refusal with a reason, recorded as a decision, repeated refusals raise an alert
   end
 ```
 
