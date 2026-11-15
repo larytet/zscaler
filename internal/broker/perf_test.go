@@ -4,12 +4,14 @@ package broker
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -167,5 +169,70 @@ func TestPerf008DecisionLogOverhead(t *testing.T) {
 	t.Logf("PERF-008 setup %v without log, %v with log: %.1f%% overhead (target < 5%%)", off, on, over)
 	if over > 5 {
 		t.Errorf("PERF-008 missed: %.1f%%", over)
+	}
+}
+
+// RES-007 (shortened): sessions churn continuously; no errors, no goroutine or heap
+// growth beyond 10% after warm-up. The plan calls for 24 h with 200 sessions; set
+// SOAK_SECONDS to run longer.
+func TestRES007Soak(t *testing.T) {
+	secs := 60
+	if v := os.Getenv("SOAK_SECONDS"); v != "" {
+		fmt.Sscan(v, &secs)
+	}
+	r := newRig(t)
+	r.en.Log = func(Record) {} // the rig's recorder keeps every record in memory
+	r.startConnector("c1", r.allowApp)
+	conns := make([]*Conn, 10)
+	for i := range conns {
+		conns[i], _ = r.agent("alice", "d"+string(rune('a'+i)), true)
+	}
+	var errs, total atomic.Int64
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			buf := make([]byte, 512)
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				s, err := conns[i%10].OpenApp("seg-db", "", r.app.port())
+				if err != nil {
+					errs.Add(1)
+					continue
+				}
+				s.Write(buf)
+				io.ReadFull(s, buf)
+				s.Close()
+				total.Add(1)
+			}
+		}(i)
+	}
+	sample := func() (int, uint64) {
+		runtime.GC()
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		return runtime.NumGoroutine(), m.HeapAlloc
+	}
+	time.Sleep(10 * time.Second) // warm-up
+	g0, h0 := sample()
+	time.Sleep(time.Duration(secs) * time.Second)
+	g1, h1 := sample()
+	close(stop)
+	wg.Wait()
+	growG := float64(g1-g0) / float64(g0) * 100
+	growH := (float64(h1) - float64(h0)) / float64(h0) * 100
+	t.Logf("RES-007 %d sessions over %ds, %d errors; goroutines %d to %d (%.1f%%), heap %d to %d MiB (%.1f%%)",
+		total.Load(), secs, errs.Load(), g0, g1, growG, h0>>20, h1>>20, growH)
+	if errs.Load() != 0 {
+		t.Errorf("errors during soak: %d", errs.Load())
+	}
+	if growG > 10 || growH > 10 {
+		t.Errorf("RES-007 missed: goroutines +%.1f%%, heap +%.1f%%", growG, growH)
 	}
 }

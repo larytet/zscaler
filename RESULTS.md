@@ -35,3 +35,15 @@ Reproduce: `go test -tags perf -v -run TestPerf ./internal/broker ./internal/en 
 - Probe parsers use inline samples. Golden files from real machines (POS-004) are still to be collected.
 - Certificate renewal uses the current certificate over mTLS instead of an IdP refresh token (DESIGN D4.2).
 - Enforcement nodes poll full snapshots instead of receiving pushes (DESIGN D2.6).
+
+## Resilience (TEST-PLAN.md T3.2)
+
+| ID | Result |
+|---|---|
+| RES-001 EN killed and restarted | Real processes: the live session breaks, the connector and agent recover on their own, access again 0.2 s after the restart (target 30 s). Component test: connector reconnects after its link is cut. `test/e2e` `TestRes001ENRestart` |
+| RES-002 latency and loss | 100 ms added each way: sessions open and move 256 KiB correctly. **Packet loss was not simulated**: it needs kernel support (tc netem) and root |
+| RES-003 reset mid-frame | 20 cuts at different byte offsets, including mid-handshake and mid-frame: the EN keeps serving, no leaked sessions, goroutines return to baseline |
+| RES-004 disk full on connector host | **Not tested.** The connector writes nothing at run time, so the risk is low, but it is unproven |
+| RES-005 clock jump | Not injected into a live system (cannot change the host clock). Covered by unit tests: certificates not yet valid or expired are refused (`TestExpiryAndTolerance`), posture reports dated in the future or too old fail closed (`TestPostureFailClosed`) |
+| RES-006 corrupt agent files | Covered earlier (`TestCorruptStateRecovers`) |
+| RES-007 24 h soak, 200 sessions | **Shortened.** 3 minutes, 200 workers, 720,593 sessions, 0 errors, goroutines 1661 to 1534 and heap 53 to 49 MiB (both slightly down). A first run showed +187% heap, which was the test rig's own record keeper and not the product; the soak now disables it. `SOAK_SECONDS=86400` runs the full version |

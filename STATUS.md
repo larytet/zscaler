@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I7b (PERF-006..008).
+**Last updated:** 2026-11-15, after I7c (resilience).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -41,8 +41,8 @@ Implementation language: **Go** (chosen by the user).
 | I6c | README run instructions, performance tests (PERF-001..004), fuzz and vulnerability scan, toolchain pin | done. PERF-002 and PERF-005 missed (see RESULTS.md) | PERF, SEC-017..019 |
 | I7a | Fix PERF-005 (rule index) and PERF-002 (mux buffer reuse) | done: both targets now met | PERF-002, 005 |
 | I7b | PERF-006..008 measurements; EN sync default 5 s to 2 s; cache per-request cert-chain check in the proxy | done: all met | PERF-006..008 |
-| I7c | Failure injection and shortened soak (RES) | **next** | RES |
-| I7d | SCN-003, 005, 006 | pending | SCN |
+| I7c | Fault-injecting proxy, RES-001..003, shortened soak RES-007 | done. RES-002 packet loss and RES-004 not tested; RES-007 ran 3 minutes, not 24 h | RES |
+| I7d | SCN-003, 005, 006 and RES-001 with real processes | **next** (written and passing, committed next) | SCN |
 | I7e | Email alerts (ALR-004) | pending | ALR |
 | I7f | Usability checks and exit criteria review | pending (needs people) | USE |
 

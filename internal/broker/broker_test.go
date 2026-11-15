@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"github.com/larytet/zscaler/test/faults"
 	"io"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -562,4 +564,123 @@ func TestEmitsPostureAndConnectorEvents(t *testing.T) { // feeds ALR-002, ALR-00
 		time.Sleep(20 * time.Millisecond)
 	}
 	_ = cr
+}
+
+func goroutinesSettle(t *testing.T, base int, slack int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		runtime.GC()
+		if n := runtime.NumGoroutine(); n <= base+slack {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("goroutine leak: %d now, %d before (slack %d)", n, base, slack)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func TestRES002LatencyTolerated(t *testing.T) { // 2 x 100 ms added per direction
+	r := newRig(t)
+	r.startConnector("c1", r.allowApp)
+	fp, err := faults.New(r.enAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fp.Close()
+	fp.Delay = 100 * time.Millisecond
+	cr := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+	conn, err := Dial(fp.Addr(), cr.tls)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := r.sendPosture(conn, cr, "d1", true); err != nil {
+		t.Fatal(err)
+	}
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("open under latency: %v", err)
+	}
+	data := make([]byte, 256<<10)
+	rand.Read(data)
+	roundTrip(t, s, data)
+	s.Close()
+}
+
+func TestRES003CutMidFrameNoLeak(t *testing.T) {
+	r := newRig(t)
+	r.startConnector("c1", r.allowApp)
+	time.Sleep(200 * time.Millisecond)
+	base := runtime.NumGoroutine()
+	for i := 0; i < 20; i++ {
+		fp, err := faults.New(r.enAddr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fp.CutAfter = int64(2000 + i*137) // cuts land in different places, including mid-frame and mid-handshake
+		cr := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+		if conn, err := Dial(fp.Addr(), cr.tls); err == nil {
+			r.sendPosture(conn, cr, "d1", true)
+			if s, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil {
+				s.Write(make([]byte, 4096))
+				s.Close()
+			}
+			conn.Close()
+		}
+		fp.Close()
+	}
+	// the EN keeps serving afterwards
+	conn, _ := r.agent("alice", "d2", true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("EN unhealthy after cuts: %v", err)
+	}
+	roundTrip(t, s, []byte("still alive"))
+	s.Close()
+	conn.Close()
+	goroutinesSettle(t, base, 15)
+	if n := r.en.ActiveSessions(); n != 0 {
+		t.Fatalf("%d sessions leaked", n)
+	}
+}
+
+func TestRES001ConnectorSurvivesENRestart(t *testing.T) { // component-level; the real-process version is in test/e2e
+	r := newRig(t)
+	fp, err := faults.New(r.enAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fp.Close()
+	cr := r.creds(r.ca, pki.RoleConnector, "site1", "c1")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go (&Connector{Addr: fp.Addr(), TLS: cr.tls, Allow: r.allowApp}).Run(ctx)
+	waitConnectors := func() {
+		deadline := time.Now().Add(10 * time.Second)
+		for r.en.ConnectorCount("t1", "site1") == 0 {
+			if time.Now().After(deadline) {
+				t.Fatal("connector did not (re)connect")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	waitConnectors()
+	conn, _ := r.agent("alice", "d1", true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip(t, s, []byte("a"))
+	fp.CutAll() // the connector's link dies, as if the EN restarted
+	deadline := time.Now().Add(5 * time.Second)
+	for r.en.ConnectorCount("t1", "site1") != 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	waitConnectors()
+	s2, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("no session after the connector reconnected: %v", err)
+	}
+	roundTrip(t, s2, []byte("b"))
 }
