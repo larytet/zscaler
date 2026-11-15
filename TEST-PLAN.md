@@ -525,6 +525,12 @@ family at a time (STATUS.md says which exist).
 | REAL-PERF-001 | NFR-002, NFR-003 | Private-app set-up time and throughput through the connector pod | Reported against the design targets; misses are listed, not hidden |
 | REAL-SEC-001 | SEC-001..006, NFR-020 | Stolen certificate without key, foreign CA, old TLS, connector given a target outside its list | Refused in each case; no payload written to disk on the node |
 
+**Written and passing on a real cluster so far:** REAL-ENV-001, REAL-PA-001, REAL-PA-002 and REAL-PA-005 (four of the
+19). The others are written family by family; STATUS.md and RESULTS-REAL.md say which have run. Two details of how
+they work: images are built on the node, loaded into the cluster node (kind) and removed again at the end (also
+from the cluster node's image store), and the service side (control plane and enforcement nodes) listens only on the
+address of the cluster's container network, so it is not exposed on the node's other interfaces.
+
 ### T7.7 Pass criteria
 
 A run passes when every test that is not skipped for a stated prerequisite passes, `RESULTS-REAL.md` is updated,
