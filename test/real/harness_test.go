@@ -77,6 +77,18 @@ func eventually(t *testing.T, what string, d time.Duration, f func() bool) {
 	t.Fatalf("timed out waiting for %s", what)
 }
 
+// enInst is one enforcement node process.
+type enInst struct {
+	name   string
+	data   string
+	broker int
+	proxy  int
+	proc   *exec.Cmd
+	token  string
+}
+
+func (e *enInst) brokerAddr(w *world) string { return fmt.Sprintf("%s:%d", w.hostIP, e.broker) }
+
 // world is one run's complete setup.
 type world struct {
 	*env
@@ -94,6 +106,7 @@ type world struct {
 	bufs    map[string]*lockedBuf
 	ifMatch string
 	fakeBin string
+	ens     []*enInst
 	connImg string
 	echoImg string
 	nodeCtr string // the container that is the cluster node (for removing loaded images)
@@ -218,7 +231,10 @@ func (w *world) apply(manifest string) {
 const labels = `    app.kubernetes.io/part-of: ztx-real-test`
 
 // newWorld builds the service side on the node and the customer side in the cluster.
-func newWorld(t *testing.T) *world {
+func newWorld(t *testing.T) *world { return newWorldN(t, 1) }
+
+// newWorldN builds the service side with n enforcement nodes.
+func newWorldN(t *testing.T, n int) *world {
 	t.Helper()
 	e := newEnv(t)
 	bin := os.Getenv("ZTX_BIN")
@@ -245,9 +261,7 @@ func newWorld(t *testing.T) *world {
 		os.WriteFile(filepath.Join(w.fakeBin, n), []byte("#!/bin/sh\ncat <<'EOF'\n"+out+"\nEOF\n"), 0o755)
 	}
 
-	for _, n := range []string{"enrol", "broker", "proxy"} {
-		w.ports[n] = freePort(t, w.hostIP)
-	}
+	w.ports["enrol"] = freePort(t, w.hostIP)
 	w.ports["admin"] = freePort(t, "127.0.0.1")
 	cpData := filepath.Join(dir, "cp")
 	w.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=" + bootTok}, "--data", cpData,
@@ -286,29 +300,13 @@ func newWorld(t *testing.T) *world {
 	w.token = o.AdminToken
 	w.must("PUT", "/v1/idp", map[string]string{"issuer": w.idp.URL, "client_id": "cid"})
 
-	// enforcement node, listening only on the cluster-facing address
-	req, _ = http.NewRequest("POST", w.adminU+"/v1/ens/tokens", strings.NewReader(fmt.Sprintf(`{"names":["localhost","127.0.0.1","%s"]}`, w.hostIP)))
-	req.Header.Set("Authorization", "Bearer "+bootTok)
-	resp, err = w.admin.Do(req)
-	if err != nil {
-		t.Fatal(err)
+	// enforcement nodes, listening only on the cluster-facing address
+	for i := 1; i <= n; i++ {
+		w.startEN(i)
 	}
-	b, _ = io.ReadAll(resp.Body)
-	resp.Body.Close()
-	var tk struct{ Token string }
-	json.Unmarshal(b, &tk)
-	if tk.Token == "" {
-		t.Fatalf("en token: %s", b)
-	}
-	w.start("ztx-en", []string{"ZTX_EN_TOKEN=" + tk.Token}, "--cp", w.enrolU, "--cp-ca", w.caPath, "--data", filepath.Join(dir, "en"),
-		"--listen", fmt.Sprintf("%s:%d", w.hostIP, w.ports["broker"]), "--proxy-listen", fmt.Sprintf("%s:%d", w.hostIP, w.ports["proxy"]),
-		"--sync-every", "500ms")
-	waitAddr(t, fmt.Sprintf("%s:%d", w.hostIP, w.ports["broker"]))
-
 	t.Cleanup(func() {
 		if t.Failed() {
-			b, _ := os.ReadFile(filepath.Join(dir, "en", "decisions.jsonl"))
-			lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+			lines := strings.Split(strings.TrimSpace(w.allDecisionsRaw()), "\n")
 			if len(lines) > 12 {
 				lines = lines[len(lines)-12:]
 			}
@@ -364,9 +362,10 @@ spec:
 	return host
 }
 
-// deployConnector runs the connector as a pod. Its enrolment token is one-time, so a pod that is
-// recreated needs a new token: tests that recreate it do so through this function.
-func (w *world) deployConnector() {
+// deployConnector runs a connector as a pod, as a StatefulSet so that its enrolled identity (kept on a
+// volume) survives the pod being deleted and recreated: the enrolment token is one-time. Several
+// connectors of the same group give redundancy. Every enforcement node is listed.
+func (w *world) deployConnector(name string) {
 	w.t.Helper()
 	code, b := w.api("POST", "/v1/connectors/tokens", map[string]string{"group": "site1"})
 	var tk struct{ Token string }
@@ -378,44 +377,45 @@ func (w *world) deployConnector() {
 	w.apply(fmt.Sprintf(`apiVersion: v1
 kind: Secret
 metadata:
-  name: connector-token
+  name: %[1]s-token
   labels:
-%s
+%[2]s
 stringData:
-  token: %q
+  token: %[3]q
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: platform-ca
   labels:
-%s
+%[2]s
 data:
   ca.pem: |
-%s
+%[4]s
 ---
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: connector
+  name: %[1]s
   labels:
-%s
+%[2]s
 spec:
+  serviceName: %[1]s
   replicas: 1
   selector:
-    matchLabels: {app: connector}
+    matchLabels: {app: %[1]s}
   template:
     metadata:
-      labels: {app: connector}
+      labels: {app: %[1]s}
     spec:
       containers:
       - name: connector
-        image: %s
+        image: %[5]s
         imagePullPolicy: IfNotPresent
-        args: ["--cp", %q, "--cp-ca", "/conf/ca.pem", "--data", "/data", "--en", %q, "--en-name", %q, "--targets-every", "3s", "--name", "connector-pod"]
+        args: ["--cp", %[6]q, "--cp-ca", "/conf/ca.pem", "--data", "/data", "--en", %[7]q, "--en-name", %[8]q, "--targets-every", "3s", "--name", %[1]q]
         env:
         - name: ZTX_CONNECTOR_TOKEN
-          valueFrom: {secretKeyRef: {name: connector-token, key: token}}
+          valueFrom: {secretKeyRef: {name: %[1]s-token, key: token}}
         volumeMounts:
         - {name: conf, mountPath: /conf}
         - {name: data, mountPath: /data}
@@ -423,18 +423,21 @@ spec:
       volumes:
       - name: conf
         configMap: {name: platform-ca}
-      - name: data
-        emptyDir: {}
-`, labels, tk.Token, labels, indent(string(caPEM), "    "), labels, w.connImg, w.enrolU,
-		fmt.Sprintf("%s:%d", w.hostIP, w.ports["broker"]), w.hostIP))
-	w.mustK("rollout status deployment/connector -n " + w.ns + " --timeout=120s")
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+      labels:
+        app.kubernetes.io/part-of: ztx-real-test
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources: {requests: {storage: 16Mi}}
+`, name, labels, tk.Token, indent(string(caPEM), "    "), w.connImg, w.enrolU, strings.Join(w.brokerAddrs(), ","), w.hostIP))
+	w.mustK("rollout status statefulset/" + name + " -n " + w.ns + " --timeout=180s")
 	w.t.Cleanup(func() { // runs before the namespace is deleted: show what the pods said when a test failed
 		if w.t.Failed() {
-			for _, d := range []string{"connector", "echo"} {
-				out, _ := w.k("logs deployment/" + d + " -n " + w.ns + " --tail=40")
-				w.t.Logf("--- %s pod log ---\n%s", d, out)
-			}
-			out, _ := w.k("get pods -n " + w.ns + " -o wide")
+			out, _ := w.k("logs statefulset/" + name + " -n " + w.ns + " --tail=30")
+			w.t.Logf("--- %s pod log ---\n%s", name, out)
+			out, _ = w.k("get pods -n " + w.ns + " -o wide")
 			w.t.Logf("--- pods ---\n%s", out)
 		}
 	})
@@ -464,7 +467,7 @@ func (w *world) newAgent(name string, apps map[string]string) *agentInst {
 	}
 	cfg := map[string]any{
 		"tenant": "t1", "issuer": w.idp.URL, "client_id": "cid", "enrol_url": w.enrolU, "enrol_ca_pem": mustRead(t, w.caPath),
-		"en_addrs": []string{fmt.Sprintf("%s:%d", w.hostIP, w.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("%s:%d", w.hostIP, w.ports["proxy"])},
+		"en_addrs": w.brokerAddrs(), "proxy_addrs": w.proxyAddrs(),
 		"en_name": w.hostIP, "socks_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["socks"]),
 		"http_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["status"]),
 		"apps": apps, "posture_every_seconds": 1,
@@ -549,4 +552,78 @@ func echoes(socks, host string, msg string) bool {
 	buf := make([]byte, len(msg))
 	_, err = io.ReadFull(c, buf)
 	return err == nil && string(buf) == msg
+}
+
+// startEN enrols and starts enforcement node number i (names en1, en2, ...).
+func (w *world) startEN(i int) *enInst {
+	t := w.t
+	e := &enInst{name: fmt.Sprintf("en%d", i), broker: freePort(t, w.hostIP), proxy: freePort(t, w.hostIP)}
+	e.data = filepath.Join(w.dir, e.name)
+	req, _ := http.NewRequest("POST", w.adminU+"/v1/ens/tokens", strings.NewReader(fmt.Sprintf(`{"names":["localhost","127.0.0.1","%s"]}`, w.hostIP)))
+	req.Header.Set("Authorization", "Bearer "+bootTok)
+	resp, err := w.admin.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	var tk struct{ Token string }
+	json.Unmarshal(b, &tk)
+	if tk.Token == "" {
+		t.Fatalf("en token: %s", b)
+	}
+	e.token = tk.Token
+	w.ens = append(w.ens, e)
+	w.runEN(e, true)
+	return e
+}
+
+// runEN starts (or restarts, with the stored identity and no token) an enforcement node.
+func (w *world) runEN(e *enInst, first bool) {
+	var env []string
+	if first {
+		env = []string{"ZTX_EN_TOKEN=" + e.token}
+	}
+	e.proc = w.start("ztx-en", env, "--name", e.name, "--cp", w.enrolU, "--cp-ca", w.caPath, "--data", e.data,
+		"--listen", e.brokerAddr(w), "--proxy-listen", fmt.Sprintf("%s:%d", w.hostIP, e.proxy), "--sync-every", "500ms")
+	waitAddr(w.t, e.brokerAddr(w))
+}
+
+func (w *world) brokerAddrs() []string {
+	var out []string
+	for _, e := range w.ens {
+		out = append(out, e.brokerAddr(w))
+	}
+	return out
+}
+
+func (w *world) proxyAddrs() []string {
+	var out []string
+	for _, e := range w.ens {
+		out = append(out, fmt.Sprintf("%s:%d", w.hostIP, e.proxy))
+	}
+	return out
+}
+
+// allDecisionsRaw returns the decision logs of every enforcement node, one after the other.
+func (w *world) allDecisionsRaw() string {
+	var sb strings.Builder
+	for _, e := range w.ens {
+		b, _ := os.ReadFile(filepath.Join(e.data, "decisions.jsonl"))
+		sb.Write(b)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
+// decisions returns every decision record of every enforcement node.
+func (w *world) decisions() []map[string]any {
+	var out []map[string]any
+	for _, l := range strings.Split(w.allDecisionsRaw(), "\n") {
+		var m map[string]any
+		if json.Unmarshal([]byte(l), &m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }

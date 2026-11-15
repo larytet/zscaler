@@ -487,7 +487,8 @@ The node is given to the suite through environment variables, never written into
 4. Processes on the node run under the test user in a per-run directory and are stopped at the end.
 5. Pods have small resource requests and limits. Ports on the node are chosen at random.
 6. Keys, tokens and certificates are generated for the run and never stored in the repository.
-7. A failure is a failure: a test is skipped only for a prerequisite named in this plan, with the reason printed.
+7. The only change outside the run's namespace and the run's own directory is **one packet-filter rule**, scoped to the cluster node's address and this run's enforcement node port (REAL-PA-007), added and removed by the test, also when it fails. Volumes that connector pods use are claimed in the namespace and removed with it.
+8. A failure is a failure: a test is skipped only for a prerequisite named in this plan, with the reason printed.
 
 ### T7.5 How a run works
 
@@ -511,7 +512,7 @@ family at a time (STATUS.md says which exist).
 | REAL-PA-004 | ZPA-044, ARCH-003 | Two enforcement nodes; one is killed mid-session | New sessions use the other; established sessions on it end and the agent recovers |
 | REAL-PA-005 | PA-002, ZPA-020 | A user outside the allowed group tries the app | Denied; the app was not contacted |
 | REAL-PA-006 | PA-016, ZPA-021 | The segment's target is moved to another service | The new target works within the refresh time; the old one does not |
-| REAL-PA-007 | NFR-011, NFR-012 | A NetworkPolicy cuts the connector off from the enforcement node, then lifts | Access stops (fail closed), then returns without restarting anything |
+| REAL-PA-007 | NFR-011, NFR-012 | A packet-filter rule on the node cuts the cluster off from the enforcement node's port, then is removed (a NetworkPolicy is not used: it does not drop traffic on connections that already exist) | Access stops (fail closed) and the app is not contacted; it returns by itself, without a restart of the connector pod |
 | REAL-AG-001 | AG-005, AG-006, ARCH-006 | Admin disables a user and revokes a device while sessions are open | Sessions close within seconds; other devices of the user are unaffected |
 | REAL-AG-002 | AG-007 | Short certificate lifetime on a real clock | The agent renews without a new login |
 | REAL-CP-001 | CP-007, ADM-004 | Policy change, then roll back | Takes effect within the sync time; the rollback restores the earlier behaviour |
@@ -525,8 +526,8 @@ family at a time (STATUS.md says which exist).
 | REAL-PERF-001 | NFR-002, NFR-003 | Private-app set-up time and throughput through the connector pod | Reported against the design targets; misses are listed, not hidden |
 | REAL-SEC-001 | SEC-001..006, NFR-020 | Stolen certificate without key, foreign CA, old TLS, connector given a target outside its list | Refused in each case; no payload written to disk on the node |
 
-**Written and passing on a real cluster so far:** REAL-ENV-001, REAL-PA-001, REAL-PA-002 and REAL-PA-005 (four of the
-19). The others are written family by family; STATUS.md and RESULTS-REAL.md say which have run. Two details of how
+**Written and passing on a real cluster so far:** REAL-ENV-001, REAL-PA-001, REAL-PA-002, REAL-PA-003, REAL-PA-004,
+REAL-PA-005 and REAL-PA-007 (seven of the 19). The others are written family by family; STATUS.md and RESULTS-REAL.md say which have run. Two details of how
 they work: images are built on the node, loaded into the cluster node (kind) and removed again at the end (also
 from the cluster node's image store), and the service side (control plane and enforcement nodes) listens only on the
 address of the cluster's container network, so it is not exposed on the node's other interfaces.

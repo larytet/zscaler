@@ -32,7 +32,7 @@ func (w *world) podIP(selector string) string {
 func startPrivateAccess(t *testing.T) (*world, *agentInst) {
 	w := newWorld(t)
 	w.deployApp("erp")
-	w.deployConnector()
+	w.deployConnector("connector")
 	return w, w.newAgent("laptop", map[string]string{"erp.ztx": "erp"})
 }
 
@@ -54,7 +54,7 @@ func TestRealPA001UserReachesClusterApp(t *testing.T) {
 	// the decision is recorded with the user, the device and the app, and holds no payload
 	var found bool
 	eventually(t, "the decision record", 15*time.Second, func() bool {
-		b := mustRead(t, w.dir+"/en/decisions.jsonl")
+		b := w.allDecisionsRaw()
 		for _, l := range strings.Split(strings.TrimSpace(b), "\n") {
 			var m map[string]any
 			if json.Unmarshal([]byte(l), &m) == nil && m["app"] == "erp" && m["action"] == "allow" && m["user"] != nil && m["device"] != nil {
@@ -63,7 +63,7 @@ func TestRealPA001UserReachesClusterApp(t *testing.T) {
 		}
 		return found
 	})
-	if strings.Contains(mustRead(t, w.dir+"/en/decisions.jsonl"), "hello from the laptop") {
+	if strings.Contains(w.allDecisionsRaw(), "hello from the laptop") {
 		t.Fatal("payload reached the decision log")
 	}
 }

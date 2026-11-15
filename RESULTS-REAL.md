@@ -9,3 +9,5 @@ One line per run of test/real/run.sh: date, commit, the node's operating system 
 - 20261115-095801, commit 1b15d72, node: Linux 5.14.0-687.58.1.el9_8.x86_64 16 : 0 passed, 1 failed, 0 skipped
 - 20261115-095946, commit 1b15d72, node: Linux 5.14.0-687.58.1.el9_8.x86_64 16 : 2 passed, 1 failed, 0 skipped
 - 20261115-100108, commit 1b15d72, node: Linux 5.14.0-687.58.1.el9_8.x86_64 16 : 4 passed, 0 failed, 0 skipped
+- 20261115-100418, commit d1fd982, node: Linux 5.14.0-687.58.1.el9_8.x86_64 16 : 0 passed, 3 failed, 0 skipped
+- 20261115-100527, commit d1fd982, node: Linux 5.14.0-687.58.1.el9_8.x86_64 16 : 3 passed, 0 failed, 0 skipped
