@@ -121,23 +121,18 @@ func (s *Session) writeFrame(t byte, id uint32, p []byte) error {
 	if len(p) > MaxFrame {
 		return fmt.Errorf("mux: frame too large")
 	}
-	var h [9]byte
-	h[0] = t
-	binary.BigEndian.PutUint32(h[1:], id)
-	binary.BigEndian.PutUint32(h[5:], uint32(len(p)))
+	buf := make([]byte, 9+len(p))
+	buf[0] = t
+	binary.BigEndian.PutUint32(buf[1:], id)
+	binary.BigEndian.PutUint32(buf[5:], uint32(len(p)))
+	copy(buf[9:], p)
 	s.wmu.Lock()
-	defer s.wmu.Unlock()
-	if _, err := s.conn.Write(h[:]); err != nil {
+	_, err := s.conn.Write(buf)
+	s.wmu.Unlock()
+	if err != nil {
 		s.fail(err)
-		return err
 	}
-	if len(p) > 0 {
-		if _, err := s.conn.Write(p); err != nil {
-			s.fail(err)
-			return err
-		}
-	}
-	return nil
+	return err
 }
 
 // Open starts a stream carrying meta and waits for the peer to accept it.
@@ -239,10 +234,7 @@ func (s *Session) readLoop() {
 				}
 			}
 		case tData:
-			if st == nil {
-				continue // late data for a closed stream
-			}
-			if !st.onData(p) {
+			if st != nil && !st.onData(p) {
 				st.reset()
 			}
 		case tFin:
@@ -266,10 +258,10 @@ func (s *Session) readLoop() {
 }
 
 func (s *Session) onOpen(id uint32, meta []byte) {
-	isServerID := id%2 == 1
+	peerIsServer := id%2 == 1
 	s.mu.Lock()
 	_, dup := s.streams[id]
-	bad := isServerID == s.cfg.Server || dup || len(s.streams) >= s.cfg.MaxStreams
+	bad := peerIsServer == s.cfg.Server || dup || len(s.streams) >= s.cfg.MaxStreams
 	var st *Stream
 	if !bad {
 		st = newStream(s, id)
@@ -347,7 +339,7 @@ func (st *Stream) Reject(code string) error {
 func (st *Stream) onData(p []byte) bool {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if st.localClose { // discard but return credit
+	if st.localClose { // discard, but return credit so the peer is not stuck
 		go st.s.writeFrame(tWindow, st.id, win(len(p)))
 		return true
 	}
@@ -485,13 +477,5 @@ func (st *Stream) Close() error {
 	st.buf = nil
 	st.cond.Broadcast()
 	st.mu.Unlock()
-	err := st.CloseWrite()
-	st.mu.Lock()
-	done := st.remoteFin || st.err != nil
-	st.mu.Unlock()
-	if !done {
-		// peer has not closed: tear down so the stream does not linger
-		st.reset()
-	}
-	return err
+	return st.CloseWrite()
 }

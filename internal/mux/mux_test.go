@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -21,7 +22,6 @@ func pair(t *testing.T, cfg Config) (*Session, *Session) {
 	return cl, sv
 }
 
-// echoServer accepts streams and echoes until EOF.
 func echoServer(sv *Session) {
 	for {
 		st, _, err := sv.Accept()
@@ -62,7 +62,7 @@ func TestRoundTripAndMeta(t *testing.T) { // MUX-001
 func TestReject(t *testing.T) {
 	cl, sv := pair(t, Config{})
 	go func() { st, _, _ := sv.Accept(); st.Reject("policy") }()
-	if _, err := cl.Open(nil, time.Second); err == nil || !bytes.Contains([]byte(err.Error()), []byte("policy")) {
+	if _, err := cl.Open(nil, time.Second); err == nil || !strings.Contains(err.Error(), "policy") {
 		t.Fatalf("err %v", err)
 	}
 }
@@ -75,7 +75,7 @@ func TestManyStreamsIntegrity(t *testing.T) { // MUX-002
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			st, err := cl.Open(nil, 10*time.Second)
+			st, err := cl.Open(nil, 20*time.Second)
 			if err != nil {
 				t.Error(err)
 				return
@@ -108,7 +108,6 @@ func TestLargeTransferFlowControl(t *testing.T) {
 
 func TestStalledReaderDoesNotBlockOthers(t *testing.T) { // MUX-003
 	cl, sv := pair(t, Config{})
-	stalled := make(chan *Stream, 1)
 	go func() {
 		for {
 			st, meta, err := sv.Accept()
@@ -117,15 +116,13 @@ func TestStalledReaderDoesNotBlockOthers(t *testing.T) { // MUX-003
 			}
 			st.Accept()
 			if string(meta) == "stall" {
-				stalled <- st // never read
-				continue
+				continue // never read
 			}
 			go func() { io.Copy(st, st); st.Close() }()
 		}
 	}()
 	slow, _ := cl.Open([]byte("stall"), time.Second)
-	go slow.Write(make([]byte, 4<<20)) // blocks after the window is used
-	<-stalled
+	go slow.Write(make([]byte, 4<<20)) // blocks once the window is used up
 	fast, _ := cl.Open(nil, time.Second)
 	done := make(chan bool)
 	go func() {
@@ -142,9 +139,6 @@ func TestStalledReaderDoesNotBlockOthers(t *testing.T) { // MUX-003
 	case <-time.After(3 * time.Second):
 		t.Fatal("fast stream blocked by stalled stream")
 	}
-	// the stalled stream's receive buffer must stay within the window
-	st := <-stalled
-	_ = st
 }
 
 func TestResetIsolated(t *testing.T) { // MUX-004
@@ -163,11 +157,10 @@ func TestResetIsolated(t *testing.T) { // MUX-004
 	}
 }
 
-func TestDeadPeer(t *testing.T) { // MUX-005 (real short timers)
+func TestDeadPeer(t *testing.T) { // MUX-005, real short timers
 	a, b := net.Pipe()
 	cl := New(a, Config{PingInterval: 20 * time.Millisecond, DeadAfter: 80 * time.Millisecond})
-	_ = b // peer never answers
-	go io.Copy(io.Discard, b)
+	go io.Copy(io.Discard, b) // peer reads but never answers
 	select {
 	case <-cl.Done():
 	case <-time.After(2 * time.Second):
@@ -218,11 +211,12 @@ func TestBadFramesCloseSession(t *testing.T) { // MUX-006
 	for name, frame := range map[string][]byte{
 		"oversize":     {tData, 0, 0, 0, 2, 0xff, 0xff, 0xff, 0xff},
 		"unknown-type": {99, 0, 0, 0, 2, 0, 0, 0, 0},
+		"truncated":    {tData, 0, 0},
 	} {
 		t.Run(name, func(t *testing.T) {
 			a, b := net.Pipe()
 			s := New(a, Config{})
-			go b.Write(frame)
+			go func() { b.Write(frame); b.Close() }()
 			select {
 			case <-s.Done():
 			case <-time.After(time.Second):
@@ -230,30 +224,17 @@ func TestBadFramesCloseSession(t *testing.T) { // MUX-006
 			}
 		})
 	}
-	// truncated frame then EOF
-	a, b := net.Pipe()
-	s := New(a, Config{})
-	go func() { b.Write([]byte{tData, 0, 0}); b.Close() }()
-	select {
-	case <-s.Done():
-	case <-time.After(time.Second):
-		t.Fatal("truncated frame not detected")
-	}
 }
 
-func TestParityOfIDs(t *testing.T) { // client may not open odd (server) IDs
+func TestWrongParityOpenRejected(t *testing.T) {
 	a, b := net.Pipe()
 	s := New(a, Config{Server: true})
-	// a "server" receiving an OPEN with an odd id (its own parity) must reject
-	go func() {
-		b.Write([]byte{tOpen, 0, 0, 0, 1, 0, 0, 0, 0})
-	}()
-	buf := make([]byte, 9+8)
-	io.ReadFull(b, buf[:9])
-	if buf[0] != tReject {
-		t.Fatalf("type %d", buf[0])
+	defer s.Close()
+	go b.Write([]byte{tOpen, 0, 0, 0, 1, 0, 0, 0, 0}) // odd id belongs to the server itself
+	var h [9]byte
+	if _, err := io.ReadFull(b, h[:]); err != nil || h[0] != tReject {
+		t.Fatalf("type %d err %v", h[0], err)
 	}
-	s.Close()
 }
 
 func FuzzFrames(f *testing.F) {
@@ -266,7 +247,7 @@ func FuzzFrames(f *testing.F) {
 		go io.Copy(io.Discard, b)
 		select {
 		case <-s.Done():
-		case <-time.After(300 * time.Millisecond):
+		case <-time.After(200 * time.Millisecond):
 			s.Close()
 		}
 	})

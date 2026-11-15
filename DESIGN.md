@@ -13,6 +13,7 @@ The design is written in parts. This file grows one subtask at a time:
 | D3 | Data plane: broker, connector stitching, forward proxy | done |
 | D4 | Agent, posture, enrolment | done |
 | D5 | Control-plane API, logging, security, deployment | done |
+| D6 | Should-have (S) requirements: coverage by RB1 | done |
 
 ---
 
@@ -533,3 +534,55 @@ The test plan carries the full matrix. Summary of which design part covers which
 2. Whether the transparent-tunnel agent is built natively per OS or on top of an existing open-source tunnel (licence review needed).
 3. Whether ENs run on a partner cloud's edge. This affects the "no payload at rest" claim and the PKI.
 4. Whether to decrypt web traffic by default (ZIA-040 and the privacy trade-off) or keep host-only policy for the SMB tier.
+
+---
+
+## D6. Should-have (S) requirements: coverage by RB1
+
+REQUIREMENTS.md has 81 requirements marked (S). RB1 is built from the Must (M) set (D1.2). This part states, for every (S) item, whether the design covers it, so that nothing is silently dropped. The test plan (TEST-PLAN.md section on scope) already lists the same exclusions as out of scope.
+
+**Result: no (S) requirement is fully implemented in RB1.** Seven are partly supported by RB1 mechanisms, and the rest are deferred.
+
+### D6.1 Partly covered by RB1
+
+| ID | What RB1 gives | What is missing |
+|---|---|---|
+| ZPA-028, ADM-020 | `POST /v1/policies/{kind}/dry-run` (D5.1) evaluates a sample request against a draft | No "who would gain or lose access" impact report over real users and flows |
+| ZPA-044 | ENs keep enforcing the last policy when the CP is down (D3.6) | No local cached mode for broker outage, no access during EN loss beyond reconnecting to another EN |
+| NFR-004 | Full-policy push on change, immediate revocation push (D2.6) | No 60-second propagation target across many nodes and no test for it |
+| AGT-008 | Fail-closed behaviour (D1.4, D3.6) | No fail-open setting per tenant or per app, no captive-portal handling |
+| AGT-001d | Agent picks an EN from its list (D4.1) | No latency or geolocation based selection |
+| ZIA-015 | Safe-defaults pack (D2.4) | Not a recommended URL/cloud-app baseline template |
+| ARCH-032 | Decision log with user, device, app, verdict (D2.5, D5.4) | No single queryable context store, no SIEM path |
+
+### D6.2 Deferred, by area
+
+| Area | IDs | Why deferred | Earliest phase |
+|---|---|---|---|
+| Browser and unmanaged devices | ZPA-055, ZIA-022d, ZIA-024, BYOD-001..004 | Needs a fleet of isolated browser containers or a managed browser. No Must item depends on it. See D6.3 | RB3 |
+| Risk and adaptive policy | ARCH-007, ZPA-072, ZPA-073, ZPA-074, ZIA-040 | Needs risk scoring, app-level inspection or TLS decryption (open question 4) | RB3 |
+| Private access extras | ZPA-013, ZPA-014, ZPA-027, ZPA-043, ZPA-045, ZPA-050, ZPA-051, ZPA-054, ZPA-063, ARCH-012 | Operational features, not needed to prove the core loop | RB2 |
+| Web and firewall extras | ZIA-006, ZIA-018, ZIA-022b, ZIA-022c, ZIA-022f, ZIA-025, ZIA-031, ZIA-034, FW-004, FW-005, FW-008, FW-012, BW-001, BW-002 | Need decryption, threat feeds, egress IPs or traffic shaping | RB3 |
+| Data protection and AI | DATA-003, DATA-005, DATA-006, AGT-014, AI-001, AI-002, AI-003 | Need inspection and endpoint agents beyond the CLI agent | RB3 |
+| Agent deployment and UX | AGT-009, AGT-010, AGT-012, AGT-013, INT-005, INT-007, OPS-007 | Per-OS installers, MDM, SCIM, notifications, SOAR | RB2 |
+| Branch and sites | BR-001, BR-002, BR-010, BR-011 | GRE/IPsec connector | RB3 |
+| Digital experience | DEX-001..003 | Probes and path analysis | RB3 |
+| Admin, reports, onboarding | ADM-008, ADM-009, SMB-004, SMB-005, SMB-007, SMB-022, OPS-003..006 | Need a log history, reporting engine and a billing model | RB2 |
+| Scale, residency, compliance | ARCH-022, NFR-031, NFR-032, NFR-051, NFR-060 | Need multi-region deployment and audits | Product |
+
+### D6.3 Browser isolation: design position
+
+Browser isolation (ZIA-024, ZIA-022d, ZPA-055) is the highest-value deferred (S) item for the unmanaged-device case. Two approaches exist, and the choice is open:
+
+| | Cloud isolation (Zscaler style) | Secure workspace browser (Prisma Access Browser style, BYOD-001..004) |
+|---|---|---|
+| Page runs | In a disposable container on an EN, streamed as pixels | Locally in a managed Chromium profile |
+| Endpoint footprint | None | A browser or profile to install |
+| Cost for an SMB build | High: container fleet, streaming protocol, per-session resources | Lower: browser extension and policy, posture re-check |
+| Policy hooks | Isolate action in the web rule, read-only, clipboard, upload, download, print | Same controls enforced in the browser |
+
+**Decision for now:** no isolation in RB1 or RB2. Both approaches need an `isolate` action in the rule model (D2.2). To keep that door open, the rule action enum reserves the value `isolate`, and the evaluator rejects it as unsupported in RB1. The recommended first step is the workspace browser (BYOD-001), because it needs no container fleet.
+
+### D6.4 Open question added
+
+5. Whether the first isolation build is cloud-streamed or a workspace browser (D6.3).
