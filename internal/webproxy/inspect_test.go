@@ -347,3 +347,30 @@ func TestNoScanningWhenNoRuleUsesDLP(t *testing.T) {
 		t.Fatalf("without a dlp rule nothing is blocked on content: %d", code)
 	}
 }
+
+type keyedState struct {
+	*state
+	key *ecdsa.PrivateKey
+}
+
+func (k keyedState) InterceptKey(string) *ecdsa.PrivateKey { return k.key }
+
+func TestInspectionCertificatesUseTheTenantKey(t *testing.T) { // WB-003 groundwork
+	r := newRig(t)
+	o := inspectOrigin(t, r)
+	enableInspection(r)
+	tenantKey := r.leafKeyForTest()
+	r.proxy.State = keyedState{state: r.st, key: tenantKey}
+	roots := x509.NewCertPool()
+	roots.AddCert(r.tenCA.Cert)
+	c, _, err := r.tunnel(t, hostport(o.URL), roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.ConnectionState().PeerCertificates[0]
+	want, _ := x509.MarshalPKIXPublicKey(&tenantKey.PublicKey)
+	have, _ := x509.MarshalPKIXPublicKey(got.PublicKey)
+	if string(want) != string(have) {
+		t.Fatal("the minted certificate does not carry the tenant's stable key, so the workspace pin would not match")
+	}
+}

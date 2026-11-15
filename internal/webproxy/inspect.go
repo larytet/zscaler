@@ -2,6 +2,7 @@ package webproxy
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -55,11 +56,19 @@ func (p *Proxy) leaf(tenant, host string, ca *pki.CA) (*tls.Certificate, error) 
 	}
 	p.leafMu.Lock()
 	defer p.leafMu.Unlock()
-	der, err := ca.SignServer(&p.leafKey.PublicKey, host, 12*time.Hour)
+	signKey := p.leafKey
+	if ki, ok := p.State.(interface {
+		InterceptKey(string) *ecdsa.PrivateKey
+	}); ok {
+		if k := ki.InterceptKey(tenant); k != nil {
+			signKey = k // the tenant's stable key, so the workspace can pin it
+		}
+	}
+	der, err := ca.SignServer(&signKey.PublicKey, host, 12*time.Hour)
 	if err != nil {
 		return nil, err
 	}
-	c := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: p.leafKey}
+	c := &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: signKey}
 	if c.Leaf, err = x509ParseCertificate(der); err != nil {
 		return nil, err
 	}

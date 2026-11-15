@@ -643,10 +643,10 @@ At workspace enrolment the control plane issues a short-lived device certificate
 
 The launcher starts the browser with a fixed proxy-auto-config address (the local workspace proxies on ephemeral ports), with QUIC and encrypted client hello switched off so nothing bypasses the proxy, with proxy settings locked, and without the browser's own DNS-over-HTTPS. The local proxy relays to the enforcement node over mTLS exactly as the agent's HTTP proxy does today.
 
-**PROTOTYPE, trust of the inspection CA inside the workspace only (WB-003).** The personal device's system trust store must not change. Candidate approaches, in the order to try:
+**Trust of the inspection CA inside the workspace only (WB-003). Decided in W2: option 3, the key pin, tried with real Chrome and working.** (The candidates below are kept as the record of what was weighed.) The personal device's system trust store must not change. Candidate approaches, in the order to try:
 1. Point the browser at a profile-private certificate store (on Linux by running it with a private home directory so its NSS database lives in the profile; equivalent isolation on macOS and Windows is unknown).
 2. Ship a bundled Chromium that reads a managed-policy directory inside the bundle and trust the CA by policy.
-3. Fallback: trust the proxy's leaf-certificate public key with the browser's SPKI allow-list flag. Weaker (it is a test flag, and the proxy's leaf key would have to be stable and shared with the launcher).
+3. Trust the proxy's leaf-certificate public key with the browser's SPKI allow-list flag. **Chosen.** To make it sound, every inspection certificate of a tenant is now minted with one stable per-tenant key (created with the CA, shipped to enforcement nodes in the signed snapshot, never returned by any API), and the workspace asks the control plane for that key's SHA-256 hash (`GET /enrol/inspection`, device or workspace certificate only) and passes it as `--ignore-certificate-errors-spki-list`. It applies to that one browser instance. Real Chrome loads an inspected HTTPS page in the workspace while a plain profile using the same proxy shows its certificate error page (SCN-015). Weaknesses: it is a flag Chrome documents for testing, may change or show a notice (not checked in a visible window), and it trusts that key for any host, so the tenant key must stay secret: it is as sensitive as the CA key, and sits in the same places.
 
 ### D8.6 Data controls (WB-006) and what is not possible
 

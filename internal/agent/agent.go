@@ -251,6 +251,30 @@ func (a *Agent) EnrolService(token string) error {
 	return a.install(c)
 }
 
+// InspectionSPKI asks the control plane for the hash of the key that signs this tenant's
+// inspection certificates. It returns "" when inspection is off.
+func (a *Agent) InspectionSPKI() (string, error) {
+	resp, err := a.enrolClient(true).Get(a.Cfg.EnrolURL + "/enrol/inspection")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("agent: control plane said %d", resp.StatusCode)
+	}
+	var out struct {
+		Enabled bool   `json:"enabled"`
+		SPKI    string `json:"spki_sha256"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&out); err != nil {
+		return "", err
+	}
+	if !out.Enabled {
+		return "", nil
+	}
+	return out.SPKI, nil
+}
+
 // Load restores a previously issued certificate from disk.
 func (a *Agent) Load() error {
 	k, err := a.loadKey()

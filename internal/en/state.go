@@ -4,7 +4,9 @@ package en
 import (
 	"crypto/ecdsa"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +36,7 @@ type tenantView struct {
 	inspect bool
 	exempt  []string
 	ca      *pki.CA
+	leafKey *ecdsa.PrivateKey
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -87,6 +90,11 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 		if t.Inspect != nil && t.Inspect.Enabled {
 			if ca, err := pki.CAFromPEM([]byte(t.Inspect.CACert), []byte(t.Inspect.CAKey), nil); err == nil {
 				tv.inspect, tv.exempt, tv.ca = true, t.Inspect.Exempt, ca
+				if blk, _ := pem.Decode([]byte(t.Inspect.LeafKey)); blk != nil {
+					if k, err := x509.ParseECPrivateKey(blk.Bytes); err == nil {
+						tv.leafKey = k
+					}
+				}
 			} else {
 				errs = append(errs, fmt.Errorf("tenant %s: intercept CA unusable, inspection stays off: %w", id, err))
 			}
@@ -165,6 +173,14 @@ func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
 		return true, t.exempt, t.ca
 	}
 	return false, nil, nil
+}
+
+// InterceptKey is the tenant's stable key for inspection certificates (nil if none was shipped).
+func (s *SyncState) InterceptKey(tenant string) *ecdsa.PrivateKey {
+	if t := s.t(tenant); t != nil && t.inspect {
+		return t.leafKey
+	}
+	return nil
 }
 
 // Granted implements broker.Granter from the signed snapshot.

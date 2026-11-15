@@ -6,12 +6,16 @@ package e2e
 import (
 	"bufio"
 	"bytes"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"github.com/larytet/zscaler/internal/pki"
 	"io"
 	"net"
 	"net/http"
@@ -1551,6 +1555,113 @@ func TestScn014RealChromeWorkspace(t *testing.T) {
 	eventually(t, "the workspace decision in the log", 10*time.Second, func() bool {
 		for _, d := range s.decisions() {
 			if d["app"] == "hr" && d["action"] == "allow" && d["workspace"] == true && d["rule"] == "sd-sensitive" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
+func lanIP() string {
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
+			return ipn.IP.String()
+		}
+	}
+	return ""
+}
+
+// SCN-015 (WB-003, ZIA-040): with TLS inspection on, a real Chrome inside the workspace trusts the
+// tenant's inspection certificates (by key pin, in that one browser), while a plain Chrome profile
+// using the same proxy still rejects them. The device's trust store is not touched.
+func TestScn015InspectionTrustIsConfinedToTheWorkspace(t *testing.T) {
+	chrome, err := exec.LookPath("google-chrome")
+	if err != nil {
+		t.Skip("Google Chrome is not installed")
+	}
+	ip := lanIP()
+	if ip == "" {
+		t.Skip("no non-loopback address: the proxy auto-config sends loopback traffic direct")
+	}
+	// a TLS origin on the LAN address with its own CA, which only the proxy is told to trust
+	originCA, _ := pki.NewCA("origin CA", nil)
+	okey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	oder, _ := originCA.SignServer(&okey.PublicKey, ip, time.Hour)
+	var served atomic.Int64
+	origin := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		served.Add(1)
+		fmt.Fprint(w, "<html><body>PAGE FROM THE INSPECTED ORIGIN</body></html>")
+	}))
+	ln, err := net.Listen("tcp", ip+":0")
+	if err != nil {
+		t.Skip("cannot listen on the LAN address: " + err.Error())
+	}
+	origin.Listener = ln
+	origin.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{oder}, PrivateKey: okey}}}
+	origin.StartTLS()
+	defer origin.Close()
+	hostport := ln.Addr().String()
+	caFile := filepath.Join(t.TempDir(), "origin-ca.pem")
+	os.WriteFile(caFile, originCA.PEM(), 0o600)
+
+	s := newStack(t, "--lab-allow-dial", hostport, "--lab-upstream-ca", caFile)
+	s.must("PUT", "/v1/inspection", map[string]any{"enabled": true}, s.token)
+	pageURL := "https://" + hostport + "/"
+	dump := func(name string, args ...string) string {
+		out := filepath.Join(s.dir, name+".html")
+		all := append([]string{"--headless=new", "--disable-gpu", "--dump-dom", "--virtual-time-budget=10000"}, args...)
+		cmd := exec.Command(chrome, all...)
+		f, _ := os.Create(out)
+		cmd.Stdout = f
+		cmd.Run()
+		f.Close()
+		b, _ := os.ReadFile(out)
+		return string(b)
+	}
+
+	// control: a plain Chrome profile, same proxy, no pin
+	plain := s.newAgent(t, "plain")
+	s.runInst(plain)
+	eventually(t, "the plain agent's proxy", 25*time.Second, func() bool { return s.reachable(plain.socks(), "erp.ztx") })
+	proxy := fmt.Sprintf("http://127.0.0.1:%d", plain.ports["http"])
+	var control string
+	eventually(t, "the plain proxy to carry web traffic", 15*time.Second, func() bool {
+		control = dump("control", "--user-data-dir="+filepath.Join(s.dir, "plain-profile"), "--proxy-server="+proxy, pageURL)
+		return strings.Contains(control, "Privacy error") // Chrome refused the certificate: the control is meaningful
+	})
+	if !strings.Contains(control, "Privacy error") || strings.Contains(control, "PAGE FROM THE INSPECTED ORIGIN") {
+		t.Fatalf("a plain Chrome profile trusted the inspection certificate; the control is invalid:\n%.300s", control)
+	}
+
+	// the workspace: the same URL works
+	dir := s.enrolWorkspace(t, "ws")
+	domFile := filepath.Join(s.dir, "ws-dom.html")
+	wrapper := filepath.Join(s.dir, "chrome-ws.sh")
+	os.WriteFile(wrapper, []byte("#!/bin/sh\nexec "+chrome+" --headless=new --disable-gpu --dump-dom --virtual-time-budget=10000 \"$@\" > "+domFile+" 2>"+domFile+".err\n"), 0o755)
+	cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), "--dir", dir, "--browser", wrapper, "--posture-every", "1h", "--renew-every", "1h", "workspace", pageURL)
+	cmd.Env = append(os.Environ(), s.agentEnv()...)
+	out := &lockedBuf{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	t.Cleanup(func() { cmd.Process.Kill() })
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatalf("workspace Chrome did not finish:\n%s", out.String())
+	}
+	dom, _ := os.ReadFile(domFile)
+	if !strings.Contains(string(dom), "PAGE FROM THE INSPECTED ORIGIN") {
+		t.Fatalf("the inspected HTTPS page did not load inside the workspace.\nDOM: %.300s\nlauncher:\n%s", dom, out.String())
+	}
+	// and the decision log shows the request was inspected
+	eventually(t, "an inspected request in the log", 10*time.Second, func() bool {
+		for _, d := range s.decisions() {
+			if d["inspected"] == true && d["workspace"] == true {
 				return true
 			}
 		}

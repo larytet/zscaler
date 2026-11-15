@@ -808,3 +808,39 @@ func TestWorkspaceEnrolmentAndRenewal(t *testing.T) { // WBT-003
 		t.Fatalf("segment class sensitive refused: %d", c)
 	}
 }
+
+func TestInspectionPinEndpoint(t *testing.T) { // WB-003 groundwork
+	e := newEnrolEnv(t)
+	k, pub := newKey(t)
+	tok := e.idp.Sign("k1", e.idp.Good("u1", "u1@example.com", "n1", "all-staff"))
+	_, b := e.post("/enrol/device", map[string]any{"tenant": "a", "id_token": tok, "nonce": "n1", "public_key": pub, "workspace": true}, nil)
+	var out certOut
+	json.Unmarshal(b, &out)
+	ask := func(c *tls.Certificate) (int, map[string]any) {
+		code, body := e.get("/enrol/inspection", c)
+		var m map[string]any
+		json.Unmarshal(body, &m)
+		return code, m
+	}
+	if code, m := ask(tlsCert(t, out, k)); code != 200 || m["enabled"] != false || m["spki_sha256"] != "" {
+		t.Fatalf("inspection off: %d %v", code, m)
+	}
+	if code, _ := ask(nil); code != 401 {
+		t.Fatalf("no certificate: %d", code)
+	}
+	e.api.Store.SetInspection("a", true, nil)
+	code, m := ask(tlsCert(t, out, k))
+	want, _ := e.api.Store.InterceptSPKI("a")
+	if code != 200 || m["enabled"] != true || m["spki_sha256"] != want || want == "" {
+		t.Fatalf("%d %v want %q", code, m, want)
+	}
+	// a connector certificate has no business asking
+	ctok := e.api.Tokens.Issue("a", "site1")
+	ck, cpub := newKey(t)
+	_, cb := e.post("/enrol/connector", map[string]string{"token": ctok, "public_key": cpub}, nil)
+	var cout certOut
+	json.Unmarshal(cb, &cout)
+	if code, _ := ask(tlsCert(t, cout, ck)); code != 401 {
+		t.Fatalf("connector certificate: %d", code)
+	}
+}

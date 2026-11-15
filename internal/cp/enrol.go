@@ -69,6 +69,7 @@ func (e *Enrol) Handler() http.Handler {
 	m.HandleFunc("POST /enrol/renew", e.renew)
 	m.HandleFunc("POST /enrol/connector", e.connector)
 	m.HandleFunc("GET /enrol/targets", e.targets)
+	m.HandleFunc("GET /enrol/inspection", e.inspection)
 	m.HandleFunc("POST /enrol/en", e.enrolEN)
 	m.HandleFunc("POST /enrol/service", e.enrolService)
 	m.HandleFunc("GET /sync/state", e.syncState)
@@ -461,4 +462,17 @@ func (e *Enrol) enrolService(w http.ResponseWriter, r *http.Request) {
 	e.API.log(ctxInfo{tenant: tenant, actor: subject}, "enrol.service", did, nil, nil)
 	out.DeviceID = did
 	writeJSON(w, 200, out)
+}
+
+// inspection tells a device or workspace whether its tenant's web traffic is decrypted and,
+// if so, the hash of the key that signs the certificates, which the workspace browser pins
+// (and which no other browser trusts).
+func (e *Enrol) inspection(w http.ResponseWriter, r *http.Request) {
+	id, _, ok := e.peer(r)
+	if !ok || (id.Role != pki.RoleDevice && id.Role != pki.RoleWorkspace) {
+		writeErr(w, fail(401, "unauthenticated", "a valid device certificate is required"))
+		return
+	}
+	spki, on := e.API.Store.InterceptSPKI(id.Tenant)
+	writeJSON(w, 200, map[string]any{"enabled": on, "spki_sha256": spki})
 }

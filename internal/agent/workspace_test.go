@@ -6,7 +6,7 @@ import (
 )
 
 func TestWorkspaceFlagsAreFixedAndSafe(t *testing.T) { // WBT-007
-	flags := workspaceFlags("/tmp/profile", "http://127.0.0.1:5000/proxy.pac")
+	flags := workspaceFlags("/tmp/profile", "http://127.0.0.1:5000/proxy.pac", "")
 	all := strings.Join(flags, " ")
 	for _, want := range []string{"--user-data-dir=/tmp/profile", "--proxy-pac-url=http://127.0.0.1:5000/proxy.pac", "--disable-quic", "--disable-sync", "--disable-extensions", "EncryptedClientHello", "DnsOverHttps", "--password-store=basic"} {
 		if !strings.Contains(all, want) {
@@ -88,3 +88,22 @@ func TestRefusalVersusUnreachable(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestSPKIFlagOnlyWhenInspectionIsOn(t *testing.T) {
+	if strings.Contains(strings.Join(workspaceFlags("/p", "http://x/pac", ""), " "), "spki") {
+		t.Fatal("no inspection, no pin")
+	}
+	with := workspaceFlags("/p", "http://x/pac", "abc123=")
+	n := 0
+	for _, f := range with {
+		if strings.HasPrefix(f, "--ignore-certificate-errors-spki-list=abc123=") {
+			n++
+		}
+		if f == "--ignore-certificate-errors" {
+			t.Fatal("the blanket flag turns certificate checking off; only the pin is allowed")
+		}
+	}
+	if n != 1 {
+		t.Fatalf("%v", with)
+	}
+}

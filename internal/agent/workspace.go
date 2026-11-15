@@ -42,8 +42,8 @@ type WorkspaceOptions struct {
 }
 
 // workspaceFlags are the only settings the browser is started with.
-func workspaceFlags(profile, pacURL string) []string {
-	return []string{
+func workspaceFlags(profile, pacURL, spki string) []string {
+	flags := []string{
 		"--user-data-dir=" + profile,
 		"--proxy-pac-url=" + pacURL,
 		"--disable-quic", // nothing may bypass the proxy
@@ -55,6 +55,12 @@ func workspaceFlags(profile, pacURL string) []string {
 		"--no-default-browser-check",
 		"--password-store=basic", // do not touch the personal keyring
 	}
+	if spki != "" {
+		// Trust certificates carrying the tenant's inspection key, in THIS browser instance only.
+		// The device's own trust store is never changed (WB-003).
+		flags = append(flags, "--ignore-certificate-errors-spki-list="+spki)
+	}
+	return flags
 }
 
 // ValidateWorkspaceArgs refuses anything that looks like a browser flag. The user cannot add
@@ -134,7 +140,11 @@ func (a *Agent) RunWorkspace(ctx context.Context, o WorkspaceOptions) error {
 	go srv.Serve(lns[2])
 	defer srv.Close()
 
-	args := workspaceFlags(profile, "http://"+a.Cfg.StatusAddr+"/proxy.pac")
+	spki, err := a.InspectionSPKI()
+	if err != nil {
+		o.Log("could not ask whether inspection is on (continuing without it): " + err.Error())
+	}
+	args := workspaceFlags(profile, "http://"+a.Cfg.StatusAddr+"/proxy.pac", spki)
 	if o.StartURL != "" {
 		args = append(args, o.StartURL)
 	}

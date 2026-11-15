@@ -68,6 +68,7 @@ type rig struct {
 	exempt  map[string]bool
 	emu     sync.Mutex
 	st      *state
+	proxy   *Proxy
 	tenCA   *pki.CA
 	up      *x509.CertPool
 	key     *ecdsa.PrivateKey
@@ -109,6 +110,7 @@ func newRig(t *testing.T) *rig {
 		Log:    func(rec broker.Record) { r.mu.Lock(); r.logs = append(r.logs, rec); r.mu.Unlock() }}
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	der, _ := ca.Sign(&key.PublicKey, pki.Identity{Tenant: "t1", Subject: "en", Device: "en1", Role: pki.RoleEN}, time.Hour, "en.local")
+	r.proxy = p
 	srv := p.Server(tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key})
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
 	go srv.Serve(tls.NewListener(ln, srv.TLSConfig))

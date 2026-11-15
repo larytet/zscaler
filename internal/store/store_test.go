@@ -261,3 +261,31 @@ func TestInspectionCAIsPerTenantAndKeyStaysInternal(t *testing.T) { // ARCH-021
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestInterceptSPKIIsStableAndPerTenant(t *testing.T) { // WB-003 groundwork
+	s, _, _ := twoTenants(t)
+	if _, ok := s.InterceptSPKI("a"); ok {
+		t.Fatal("an SPKI before inspection was ever enabled")
+	}
+	s.SetInspection("a", true, nil)
+	s.SetInspection("b", true, nil)
+	a1, ok := s.InterceptSPKI("a")
+	b1, _ := s.InterceptSPKI("b")
+	if !ok || a1 == "" || a1 == b1 {
+		t.Fatalf("each tenant needs its own key: %q %q", a1, b1)
+	}
+	s.SetInspection("a", false, nil)
+	if _, ok := s.InterceptSPKI("a"); ok {
+		t.Fatal("an SPKI is offered while inspection is off")
+	}
+	s.SetInspection("a", true, []string{"bank.example"})
+	if a2, _ := s.InterceptSPKI("a"); a2 != a1 {
+		t.Fatal("turning inspection off and on changed the key: every workspace would break")
+	}
+	if snap := s.Snapshot().Tenants["a"].Inspect; snap == nil || snap.LeafKey == "" {
+		t.Fatal("the key must reach the enforcement nodes with the CA")
+	}
+	if cfg, _ := s.Inspection("a"); cfg.LeafKey != "" {
+		t.Fatal("Inspection() leaked the leaf key")
+	}
+}

@@ -3,11 +3,15 @@
 package store
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"os"
@@ -486,6 +490,9 @@ type InspectCfg struct {
 	Exempt  []string `json:"exempt,omitempty"` // domains (and their subdomains) that are never decrypted
 	CACert  string   `json:"ca_cert,omitempty"`
 	CAKey   string   `json:"ca_key,omitempty"`
+	// LeafKey is the one key every inspection certificate of this tenant is minted with, so its
+	// public-key hash is stable and the workspace browser can trust it (and only it).
+	LeafKey string `json:"leaf_key,omitempty"`
 }
 
 type InspectSnap struct {
@@ -493,6 +500,7 @@ type InspectSnap struct {
 	Exempt  []string
 	CACert  string
 	CAKey   string
+	LeafKey string
 }
 
 type Snapshot struct {
@@ -520,7 +528,7 @@ func (s *Store) Snapshot() *Snapshot {
 			}
 		}
 		if t.Inspect.Enabled && t.Inspect.CAKey != "" {
-			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey}
+			ts.Inspect = &InspectSnap{Enabled: true, Exempt: append([]string(nil), t.Inspect.Exempt...), CACert: t.Inspect.CACert, CAKey: t.Inspect.CAKey, LeafKey: t.Inspect.LeafKey}
 		}
 		now := time.Now()
 		for _, g := range t.Grants {
@@ -660,6 +668,14 @@ func (s *Store) SetInspection(tenant string, enabled bool, exempt []string) erro
 		}
 		t.Inspect.CACert, t.Inspect.CAKey = string(ca.PEM()), string(ca.KeyPEM())
 	}
+	if enabled && t.Inspect.LeafKey == "" {
+		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			return err
+		}
+		der, _ := x509.MarshalECPrivateKey(k)
+		t.Inspect.LeafKey = string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}))
+	}
 	t.Inspect.Enabled = enabled
 	t.Inspect.Exempt = exempt
 	return s.save()
@@ -674,6 +690,28 @@ func (s *Store) Inspection(tenant string) (InspectCfg, error) {
 		return InspectCfg{}, err
 	}
 	c := t.Inspect
-	c.CAKey = ""
+	c.CAKey, c.LeafKey = "", "" // private keys never leave the store through this call
 	return c, nil
+}
+
+// InterceptSPKI returns the base64 SHA-256 of the public key that signs every inspection
+// certificate of the tenant (the form browsers use for SPKI pins), if inspection is on.
+func (s *Store) InterceptSPKI(tenant string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, err := s.tenant(tenant)
+	if err != nil || !t.Inspect.Enabled || t.Inspect.LeafKey == "" {
+		return "", false
+	}
+	blk, _ := pem.Decode([]byte(t.Inspect.LeafKey))
+	if blk == nil {
+		return "", false
+	}
+	k, err := x509.ParseECPrivateKey(blk.Bytes)
+	if err != nil {
+		return "", false
+	}
+	der, _ := x509.MarshalPKIXPublicKey(&k.PublicKey)
+	h := sha256.Sum256(der)
+	return base64.StdEncoding.EncodeToString(h[:]), true
 }
