@@ -70,7 +70,7 @@ func New(conn io.ReadWriteCloser, cfg Config) *Session {
 		cfg.MaxStreams = 1024
 	}
 	s := &Session{cfg: cfg, conn: conn, br: bufio.NewReaderSize(conn, 64*1024),
-		streams: map[uint32]*Stream{}, acceptCh: make(chan *Stream, 64),
+		streams: map[uint32]*Stream{}, acceptCh: make(chan *Stream, cfg.MaxStreams),
 		closed: make(chan struct{}), lastRecv: time.Now()}
 	if cfg.Server {
 		s.next = 1

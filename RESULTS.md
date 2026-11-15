@@ -11,8 +11,14 @@ Running log for RB1 (see TEST-PLAN.md T3.7 item 4). Machine: Linux 6.8, 12 threa
 | ID | Subtask | Status |
 |---|---|---|
 | I1 | Policy engine, validation, unit and fuzz tests | done |
-| I2 | PKI, posture, mux, audit packages | pending |
+| I2 | PKI, posture, mux, audit packages | done |
 | I3 | Enforcement node: broker and connector | pending |
 | I4 | Web proxy and classification | pending |
 | I5 | Control plane (store, API, safe defaults), agent, IdP | pending |
 | I6 | End-to-end scenarios, alerts, README run instructions | pending |
+
+## Known gaps found while implementing
+
+- **Audit log tail truncation is not detectable** from the file alone (a shorter chain is still valid). Mitigation for later: store the head hash outside the log (CP database or signed checkpoint). Test `TestTamperDetected/truncate` documents the behaviour.
+- **mux accept queue** is now sized to `MaxStreams`. A burst above that is rejected `busy`, by design.
+- Probe parsers use inline samples. Golden files from real machines (POS-004) are still to be collected.
