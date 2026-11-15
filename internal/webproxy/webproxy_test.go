@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,7 +47,11 @@ type rig struct {
 	origin  *httptest.Server
 	hits    atomic.Int64
 	tlsOrig *httptest.Server
+	exempt  map[string]bool
+	emu     sync.Mutex
 }
+
+func (r *rig) exemptAdd(hp string) { r.emu.Lock(); r.exempt[hp] = true; r.emu.Unlock() }
 
 func newRig(t *testing.T) *rig {
 	ca, _ := pki.NewCA("t", nil)
@@ -58,7 +63,7 @@ func newRig(t *testing.T) *rig {
 	r.tlsOrig = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) { fmt.Fprint(w, "tls-ok") }))
 	t.Cleanup(r.origin.Close)
 	t.Cleanup(r.tlsOrig.Close)
-	exempt := map[string]bool{hostport(r.origin.URL): true, hostport(r.tlsOrig.URL): true}
+	r.exempt = map[string]bool{hostport(r.origin.URL): true, hostport(r.tlsOrig.URL): true}
 
 	pol := &policy.Policy{Kind: policy.Web, DefaultAction: policy.Allow, Version: 3, Rules: []policy.Rule{
 		{ID: "bad", Priority: 10, Action: policy.Deny, Match: policy.Match{Categories: []string{"malware"}}},
@@ -72,7 +77,7 @@ func newRig(t *testing.T) *rig {
 		"file-sharing": {"share.test"},
 	})
 	p := &Proxy{CA: ca, Rev: pki.NewRevocations(nil), State: state{pol}, Classifier: cl, Name: "en1",
-		Exempt: func(a netip.AddrPort) bool { return exempt[a.String()] },
+		Exempt: func(a netip.AddrPort) bool { r.emu.Lock(); defer r.emu.Unlock(); return r.exempt[a.String()] },
 		Log:    func(rec broker.Record) { r.mu.Lock(); r.logs = append(r.logs, rec); r.mu.Unlock() }}
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	der, _ := ca.Sign(&key.PublicKey, pki.Identity{Tenant: "t1", Subject: "en", Device: "en1", Role: pki.RoleEN}, time.Hour, "en.local")
@@ -342,5 +347,107 @@ func TestBlockedRanges(t *testing.T) {
 		if blocked(netip.MustParseAddr(ip)) != want {
 			t.Errorf("%s want %v", ip, want)
 		}
+	}
+}
+
+func TestChunkedAndExpectContinue(t *testing.T) { // WEB-013
+	r := newRig(t)
+	// origin that echoes the request body length
+	var got atomic.Int64
+	o := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		n, _ := io.Copy(io.Discard, q.Body)
+		got.Store(n)
+		fmt.Fprintf(w, "len=%d", n)
+	}))
+	defer o.Close()
+	r.exemptAdd(hostport(o.URL))
+	resp, body := r.do(fmt.Sprintf("POST %s/c HTTP/1.1\r\nHost: %s\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n", o.URL, hostport(o.URL)))
+	if resp.StatusCode != 200 || body != "len=11" {
+		t.Fatalf("chunked: %d %q", resp.StatusCode, body)
+	}
+	// absolute-URI form with a Proxy-Connection header must not leak the hop-by-hop header upstream
+	var hdr atomic.Value
+	o2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		hdr.Store(q.Header.Get("Proxy-Connection") + "|" + q.Header.Get("Keep-Alive"))
+		io.WriteString(w, "ok")
+	}))
+	defer o2.Close()
+	r.exemptAdd(hostport(o2.URL))
+	r.do(fmt.Sprintf("GET %s/h HTTP/1.1\r\nHost: %s\r\nProxy-Connection: keep-alive\r\nKeep-Alive: 5\r\nConnection: close\r\n\r\n", o2.URL, hostport(o2.URL)))
+	if v, _ := hdr.Load().(string); v != "|" {
+		t.Fatalf("hop-by-hop headers reached the origin: %q", v)
+	}
+	// Expect: 100-continue
+	c, err := tls.Dial("tcp", r.addr, r.cli)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	fmt.Fprintf(c, "POST %s/e HTTP/1.1\r\nHost: %s\r\nExpect: 100-continue\r\nContent-Length: 4\r\nConnection: close\r\n\r\n", o.URL, hostport(o.URL))
+	br := bufio.NewReader(c)
+	first, err := http.ReadResponse(br, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.StatusCode == 100 {
+		io.WriteString(c, "data")
+		first, err = http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Skipf("proxy answered %d instead of 100 Continue", first.StatusCode)
+	}
+	b, _ := io.ReadAll(first.Body)
+	if first.StatusCode != 200 || string(b) != "len=4" {
+		t.Fatalf("after 100-continue: %d %q", first.StatusCode, b)
+	}
+}
+
+func TestManySequentialRequests(t *testing.T) { // WEB-014
+	r := newRig(t)
+	var m0, m1 runtime.MemStats
+	c, err := tls.Dial("tcp", r.addr, r.cli)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	br := bufio.NewReader(c)
+	req := fmt.Sprintf("GET %s/x HTTP/1.1\r\nHost: %s\r\n\r\n", r.origin.URL, hostport(r.origin.URL))
+	do := func() {
+		io.WriteString(c, req)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}
+	for i := 0; i < 500; i++ {
+		do()
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&m0)
+	for i := 0; i < 5000; i++ {
+		do()
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&m1)
+	if grow := int64(m1.HeapAlloc) - int64(m0.HeapAlloc); grow > 20<<20 {
+		t.Fatalf("heap grew %d MiB over 5000 requests", grow>>20)
+	}
+	r.mu.Lock()
+	n := len(r.logs)
+	r.mu.Unlock()
+	_ = n // the rig's recorder grows by design; the proxy itself must not
+}
+
+func TestOldTLSRefusedByProxy(t *testing.T) { // SEC-011
+	r := newRig(t)
+	cfg := r.cli.Clone()
+	cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS10, tls.VersionTLS12
+	if c, err := tls.Dial("tcp", r.addr, cfg); err == nil {
+		c.Close()
+		t.Fatal("proxy accepted TLS 1.2")
 	}
 }

@@ -25,14 +25,15 @@ import (
 )
 
 type rig struct {
-	t   *testing.T
-	idp *tidp.Server
-	st  *store.Store
-	api *cp.API
-	en  *httptest.Server
-	ca  *pki.CA
-	rev *pki.Revocations
-	cfg Config
+	t     *testing.T
+	idp   *tidp.Server
+	st    *store.Store
+	api   *cp.API
+	en    *httptest.Server
+	ca    *pki.CA
+	rev   *pki.Revocations
+	cfg   Config
+	enrol *cp.Enrol
 }
 
 func newRig(t *testing.T) *rig {
@@ -54,7 +55,7 @@ func newRig(t *testing.T) *rig {
 	srv.StartTLS()
 	t.Cleanup(srv.Close)
 	pemCA := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw}))
-	return &rig{t: t, idp: ip, st: st, api: api, en: srv, ca: ca, rev: rev, cfg: Config{
+	return &rig{enrol: en, t: t, idp: ip, st: st, api: api, en: srv, ca: ca, rev: rev, cfg: Config{
 		Tenant: "t1", Issuer: ip.URL, ClientID: "cid", EnrolURL: srv.URL, EnrolCAPEM: pemCA, ENName: "en.local",
 		Apps: map[string]string{"erp.ztx": "erp"}}}
 }
@@ -394,5 +395,62 @@ func TestStatusNotEnrolled(t *testing.T) {
 	}
 	if _, err := a.tlsConfig("x"); !errors.Is(err, errNotEnrolled) {
 		t.Fatalf("%v", err)
+	}
+}
+
+func TestENFailoverOrder(t *testing.T) { // AG-012: the first EN is down, the second is used
+	dead, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadAddr := dead.Addr().String()
+	dead.Close()
+	r := newRig(t)
+	a := r.agent()
+	if err := a.Enrol(context.Background(), follow); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := net.Listen("tcp", "127.0.0.1:0")
+	defer live.Close()
+	got := make(chan struct{}, 1)
+	go func() {
+		c, err := live.Accept()
+		if err == nil {
+			got <- struct{}{}
+			c.Close()
+		}
+	}()
+	a.Cfg.ENAddrs = []string{deadAddr, live.Addr().String()}
+	a.Cfg.ENName = "en.local"
+	a.Connect() // the handshake fails (the fake EN just closes), but the second address must have been tried
+	select {
+	case <-got:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the second EN address was never tried")
+	}
+}
+
+func TestMinimumAgentVersion(t *testing.T) { // AG-011
+	r := newRig(t)
+	r.enrol.MinAgentVersion = "99.0.0"
+	a := r.agent()
+	if err := a.Enrol(context.Background(), follow); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.liveConn(); !errors.Is(err, ErrTooOld) {
+		t.Fatalf("an agent below the minimum must refuse to start sessions, got %v", err)
+	}
+	// the requirement survives a restart (read from disk before any new contact with the control plane)
+	b, _ := New(a.Dir, r.cfg)
+	if err := b.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := b.liveConn(); !errors.Is(err, ErrTooOld) {
+		t.Fatalf("after restart: %v", err)
+	}
+	// lowering the minimum lets a renewal clear it
+	r.enrol.MinAgentVersion = "0.0.1"
+	if err := b.Renew(); err != nil {
+		t.Fatal(err)
+	}
+	if b.tooOld() {
+		t.Fatal("still too old after the minimum was lowered")
 	}
 }

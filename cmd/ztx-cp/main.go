@@ -29,6 +29,7 @@ func main() {
 	enrolL := flag.String("enrol-listen", "127.0.0.1:8444", "enrolment and sync listen address")
 	names := flag.String("names", "localhost,127.0.0.1", "comma-separated DNS names or IPs for the server certificate")
 	bootFile := flag.String("bootstrap-token-file", "", "file holding the bootstrap token (or set ZTX_BOOTSTRAP_TOKEN)")
+	minAgent := flag.String("min-agent-version", "", "agents older than this refuse to start sessions")
 	smtpAddr := flag.String("smtp-addr", "", "SMTP server host:port for alert emails (empty disables email)")
 	smtpFrom := flag.String("smtp-from", "alerts@localhost", "From address for alert emails")
 	smtpUser := flag.String("smtp-user", "", "SMTP username (password from ZTX_SMTP_PASSWORD)")
@@ -78,7 +79,7 @@ func main() {
 		}
 	}()
 	api := &cp.API{Store: st, Audit: al, AuditPath: ap, Tokens: pki.NewTokens(nil, time.Hour), BootstrapToken: boot, Alerts: eng}
-	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil)}
+	enrol := &cp.Enrol{API: api, CA: ca, Rev: pki.NewRevocations(nil), MinAgentVersion: *minAgent}
 
 	admin := &http.Server{Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second, MaxHeaderBytes: 16 << 10,
 		TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}}

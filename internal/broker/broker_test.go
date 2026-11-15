@@ -270,7 +270,7 @@ func TestNoPostureDenied(t *testing.T) {
 	}
 }
 
-func TestUnknownAppAndRawTarget(t *testing.T) { // PA-005, PA-006
+func TestUnknownAppAndRawTarget(t *testing.T) { // PA-005, PA-006, PA-017 (port outside the segment list)
 	r := newRig(t)
 	r.startConnector("c1", r.allowApp)
 	conn, _ := r.agent("alice", "d1", true)
@@ -288,7 +288,7 @@ func TestUnknownAppAndRawTarget(t *testing.T) { // PA-005, PA-006
 	}
 }
 
-func TestConnectorRefusesOutsideAllowList(t *testing.T) { // PA-007: EN is "compromised"
+func TestConnectorRefusesOutsideAllowList(t *testing.T) { // PA-007, SEC-006: EN is "compromised"
 	r := newRig(t)
 	// connector only allows a different port than the segment lists
 	r.startConnector("c1", func(h string, p int) bool { return false })
@@ -314,7 +314,7 @@ func TestNoConnectorUnavailable(t *testing.T) { // PA-011
 	}
 }
 
-func TestConnectorFailover(t *testing.T) { // PA-009, PA-010
+func TestConnectorFailover(t *testing.T) { // PA-009, PA-010 (reconnect with backoff is PA-012, see TestRES001ConnectorSurvivesENRestart)
 	r := newRig(t)
 	cancel1 := r.startConnector("c1", r.allowApp)
 	r.startConnector("c2", r.allowApp)
@@ -683,4 +683,132 @@ func TestRES001ConnectorSurvivesENRestart(t *testing.T) { // component-level; th
 		t.Fatalf("no session after the connector reconnected: %v", err)
 	}
 	roundTrip(t, s2, []byte("b"))
+}
+
+func TestStolenCertWithoutKey(t *testing.T) { // SEC-001
+	r := newRig(t)
+	victim := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+	thief, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	cfg := victim.tls.Clone()
+	cfg.Certificates = []tls.Certificate{{Certificate: victim.tls.Certificates[0].Certificate, PrivateKey: thief}}
+	conn, err := Dial(r.enAddr, cfg)
+	if err == nil {
+		_, err = conn.OpenApp("seg-db", "", r.app.port())
+		conn.Close()
+	}
+	if err == nil {
+		t.Fatal("a certificate without its private key was accepted")
+	}
+}
+
+func TestCrossTenantSegmentIsUnknown(t *testing.T) { // SEC-003
+	r := newRig(t)
+	r.st.mu.Lock()
+	r.st.segs["t2/seg-secret"] = Segment{ID: "seg-secret", Group: "site1", Targets: []Target{{Host: "127.0.0.1", Ports: []int{r.app.port()}}}}
+	r.st.mu.Unlock()
+	r.startConnector("c1", r.allowApp)
+	conn, _ := r.agent("alice", "d1", true) // tenant t1
+	if _, err := conn.OpenApp("seg-secret", "", r.app.port()); err == nil || !strings.Contains(err.Error(), "unknown-app") {
+		t.Fatalf("tenant t1 reached a tenant t2 segment: %v", err)
+	}
+	if r.app.conns.Load() != 0 {
+		t.Fatal("app contacted")
+	}
+}
+
+func TestOldTLSRefused(t *testing.T) { // SEC-011
+	r := newRig(t)
+	cr := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+	for _, max := range []uint16{tls.VersionTLS12, tls.VersionTLS11} {
+		cfg := cr.tls.Clone()
+		cfg.MinVersion, cfg.MaxVersion = tls.VersionTLS10, max
+		if c, err := Dial(r.enAddr, cfg); err == nil {
+			c.Close()
+			t.Fatalf("broker accepted TLS version %#x", max)
+		}
+	}
+	if c, err := Dial(r.enAddr, cr.tls); err != nil {
+		t.Fatalf("TLS 1.3 refused: %v", err)
+	} else {
+		c.Close()
+	}
+}
+
+func TestUpstreamRefusesConnection(t *testing.T) { // PA-015
+	r := newRig(t)
+	dead, _ := net.Listen("tcp", "127.0.0.1:0")
+	deadPort := dead.Addr().(*net.TCPAddr).Port
+	dead.Close() // nothing listens there any more
+	r.st.mu.Lock()
+	r.st.segs["t1/seg-dead"] = Segment{ID: "seg-dead", Group: "site1", Targets: []Target{{Host: "127.0.0.1", Ports: []int{deadPort}}}}
+	r.st.mu.Unlock()
+	pol := &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny, Version: 8, Rules: []policy.Rule{{
+		ID: "all", Priority: 1, Action: policy.Allow, Match: policy.Match{Groups: []string{"finance"}}}}}
+	pol.Compile(nil)
+	r.st.mu.Lock()
+	r.st.pol = pol
+	r.st.mu.Unlock()
+	r.startConnector("c1", func(h string, p int) bool { return true })
+	conn, _ := r.agent("alice", "d1", true)
+	_, err := conn.OpenApp("seg-dead", "", deadPort)
+	if err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("expected a clear 'unavailable' error, got %v", err)
+	}
+	if r.logs.find(func(x Record) bool { return x.App == "seg-dead" && x.Action == "deny" && x.Reason != "" }) == nil {
+		t.Fatal("failure not logged")
+	}
+}
+
+func TestPerIdentityConnectionLimit(t *testing.T) { // SEC-012
+	r := newRig(t)
+	r.en.mu.Lock()
+	r.en.MaxConnsPerIdentity = 3
+	r.en.mu.Unlock()
+	cr := r.creds(r.ca, pki.RoleDevice, "alice", "d1")
+	for i := 0; i < 3; i++ {
+		c, err := Dial(r.enAddr, cr.tls)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		if err := r.sendPosture(c, cr, "d1", true); err != nil {
+			t.Fatalf("connection %d within the limit failed: %v", i, err)
+		}
+	}
+	extra, err := Dial(r.enAddr, cr.tls)
+	if err == nil {
+		err = r.sendPosture(extra, cr, "d1", true)
+		extra.Close()
+	}
+	if err == nil {
+		t.Fatal("a fourth connection for the same identity was served")
+	}
+	r.agent("alice", "d2", true) // another device is unaffected
+}
+
+func TestLogSinkUnhealthyRefusesNewSessions(t *testing.T) { // SEC-014
+	r := newRig(t)
+	var healthy atomic.Bool
+	healthy.Store(true)
+	r.en.mu.Lock()
+	r.en.SinkHealthy = healthy.Load
+	r.en.mu.Unlock()
+	r.startConnector("c1", r.allowApp)
+	conn, _ := r.agent("alice", "d1", true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTrip(t, s, []byte("x"))
+	healthy.Store(false) // the decision log can no longer be written
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("a new session was allowed with no way to record it: %v", err)
+	}
+	roundTrip(t, s, []byte("y")) // established sessions are not dropped
+	healthy.Store(true)
+	s2, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("no recovery when the sink came back: %v", err)
+	}
+	s2.Close()
 }

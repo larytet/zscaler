@@ -47,3 +47,22 @@ Reproduce: `go test -tags perf -v -run TestPerf ./internal/broker ./internal/en 
 | RES-005 clock jump | Not injected into a live system (cannot change the host clock). Covered by unit tests: certificates not yet valid or expired are refused (`TestExpiryAndTolerance`), posture reports dated in the future or too old fail closed (`TestPostureFailClosed`) |
 | RES-006 corrupt agent files | Covered earlier (`TestCorruptStateRecovers`) |
 | RES-007 24 h soak, 200 sessions | **Shortened.** 3 minutes, 200 workers, 720,593 sessions, 0 errors, goroutines 1661 to 1534 and heap 53 to 49 MiB (both slightly down). A first run showed +187% heap, which was the test rig's own record keeper and not the product; the soak now disables it. `SOAK_SECONDS=86400` runs the full version |
+
+## Test-plan coverage (checked mechanically on 2026-11-15)
+
+Every ID in TEST-PLAN.md was searched for in the test code. 169 of 172 are referenced by a test or a recorded result. The three that are not are the usability checks (USE-001..003), which need people.
+
+Added in I7f because the check found them missing or unlabelled: VAL-009 shadow warning, the 20-valid and 30-invalid policy corpora (VAL-010, VAL-011), FUZ-005, SEC-001, SEC-003, SEC-009 (no secrets in any process output or log file), SEC-011 (old TLS refused), SEC-012 (per-identity connection limit, new), SEC-014 (new sessions refused while the decision log cannot be written, new), SEC-015, AG-011 (minimum agent version, new), AG-012, AG-013, CP-007, CP-008, CP-011 (cursor pagination, new), PA-008, PA-015, PA-016, WEB-013, WEB-014.
+
+Not done or only partly done, stated plainly:
+
+| Item | State |
+|---|---|
+| USE-001, USE-002, USE-003 | **Not done.** They need people who did not write the product (two for USE-001). The 30-minute target is unproven. The scripted day-one flow takes about 2 s, but that excludes every manual step |
+| SEC-007 policy tampering | **Partly.** An EN refuses to roll a policy back to a lower version. The CP-signed policy stream in DESIGN D5.5 is **not built**: ENs trust whatever an authenticated control plane serves |
+| SEC-014 disk full | The sink-health mechanism is tested with a fake sink. A real full disk was not simulated |
+| RES-002 packet loss, RES-004 | Not simulated (see the resilience table) |
+| RES-007 | 3 minutes, not 24 hours |
+| SEC-019 | 30 s per fuzz target, not 30 minutes |
+| `/v1/decisions` search | Listed in the design (D5.1) but **not built**. Decision records are in the EN's JSON-lines file and forwarded to the alert engine only |
+| Policy signing, `/v1/decisions`, UI | Not built (the admin UI of DESIGN D5.2 does not exist; only the API does) |

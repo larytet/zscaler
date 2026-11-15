@@ -239,3 +239,23 @@ func TestPollerAndENEnrolment(t *testing.T) {
 		t.Fatal("a device certificate may not read the whole state")
 	}
 }
+
+func TestRefusesPolicyRollback(t *testing.T) { // SEC-007 (partial: replay protection; the policy signature itself is not implemented)
+	st := seed(t)
+	s := NewSyncState()
+	s.Apply(st.Snapshot()) // version 1
+	if _, err := st.PutPolicy("t1", policy.Private, pol("erp"), 1); err != nil {
+		t.Fatal(err)
+	}
+	s.Apply(st.Snapshot()) // version 2
+	if v := s.Policy("t1", policy.Private).Version; v != 2 {
+		t.Fatalf("version %d", v)
+	}
+	old := seed(t).Snapshot() // an attacker replays a version 1 snapshot
+	if errs := s.Apply(old); len(errs) == 0 {
+		t.Fatal("rollback was not reported")
+	}
+	if v := s.Policy("t1", policy.Private).Version; v != 2 {
+		t.Fatalf("policy rolled back to version %d", v)
+	}
+}

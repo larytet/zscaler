@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I7e (email alerts).
+**Last updated:** 2026-11-15, after I7f (test-plan gaps closed).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -44,7 +44,8 @@ Implementation language: **Go** (chosen by the user).
 | I7c | Fault-injecting proxy, RES-001..003, shortened soak RES-007 | done. RES-002 packet loss and RES-004 not tested; RES-007 ran 3 minutes, not 24 h | RES |
 | I7d | SCN-003 lost laptop, SCN-005 site outage, SCN-006 contractor, RES-001 with real processes (`make e2e`, 8 tests, about 35 s) | done | SCN |
 | I7e | Email alerts: SMTP notifier, per-tenant recipients (`PUT /v1/alert-settings`), `--smtp-*` flags on ztx-cp | done: ALR-004 against an in-process SMTP server; not tried against a real mail provider | ALR |
-| I7f | Usability checks and exit criteria review | pending (needs people) | USE |
+| I7f | Traceability check, 26 missing or unlabelled tests added, and four missing features built: minimum agent version, per-identity connection limit, refuse sessions when the log cannot be written, cursor pagination; SEC-009 no-secrets scan; policy rollback refusal | done | see RESULTS.md |
+| I7g | Exit-criteria review and three clean consecutive runs | **next** | T3.7 |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
 

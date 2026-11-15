@@ -18,10 +18,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
+	"github.com/larytet/zscaler/internal/policy"
 	"github.com/larytet/zscaler/internal/posture"
 )
 
@@ -43,6 +45,8 @@ type Config struct {
 	Apps map[string]string `json:"apps"`
 	// TrustEnrolCA, when set, pins the HTTPS trust for the enrolment URL (tests, private CAs).
 	EnrolCAPEM string `json:"enrol_ca_pem,omitempty"`
+	// PostureEverySeconds is how often posture is re-sent (default 300).
+	PostureEverySeconds int `json:"posture_every_seconds,omitempty"`
 }
 
 type Agent struct {
@@ -57,6 +61,7 @@ type Agent struct {
 	conn     *broker.Conn
 	lastPos  *posture.Report
 	deviceID string
+	minAgent string
 }
 
 var errNotEnrolled = errors.New("agent: not enrolled")
@@ -132,6 +137,7 @@ type certResp struct {
 	Cert     string    `json:"cert"`
 	CA       string    `json:"ca"`
 	Expires  time.Time `json:"expires"`
+	MinAgent string    `json:"min_agent_version"`
 }
 
 func (a *Agent) enrolClient(withCert bool) *http.Client {
@@ -194,7 +200,11 @@ func (a *Agent) install(c *certResp) error {
 	a.mu.Lock()
 	a.cert = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}
 	a.leaf, a.caPool, a.deviceID = leaf, pool, c.DeviceID
+	a.minAgent = c.MinAgent
 	a.mu.Unlock()
+	if c.MinAgent != "" {
+		os.WriteFile(a.path("min_agent_version"), []byte(c.MinAgent), 0o600)
+	}
 	return nil
 }
 
@@ -331,7 +341,25 @@ func (a *Agent) Connect() (*broker.Conn, error) {
 }
 
 // conn returns a live connection, reconnecting if needed, and sends posture on connect.
+// ErrTooOld is returned when the control plane requires a newer agent.
+var ErrTooOld = errors.New("agent: this agent version is older than the minimum the control plane requires; update it")
+
+func (a *Agent) tooOld() bool {
+	a.mu.Lock()
+	min := a.minAgent
+	a.mu.Unlock()
+	if min == "" {
+		if b, err := os.ReadFile(a.path("min_agent_version")); err == nil {
+			min = strings.TrimSpace(string(b))
+		}
+	}
+	return min != "" && policy.CompareVersions(Version, min) < 0
+}
+
 func (a *Agent) liveConn() (*broker.Conn, error) {
+	if a.tooOld() {
+		return nil, ErrTooOld
+	}
 	a.mu.Lock()
 	c := a.conn
 	a.mu.Unlock()

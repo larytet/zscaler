@@ -27,6 +27,8 @@ type Enrol struct {
 	CA   *pki.CA
 	Rev  *pki.Revocations
 	HTTP *http.Client // for IdP calls (tests)
+	// MinAgentVersion is announced to agents with every certificate; older agents refuse to start sessions.
+	MinAgentVersion string
 
 	mu        sync.Mutex
 	verifiers map[string]*idp.Verifier
@@ -78,6 +80,7 @@ type certOut struct {
 	Cert     string    `json:"cert"` // base64 DER
 	CA       string    `json:"ca"`   // PEM
 	Expires  time.Time `json:"expires"`
+	MinAgent string    `json:"min_agent_version,omitempty"`
 }
 
 func (e *Enrol) caPEM() string {
@@ -107,7 +110,7 @@ func (e *Enrol) issue(pub any, id pki.Identity, ttl time.Duration, names ...stri
 		return certOut{}, nil, err
 	}
 	c, _ := x509.ParseCertificate(der)
-	return certOut{Cert: base64.StdEncoding.EncodeToString(der), CA: e.caPEM(), Expires: c.NotAfter}, c, nil
+	return certOut{Cert: base64.StdEncoding.EncodeToString(der), CA: e.caPEM(), Expires: c.NotAfter, MinAgent: e.MinAgentVersion}, c, nil
 }
 
 // device: OIDC login result in, short-lived device certificate out.

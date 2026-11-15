@@ -3,6 +3,8 @@ package policy
 import (
 	"fmt"
 	"net/netip"
+	"reflect"
+	"sort"
 	"strings"
 	"time"
 )
@@ -90,4 +92,22 @@ func Validate(p *Policy, known map[string]bool) []error {
 		}
 	}
 	return errs
+}
+
+// Warnings reports problems that are not errors. Today: a rule that can never
+// match because an earlier rule has an identical match, or matches everything
+// (VAL-009). It does not attempt full subset analysis.
+func Warnings(p *Policy) []string {
+	rules := append([]Rule(nil), p.Rules...)
+	sort.SliceStable(rules, func(i, j int) bool { return rules[i].Priority < rules[j].Priority })
+	var out []string
+	for i, r := range rules {
+		for _, e := range rules[:i] {
+			if reflect.DeepEqual(e.Match, r.Match) || reflect.DeepEqual(e.Match, Match{}) {
+				out = append(out, fmt.Sprintf("rule %q can never match: rule %q (priority %d) always matches first", r.ID, e.ID, e.Priority))
+				break
+			}
+		}
+	}
+	return out
 }

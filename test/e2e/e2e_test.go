@@ -19,11 +19,27 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tidp "github.com/larytet/zscaler/test/idp"
 )
+
+const bootTok = "q7Zr-bootstrap-3f9a1c5e8b2d"
+
+// lockedBuf is a bytes.Buffer that is safe to read while a process is still writing.
+type lockedBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuf) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+func (l *lockedBuf) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.b.String() }
 
 type stack struct {
 	t        *testing.T
@@ -41,6 +57,8 @@ type stack struct {
 	ports    map[string]int
 	enArgs   []string
 	enProc   *exec.Cmd
+	bufs     map[string]*lockedBuf
+	secrets  []string
 	ifMatch  string // If-Match for policy PUTs, default "0"
 	connArgs []string
 	connProc *exec.Cmd
@@ -81,8 +99,9 @@ func build(t *testing.T) string {
 func (s *stack) start(name string, env []string, args ...string) *exec.Cmd {
 	cmd := exec.Command(filepath.Join(s.bin, name), args...)
 	cmd.Env = append(os.Environ(), env...)
-	var buf bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &buf, &buf
+	buf := &lockedBuf{}
+	cmd.Stdout, cmd.Stderr = buf, buf
+	s.bufs[name+fmt.Sprint(len(s.procs))] = buf
 	if err := cmd.Start(); err != nil {
 		s.t.Fatal(err)
 	}
@@ -126,7 +145,7 @@ func writeFake(t *testing.T, dir, name, out string) {
 }
 
 func newStack(t *testing.T) *stack {
-	s := &stack{t: t, dir: t.TempDir(), bin: build(t), ports: map[string]int{}, ifMatch: "0"}
+	s := &stack{t: t, dir: t.TempDir(), bin: build(t), ports: map[string]int{}, ifMatch: "0", bufs: map[string]*lockedBuf{}}
 	s.idp = tidp.New("cid")
 	t.Cleanup(s.idp.Close)
 
@@ -159,7 +178,7 @@ func newStack(t *testing.T) *stack {
 		s.ports[n] = freePort(t)
 	}
 	cpData := filepath.Join(s.dir, "cp")
-	s.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=boot"}, "--data", cpData,
+	s.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=" + bootTok}, "--data", cpData,
 		"--admin-listen", fmt.Sprintf("127.0.0.1:%d", s.ports["admin"]),
 		"--enrol-listen", fmt.Sprintf("127.0.0.1:%d", s.ports["enrol"]))
 	waitPort(t, s.ports["admin"])
@@ -175,7 +194,7 @@ func newStack(t *testing.T) *stack {
 	s.enrolU = fmt.Sprintf("https://localhost:%d", s.ports["enrol"])
 
 	// tenant, IdP, segment, safe defaults
-	code, b := s.api("POST", "/v1/tenants", map[string]string{"id": "t1", "name": "Acme"}, "boot")
+	code, b := s.api("POST", "/v1/tenants", map[string]string{"id": "t1", "name": "Acme"}, bootTok)
 	if code != 201 {
 		t.Fatalf("tenant: %d %s", code, b)
 	}
@@ -184,6 +203,7 @@ func newStack(t *testing.T) *stack {
 	}
 	json.Unmarshal(b, &o)
 	s.token = o.AdminToken
+	s.secrets = append(s.secrets, bootTok, o.AdminToken)
 	s.must("PUT", "/v1/idp", map[string]string{"issuer": s.idp.URL, "client_id": "cid"}, s.token)
 	s.must("POST", "/v1/segments", map[string]any{"id": "erp", "group": "site1", "class": "standard",
 		"targets": []map[string]any{{"host": "127.0.0.1", "ports": []int{s.ports["echo"]}}}}, s.token)
@@ -192,12 +212,13 @@ func newStack(t *testing.T) *stack {
 	s.must("POST", "/v1/policies/safe-defaults", nil, s.token)
 
 	// enforcement node
-	code, b = s.api("POST", "/v1/ens/tokens", map[string]any{"names": []string{"localhost", "127.0.0.1"}}, "boot")
+	code, b = s.api("POST", "/v1/ens/tokens", map[string]any{"names": []string{"localhost", "127.0.0.1"}}, bootTok)
 	if code != 200 {
 		t.Fatalf("en token: %d %s", code, b)
 	}
 	var tk struct{ Token string }
 	json.Unmarshal(b, &tk)
+	s.secrets = append(s.secrets, tk.Token)
 	cats := filepath.Join(s.dir, "categories.json")
 	os.WriteFile(cats, []byte(`{"malware":["evil.test"],"file-sharing-unsanctioned":["share.test"]}`), 0o600)
 	s.enArgs = []string{"--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
@@ -213,8 +234,9 @@ func newStack(t *testing.T) *stack {
 		t.Fatalf("connector token: %d %s", code, b)
 	}
 	json.Unmarshal(b, &tk)
+	s.secrets = append(s.secrets, tk.Token)
 	s.connArgs = []string{"--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
-		"--data", filepath.Join(s.dir, "connector"), "--en", fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]), "--en-name", "localhost"}
+		"--data", filepath.Join(s.dir, "connector"), "--en", fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]), "--en-name", "localhost", "--targets-every", "500ms"}
 	s.connProc = s.start("ztx-connector", []string{"ZTX_CONNECTOR_TOKEN=" + tk.Token}, s.connArgs...)
 	return s
 }
@@ -234,7 +256,7 @@ func (s *stack) writeAgentConfig() {
 		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
 		"en_name": "localhost", "socks_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["socks"]),
 		"http_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["status"]),
-		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"},
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"}, "posture_every_seconds": 1,
 	}
 	b, _ := json.Marshal(cfg)
 	os.MkdirAll(s.agentDir(), 0o700)
@@ -566,7 +588,7 @@ func (s *stack) newAgent(t *testing.T, name string) *agentInst {
 		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
 		"en_name": "localhost", "socks_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["socks"]),
 		"http_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["status"]),
-		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"},
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"}, "posture_every_seconds": 1,
 	}
 	b, _ := json.Marshal(cfg)
 	os.MkdirAll(a.dir, 0o700)
@@ -708,5 +730,178 @@ func TestScn006Contractor(t *testing.T) {
 	resp, err := http.ReadResponse(bufio.NewReader(pc), nil)
 	if err != nil || resp.StatusCode != 403 {
 		t.Fatalf("web block for contractor: %v %v", resp, err)
+	}
+}
+
+// CP-007: a policy change reaches the enforcement node and takes effect on new sessions.
+func TestCp007PolicyChangePropagates(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	// version 1 came from safe-defaults; replace it with a policy that allows nobody
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/private", map[string]any{"default_action": "deny", "rules": []any{}}, s.token)
+	start := time.Now()
+	eventually(t, "the new policy to take effect", 10*time.Second, func() bool { return !s.reachable(a.socks(), "erp.ztx") })
+	t.Logf("CP-007 policy change took effect after %v (sync interval 300 ms)", time.Since(start).Round(100*time.Millisecond))
+	found := false
+	for _, d := range s.decisions() {
+		if d["policy_version"] == float64(2) && d["action"] == "deny" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("decision log does not show the new policy version")
+	}
+}
+
+// CP-008: the control plane goes away; live sessions and new decisions continue from the EN's cache.
+func TestCp008ControlPlaneDown(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	c, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	echoOnce(t, c, "before")
+	s.procs[0].Process.Kill() // ztx-cp is the first process started
+	s.procs[0].Wait()
+	time.Sleep(2 * time.Second) // several failed sync attempts
+	echoOnce(t, c, "established session still works")
+	if !s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("new sessions were refused while the control plane was down (cached policy should apply)")
+	}
+	if s.reachable(a.socks(), "nope.ztx") {
+		t.Fatal("unknown app served")
+	}
+}
+
+// PA-008: the connector opens no listening port.
+func TestPa008ConnectorHasNoListener(t *testing.T) {
+	s := newStack(t)
+	time.Sleep(2 * time.Second)
+	pid := s.connProc.Process.Pid
+	inodes := map[string]bool{}
+	fds, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
+	if err != nil {
+		t.Skip("no /proc on this platform")
+	}
+	for _, fd := range fds {
+		if l, err := os.Readlink(fmt.Sprintf("/proc/%d/fd/%s", pid, fd.Name())); err == nil && strings.HasPrefix(l, "socket:[") {
+			inodes[strings.TrimSuffix(strings.TrimPrefix(l, "socket:["), "]")] = true
+		}
+	}
+	for _, f := range []string{"/proc/net/tcp", "/proc/net/tcp6", "/proc/net/udp", "/proc/net/udp6"} {
+		b, _ := os.ReadFile(f)
+		for _, line := range strings.Split(string(b), "\n")[1:] {
+			fld := strings.Fields(line)
+			if len(fld) < 10 {
+				continue
+			}
+			listening := fld[3] == "0A" || strings.HasPrefix(f, "/proc/net/udp") // UDP sockets bound at all are suspect
+			if listening && inodes[fld[9]] {
+				t.Fatalf("connector has a listening socket (%s, %s)", f, fld[1])
+			}
+		}
+	}
+}
+
+// SEC-009: no secret or token appears in any log, output or stored log file.
+func TestSec009NoSecretsInLogs(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	s.must("PUT", "/v1/alert-settings", map[string]any{"emails": []string{"o@example.com"}}, s.token)
+	s.api("GET", "/v1/segments", nil, "wrong-token-value-xyz")
+	time.Sleep(1500 * time.Millisecond)
+	secrets := append([]string{"wrong-token-value-xyz"}, s.secrets...)
+	scan := func(name, text string) {
+		for _, sec := range secrets {
+			if sec != "" && strings.Contains(text, sec) {
+				t.Errorf("secret %.6s... found in %s", sec, name)
+			}
+		}
+		if strings.Contains(text, "eyJ") {
+			t.Errorf("an ID token (JWT) appears in %s", name)
+		}
+		if strings.Contains(text, "PRIVATE KEY") {
+			t.Errorf("private key material appears in %s", name)
+		}
+	}
+	for n, b := range s.bufs {
+		scan("output of "+n, b.String())
+	}
+	filepath.Walk(s.dir, func(p string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && (strings.HasSuffix(p, ".jsonl") || strings.HasSuffix(p, "store.json")) {
+			b, _ := os.ReadFile(p)
+			scan(p, string(b))
+		}
+		return nil
+	})
+}
+
+// AG-013: posture is re-sent on the configured cadence (1 s here; 5 minutes by default).
+func TestAg013PostureCadence(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	time.Sleep(5 * time.Second)
+	n := 0
+	for _, d := range s.decisions() {
+		if d["kind"] == "posture" {
+			n++
+		}
+	}
+	if n < 4 {
+		t.Fatalf("expected at least 4 posture reports in about 6 seconds at a 1 s cadence, saw %d", n)
+	}
+}
+
+// PA-016: changing a segment's target reaches the connector's allow-list.
+func TestPa016SegmentTargetChange(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "wiki.ztx") })
+	second, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	go func() {
+		for {
+			c, err := second.Accept()
+			if err != nil {
+				return
+			}
+			go func() { io.Copy(c, c); c.Close() }()
+		}
+	}()
+	port2 := second.Addr().(*net.TCPAddr).Port
+	s.must("PUT", "/v1/segments/wiki", map[string]any{"id": "wiki", "group": "site1", "class": "standard",
+		"targets": []map[string]any{{"host": "127.0.0.1", "ports": []int{port2}}}}, s.token)
+	reach := func(port int) bool {
+		c, err := socksConnect(a.socks(), "wiki.ztx", port)
+		if err != nil {
+			return false
+		}
+		defer c.Close()
+		c.SetDeadline(time.Now().Add(3 * time.Second))
+		c.Write([]byte("p"))
+		b := make([]byte, 1)
+		_, err = io.ReadFull(c, b)
+		return err == nil
+	}
+	start := time.Now()
+	eventually(t, "the new target to work", 30*time.Second, func() bool { return reach(port2) })
+	t.Logf("PA-016 new target usable after %v (sync 300 ms, connector refresh 500 ms; default refresh is 30 s)", time.Since(start).Round(100*time.Millisecond))
+	if reach(s.ports["echo"]) {
+		t.Fatal("the old target is still reachable through the segment")
 	}
 }

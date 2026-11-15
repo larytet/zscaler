@@ -401,7 +401,18 @@ func (a *API) listAudit(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 	if ev == nil {
 		ev = []audit.Event{}
 	}
-	return ev, err
+	after, limit := cursor(r)
+	out := []audit.Event{}
+	for _, e := range ev {
+		if e.Seq > after {
+			out = append(out, e)
+			if len(out) == limit {
+				w.Header().Set("X-Next-Cursor", strconv.Itoa(e.Seq))
+				break
+			}
+		}
+	}
+	return out, err
 }
 
 // SafeDefaults builds the shipped policy pack (DESIGN.md D2.4).
@@ -460,7 +471,19 @@ func (a *API) listAlerts(w http.ResponseWriter, r *http.Request, c ctxInfo) (any
 	if a.Alerts == nil {
 		return []alerts.Alert{}, nil
 	}
-	return a.Alerts.List(c.tenant, r.URL.Query().Get("open") == "1"), nil
+	all := a.Alerts.List(c.tenant, r.URL.Query().Get("open") == "1") // newest first, ids descending
+	after, limit := cursor(r)
+	out := []alerts.Alert{}
+	for _, al := range all {
+		if after == 0 || al.ID < after {
+			out = append(out, al)
+			if len(out) == limit {
+				w.Header().Set("X-Next-Cursor", strconv.Itoa(al.ID))
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 func (a *API) putAlertSettings(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {
@@ -492,4 +515,18 @@ func (a *API) getAlertSettings(w http.ResponseWriter, r *http.Request, c ctxInfo
 		e = []string{}
 	}
 	return map[string]any{"emails": e}, nil
+}
+
+// cursor reads ?after=<id>&limit=<n>. limit defaults to 100 and is capped at 500.
+// The next page is requested with after=<value of the X-Next-Cursor header>.
+func cursor(r *http.Request) (after, limit int) {
+	after, _ = strconv.Atoi(r.URL.Query().Get("after"))
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	return
 }

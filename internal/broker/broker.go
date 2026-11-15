@@ -102,6 +102,11 @@ type EN struct {
 	ReevalEvery    time.Duration // default 5 min
 	ConnectTimeout time.Duration // default 5 s
 	Logger         *slog.Logger
+	// MaxConnsPerIdentity caps simultaneous connections per certificate identity (default 20).
+	MaxConnsPerIdentity int
+	// SinkHealthy, when set, is consulted before opening a session: if the decision
+	// log cannot be written, new sessions are refused so nothing happens unrecorded.
+	SinkHealthy func() bool
 
 	mu         sync.Mutex
 	connectors map[string][]*connector // tenant/group
@@ -109,6 +114,7 @@ type EN struct {
 	sessions   map[*session]struct{}
 	live       map[*mux.Session]struct{}
 	closed     bool
+	perID      map[string]int
 }
 
 type connector struct {
@@ -128,6 +134,10 @@ func (e *EN) init() {
 		e.connectors = map[string][]*connector{}
 		e.sessions = map[*session]struct{}{}
 		e.live = map[*mux.Session]struct{}{}
+		e.perID = map[string]int{}
+	}
+	if e.MaxConnsPerIdentity == 0 {
+		e.MaxConnsPerIdentity = 20
 	}
 	if e.ReevalEvery == 0 {
 		e.ReevalEvery = 5 * time.Minute
@@ -197,6 +207,17 @@ func (e *EN) handle(raw net.Conn) {
 		raw.Close()
 		return
 	}
+	idKey := id.Tenant + "/" + id.Role + "/" + id.Subject + "/" + id.Device
+	e.mu.Lock()
+	if e.perID[idKey] >= e.MaxConnsPerIdentity {
+		e.mu.Unlock()
+		e.Logger.Info("connection limit reached", "identity", idKey)
+		raw.Close()
+		return
+	}
+	e.perID[idKey]++
+	e.mu.Unlock()
+	defer func() { e.mu.Lock(); e.perID[idKey]--; e.mu.Unlock() }()
 	sess := mux.New(tc, mux.Config{Server: true})
 	e.mu.Lock()
 	if e.closed {
@@ -336,6 +357,13 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 		rec.Action, rec.Reason = "deny", reason
 		e.logRec(rec)
 		st.Reject(code)
+	}
+	e.mu.Lock()
+	sink := e.SinkHealthy
+	e.mu.Unlock()
+	if sink != nil && !sink() {
+		deny("unavailable", "log-sink-unavailable")
+		return
 	}
 	if st, ok := e.State.(Staler); ok && st.Stale() {
 		deny("unavailable", "state-stale")

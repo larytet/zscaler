@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/larytet/zscaler/internal/broker"
@@ -59,16 +60,19 @@ func main() {
 		log.Fatal(err)
 	}
 	var lmu sync.Mutex
+	var sinkOK atomic.Bool
+	sinkOK.Store(true)
 	fwd := &en.Forwarder{URL: *cpURL, TLS: id.TLS(cli.HostOf(*cpURL))}
 	logRec := func(r broker.Record) {
 		lmu.Lock()
 		b, _ := json.Marshal(r)
-		lf.Write(append(b, '\n'))
+		_, werr := lf.Write(append(b, '\n'))
+		sinkOK.Store(werr == nil)
 		lmu.Unlock()
 		fwd.Add(r)
 	}
 
-	node := &broker.EN{Name: *name, CA: verifier, Rev: rev, State: state, Log: logRec, Cert: id.Cert,
+	node := &broker.EN{SinkHealthy: sinkOK.Load, Name: *name, CA: verifier, Rev: rev, State: state, Log: logRec, Cert: id.Cert,
 		Logger: slog.New(slog.NewTextHandler(os.Stderr, nil))}
 	state.OnChange = func(old, cur *store.Snapshot) {
 		revs, dis := en.Diff(old, cur)

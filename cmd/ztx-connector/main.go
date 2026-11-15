@@ -26,6 +26,7 @@ func main() {
 	name := flag.String("name", "connector1", "connector name")
 	ens := flag.String("en", "127.0.0.1:9443", "comma-separated enforcement node broker addresses")
 	enName := flag.String("en-name", "localhost", "TLS server name of the enforcement nodes")
+	targetsEvery := flag.Duration("targets-every", 30*time.Second, "how often to refresh the target allow-list")
 	flag.Parse()
 
 	caPEM, err := os.ReadFile(*cpCA)
@@ -68,7 +69,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	go func() {
-		t := time.NewTicker(30 * time.Second)
+		t := time.NewTicker(*targetsEvery)
 		defer t.Stop()
 		for {
 			select {

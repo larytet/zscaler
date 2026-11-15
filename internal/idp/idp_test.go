@@ -45,7 +45,7 @@ func TestRSAToken(t *testing.T) {
 	}
 }
 
-func TestBadTokens(t *testing.T) { // IDP-002, AG-002
+func TestBadTokens(t *testing.T) { // IDP-002, IDP-004 (email_verified false), AG-002
 	s, v := setup(t)
 	mut := func(f func(c tidp.Claims)) string { c := s.Good("u1", "a@x", "n1"); f(c); return s.Sign("k1", c) }
 	past := float64(time.Now().Add(-time.Hour).Unix())

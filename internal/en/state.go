@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"sync"
@@ -74,6 +75,11 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 			tv.revoked[d] = true
 		}
 		for k, p := range t.Policies {
+			if ot := old.tenants[id]; ot != nil && ot.pols[k] != nil && p.Version < ot.pols[k].Version {
+				errs = append(errs, fmt.Errorf("tenant %s policy %s: refusing rollback from version %d to %d", id, k, ot.pols[k].Version, p.Version))
+				tv.pols[k] = ot.pols[k]
+				continue
+			}
 			if err := p.Compile(nil); err != nil {
 				errs = append(errs, err)
 				if ot := old.tenants[id]; ot != nil && ot.pols[k] != nil {

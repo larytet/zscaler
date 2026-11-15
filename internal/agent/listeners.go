@@ -288,7 +288,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.ServeHTTPProxy(ctx, lns[1])
 	srv := &http.Server{Handler: a.StatusHandler(), ReadHeaderTimeout: 5 * time.Second}
 	go srv.Serve(lns[2])
-	go a.PostureLoop(ctx, 5*time.Minute)
+	every := 5 * time.Minute
+	if a.Cfg.PostureEverySeconds > 0 {
+		every = time.Duration(a.Cfg.PostureEverySeconds) * time.Second
+	}
+	go a.PostureLoop(ctx, every)
 	go a.RenewLoop(ctx, time.Hour, nil)
 	<-ctx.Done()
 	srv.Close()

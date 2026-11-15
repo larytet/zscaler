@@ -3,9 +3,13 @@ package cp
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/larytet/zscaler/internal/alerts"
+	"github.com/larytet/zscaler/internal/broker"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -344,5 +348,111 @@ func TestAlertSettings(t *testing.T) {
 	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
 	if c, _, _ := e.call("PUT", "/v1/alert-settings", viewer, map[string]any{"emails": []string{"x@example.com"}}); c != 403 {
 		t.Fatalf("viewer changed settings: %d", c)
+	}
+}
+
+func TestAdminAPIHostileInput(t *testing.T) { // SEC-015
+	e := newEnv(t)
+	evil := []string{"../../etc/passwd", "..%2f..%2fetc", "a/b", strings.Repeat("A", 100000), "\x00", "'; DROP TABLE x;--", "<script>", "%", "\r\nX: y", "ünï"}
+	for _, id := range evil {
+		for _, c := range []struct{ m, p string }{
+			{"PUT", "/v1/segments/"}, {"DELETE", "/v1/segments/"}, {"POST", "/v1/devices/"}, {"POST", "/v1/users/"},
+		} {
+			path := c.p + url.PathEscape(id)
+			if c.p == "/v1/devices/" || c.p == "/v1/users/" {
+				path += map[string]string{"/v1/devices/": "/revoke", "/v1/users/": "/disable"}[c.p]
+			}
+			code, _, _ := e.call(c.m, path, e.adminA, map[string]any{"group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+			if code >= 500 {
+				t.Errorf("%s %.40s: server error %d", c.m, path, code)
+			}
+		}
+		code, _, _ := e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": id, "group": id, "targets": []map[string]any{{"host": id, "ports": []int{1}}}})
+		if code >= 500 {
+			t.Errorf("segment body %.40q: server error %d", id, code)
+		}
+	}
+	for _, body := range []string{"", "null", "[]", "{", `{"id":}`, strings.Repeat("{", 5000), `{"id":"x","id":"y"}`} {
+		req, _ := http.NewRequest("POST", e.srv.URL+"/v1/segments", strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+e.adminA)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode >= 500 {
+			t.Errorf("body %.30q: server error %d", body, resp.StatusCode)
+		}
+	}
+	big := bytes.Repeat([]byte("a"), 2<<20)
+	req, _ := http.NewRequest("POST", e.srv.URL+"/v1/segments", bytes.NewReader(big))
+	req.Header.Set("Authorization", "Bearer "+e.adminA)
+	resp, err := http.DefaultClient.Do(req)
+	if err == nil {
+		resp.Body.Close()
+		if resp.StatusCode < 400 {
+			t.Errorf("oversize body accepted: %d", resp.StatusCode)
+		}
+	}
+	// nothing was written outside the in-memory store: audit still verifies
+	if n, err := audit.Verify(e.auditPath); err != nil {
+		t.Fatalf("audit chain broken after hostile input (%d records): %v", n, err)
+	}
+}
+
+func TestPagination(t *testing.T) { // CP-011
+	e := newEnv(t)
+	for i := 0; i < 7; i++ {
+		e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": fmt.Sprint("s", i), "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	}
+	var seen []int
+	after := ""
+	for page := 0; page < 10; page++ {
+		path := "/v1/audit?limit=3"
+		if after != "" {
+			path += "&after=" + after
+		}
+		code, b, h := e.call("GET", path, e.adminA, nil)
+		if code != 200 {
+			t.Fatalf("%d %s", code, b)
+		}
+		var ev []audit.Event
+		json.Unmarshal(b, &ev)
+		if len(ev) > 3 {
+			t.Fatalf("page of %d exceeds the limit", len(ev))
+		}
+		for _, x := range ev {
+			seen = append(seen, x.Seq)
+		}
+		after = h.Get("X-Next-Cursor")
+		if after == "" {
+			break
+		}
+	}
+	if len(seen) < 7 {
+		t.Fatalf("pagination lost records: %v", seen)
+	}
+	for i := 1; i < len(seen); i++ {
+		if seen[i] <= seen[i-1] {
+			t.Fatalf("pages overlap or are out of order: %v", seen)
+		}
+	}
+	e.api.Alerts = alerts.New()
+	for i := 0; i < 5; i++ {
+		for j := 0; j < 10; j++ {
+			e.api.Alerts.Ingest(broker.Record{Tenant: "a", Kind: "private", Action: "deny", Event: "open", User: fmt.Sprint("u", i), App: "erp"})
+		}
+	}
+	code, b, h := e.call("GET", "/v1/alerts?limit=2", e.adminA, nil)
+	var al []alerts.Alert
+	json.Unmarshal(b, &al)
+	if code != 200 || len(al) != 2 || al[0].ID < al[1].ID || h.Get("X-Next-Cursor") == "" {
+		t.Fatalf("%d %s cursor %q", code, b, h.Get("X-Next-Cursor"))
+	}
+	_, b, _ = e.call("GET", "/v1/alerts?limit=2&after="+h.Get("X-Next-Cursor"), e.adminA, nil)
+	var al2 []alerts.Alert
+	json.Unmarshal(b, &al2)
+	if len(al2) != 2 || al2[0].ID >= al[1].ID {
+		t.Fatalf("second page overlaps the first: %v then %v", al, al2)
 	}
 }

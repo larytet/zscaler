@@ -93,7 +93,7 @@ func TestInvalidPolicyNotStored(t *testing.T) {
 	}
 }
 
-func TestTokensHashedAndTenantFromToken(t *testing.T) {
+func TestTokensHashedAndTenantFromToken(t *testing.T) { // SEC-010
 	s, ta, tb := twoTenants(t)
 	for _, h := range s.AdminHashes() {
 		if h == ta || h == tb {

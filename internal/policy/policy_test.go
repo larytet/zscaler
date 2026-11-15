@@ -281,7 +281,7 @@ func TestTopDenyWins(t *testing.T) {
 	}
 }
 
-func FuzzParse(f *testing.F) { // FUZ-004
+func FuzzParse(f *testing.F) { // FUZ-004, and FUZ-001: every accepted policy is evaluated, which must never panic
 	f.Add([]byte(`{"kind":"private","default_action":"deny","rules":[]}`))
 	f.Add([]byte(`{"kind":"web","rules":[{"id":"a","priority":1,"action":"warn"}]}`))
 	f.Fuzz(func(t *testing.T, b []byte) {
