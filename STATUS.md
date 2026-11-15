@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I7c (resilience).
+**Last updated:** 2026-11-15, after I7d (scenarios).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -42,8 +42,8 @@ Implementation language: **Go** (chosen by the user).
 | I7a | Fix PERF-005 (rule index) and PERF-002 (mux buffer reuse) | done: both targets now met | PERF-002, 005 |
 | I7b | PERF-006..008 measurements; EN sync default 5 s to 2 s; cache per-request cert-chain check in the proxy | done: all met | PERF-006..008 |
 | I7c | Fault-injecting proxy, RES-001..003, shortened soak RES-007 | done. RES-002 packet loss and RES-004 not tested; RES-007 ran 3 minutes, not 24 h | RES |
-| I7d | SCN-003, 005, 006 and RES-001 with real processes | **next** (written and passing, committed next) | SCN |
-| I7e | Email alerts (ALR-004) | pending | ALR |
+| I7d | SCN-003 lost laptop, SCN-005 site outage, SCN-006 contractor, RES-001 with real processes (`make e2e`, 8 tests, about 35 s) | done | SCN |
+| I7e | Email alerts (ALR-004) | **next** | ALR |
 | I7f | Usability checks and exit criteria review | pending (needs people) | USE |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.

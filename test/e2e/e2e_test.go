@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -25,19 +26,24 @@ import (
 )
 
 type stack struct {
-	t       *testing.T
-	dir     string
-	bin     string
-	idp     *tidp.Server
-	admin   *http.Client
-	adminU  string
-	enrolU  string
-	token   string // tenant admin token
-	caPEM   []byte
-	procs   []*exec.Cmd
-	fakeBin string
-	echo    net.Listener
-	ports   map[string]int
+	t        *testing.T
+	dir      string
+	bin      string
+	idp      *tidp.Server
+	admin    *http.Client
+	adminU   string
+	enrolU   string
+	token    string // tenant admin token
+	caPEM    []byte
+	procs    []*exec.Cmd
+	fakeBin  string
+	echo     net.Listener
+	ports    map[string]int
+	enArgs   []string
+	enProc   *exec.Cmd
+	ifMatch  string // If-Match for policy PUTs, default "0"
+	connArgs []string
+	connProc *exec.Cmd
 }
 
 func freePort(t *testing.T) int {
@@ -101,7 +107,7 @@ func (s *stack) api(method, path string, body any, tok string) (int, []byte) {
 	req, _ := http.NewRequest(method, s.adminU+path, rd)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	if method == "PUT" && strings.HasPrefix(path, "/v1/policies/") {
-		req.Header.Set("If-Match", "0")
+		req.Header.Set("If-Match", s.ifMatch)
 	}
 	resp, err := s.admin.Do(req)
 	if err != nil {
@@ -120,7 +126,7 @@ func writeFake(t *testing.T, dir, name, out string) {
 }
 
 func newStack(t *testing.T) *stack {
-	s := &stack{t: t, dir: t.TempDir(), bin: build(t), ports: map[string]int{}}
+	s := &stack{t: t, dir: t.TempDir(), bin: build(t), ports: map[string]int{}, ifMatch: "0"}
 	s.idp = tidp.New("cid")
 	t.Cleanup(s.idp.Close)
 
@@ -181,6 +187,8 @@ func newStack(t *testing.T) *stack {
 	s.must("PUT", "/v1/idp", map[string]string{"issuer": s.idp.URL, "client_id": "cid"}, s.token)
 	s.must("POST", "/v1/segments", map[string]any{"id": "erp", "group": "site1", "class": "standard",
 		"targets": []map[string]any{{"host": "127.0.0.1", "ports": []int{s.ports["echo"]}}}}, s.token)
+	s.must("POST", "/v1/segments", map[string]any{"id": "wiki", "group": "site1", "class": "standard",
+		"targets": []map[string]any{{"host": "127.0.0.1", "ports": []int{s.ports["echo"]}}}}, s.token)
 	s.must("POST", "/v1/policies/safe-defaults", nil, s.token)
 
 	// enforcement node
@@ -192,9 +200,10 @@ func newStack(t *testing.T) *stack {
 	json.Unmarshal(b, &tk)
 	cats := filepath.Join(s.dir, "categories.json")
 	os.WriteFile(cats, []byte(`{"malware":["evil.test"],"file-sharing-unsanctioned":["share.test"]}`), 0o600)
-	s.start("ztx-en", []string{"ZTX_EN_TOKEN=" + tk.Token}, "--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
+	s.enArgs = []string{"--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
 		"--data", filepath.Join(s.dir, "en"), "--listen", fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]),
-		"--proxy-listen", fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"]), "--categories", cats, "--sync-every", "300ms")
+		"--proxy-listen", fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"]), "--categories", cats, "--sync-every", "300ms"}
+	s.enProc = s.start("ztx-en", []string{"ZTX_EN_TOKEN=" + tk.Token}, s.enArgs...)
 	waitPort(t, s.ports["broker"])
 	waitPort(t, s.ports["proxy"])
 
@@ -204,8 +213,9 @@ func newStack(t *testing.T) *stack {
 		t.Fatalf("connector token: %d %s", code, b)
 	}
 	json.Unmarshal(b, &tk)
-	s.start("ztx-connector", []string{"ZTX_CONNECTOR_TOKEN=" + tk.Token}, "--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
-		"--data", filepath.Join(s.dir, "connector"), "--en", fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]), "--en-name", "localhost")
+	s.connArgs = []string{"--cp", s.enrolU, "--cp-ca", filepath.Join(cpData, "ca.pem"),
+		"--data", filepath.Join(s.dir, "connector"), "--en", fmt.Sprintf("127.0.0.1:%d", s.ports["broker"]), "--en-name", "localhost"}
+	s.connProc = s.start("ztx-connector", []string{"ZTX_CONNECTOR_TOKEN=" + tk.Token}, s.connArgs...)
 	return s
 }
 
@@ -224,7 +234,7 @@ func (s *stack) writeAgentConfig() {
 		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
 		"en_name": "localhost", "socks_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["socks"]),
 		"http_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", s.ports["status"]),
-		"apps": map[string]string{"erp.ztx": "erp"},
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"},
 	}
 	b, _ := json.Marshal(cfg)
 	os.MkdirAll(s.agentDir(), 0o700)
@@ -495,5 +505,208 @@ func TestPerf004ConnectorIdleMemory(t *testing.T) {
 	t.Logf("PERF-004 connector RSS after 10 s idle: %.1f MB (target < 30 MB)", float64(kb)/1024)
 	if kb > 30*1024 {
 		t.Errorf("PERF-004 missed: %d kB", kb)
+	}
+}
+
+// RES-001: the enforcement node dies and comes back; connector and agent recover on their own.
+func TestRes001ENRestart(t *testing.T) {
+	s := newStack(t)
+	s.enrolAgent()
+	s.runAgent()
+	socks := fmt.Sprintf("127.0.0.1:%d", s.ports["socks"])
+	var c net.Conn
+	eventually(t, "private access to work", 20*time.Second, func() bool {
+		var err error
+		c, err = socksConnect(socks, "erp.ztx", s.ports["echo"])
+		return err == nil
+	})
+	echoOnce(t, c, "before")
+
+	s.enProc.Process.Kill()
+	s.enProc.Wait()
+	// the live session breaks
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	c.Write([]byte("x"))
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("session survived the EN dying")
+	}
+	c.Close()
+	start := time.Now()
+	// restart with the stored identity: no token needed
+	s.enProc = s.start("ztx-en", nil, s.enArgs...)
+	waitPort(t, s.ports["broker"])
+	eventually(t, "access after restart", 30*time.Second, func() bool {
+		c2, err := socksConnect(socks, "erp.ztx", s.ports["echo"])
+		if err != nil {
+			return false
+		}
+		defer c2.Close()
+		c2.SetDeadline(time.Now().Add(5 * time.Second))
+		c2.Write([]byte("ok"))
+		b := make([]byte, 2)
+		_, err = io.ReadFull(c2, b)
+		return err == nil && string(b) == "ok"
+	})
+	t.Logf("RES-001 recovered %v after the EN was restarted (target within 30 s)", time.Since(start).Round(100*time.Millisecond))
+}
+
+// A second agent on the same machine, with its own directory and local ports.
+type agentInst struct {
+	dir   string
+	ports map[string]int
+}
+
+func (s *stack) newAgent(t *testing.T, name string) *agentInst {
+	a := &agentInst{dir: filepath.Join(s.dir, name), ports: map[string]int{}}
+	for _, n := range []string{"socks", "http", "status"} {
+		a.ports[n] = freePort(t)
+	}
+	cfg := map[string]any{
+		"tenant": "t1", "issuer": s.idp.URL, "client_id": "cid", "enrol_url": s.enrolU, "enrol_ca_pem": string(s.caPEM),
+		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
+		"en_name": "localhost", "socks_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["socks"]),
+		"http_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["status"]),
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"},
+	}
+	b, _ := json.Marshal(cfg)
+	os.MkdirAll(a.dir, 0o700)
+	os.WriteFile(filepath.Join(a.dir, "config.json"), b, 0o600)
+	cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), "--dir", a.dir, "--no-browser", "enrol")
+	cmd.Env = append(os.Environ(), s.agentEnv()...)
+	out, _ := cmd.StdoutPipe()
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	cmd.Start()
+	sc := bufio.NewScanner(out)
+	for sc.Scan() {
+		if line := sc.Text(); strings.HasPrefix(line, "http") {
+			if resp, err := http.Get(line); err == nil {
+				resp.Body.Close()
+			}
+		}
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("enrol %s: %v\n%s", name, err, errb.String())
+	}
+	return a
+}
+
+func (s *stack) runInst(a *agentInst) {
+	s.start("ztx-agent", s.agentEnv(), "--dir", a.dir, "run")
+	waitPort(s.t, a.ports["socks"])
+}
+
+func (a *agentInst) socks() string { return fmt.Sprintf("127.0.0.1:%d", a.ports["socks"]) }
+
+func (s *stack) reachable(addr, app string) bool {
+	c, err := socksConnect(addr, app, s.ports["echo"])
+	if err != nil {
+		return false
+	}
+	defer c.Close()
+	c.SetDeadline(time.Now().Add(5 * time.Second))
+	c.Write([]byte("p"))
+	b := make([]byte, 1)
+	_, err = io.ReadFull(c, b)
+	return err == nil
+}
+
+// SCN-003: lost laptop. One device is revoked mid-transfer; the user's other device is unaffected.
+func TestScn003LostLaptop(t *testing.T) {
+	s := newStack(t)
+	laptop := s.newAgent(t, "laptop")
+	phone := s.newAgent(t, "phone")
+	s.runInst(laptop)
+	s.runInst(phone)
+	eventually(t, "both devices to reach the app", 20*time.Second, func() bool {
+		return s.reachable(laptop.socks(), "erp.ztx") && s.reachable(phone.socks(), "erp.ztx")
+	})
+	c, err := socksConnect(laptop.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	echoOnce(t, c, "transfer in progress")
+
+	// find the laptop's device id: the enrolled devices are listed by the admin API
+	code, b := s.api("GET", "/v1/devices", nil, s.token)
+	var devs []struct{ ID string }
+	json.Unmarshal(b, &devs)
+	if code != 200 || len(devs) != 2 {
+		t.Fatalf("expected 2 devices, got %d: %s", len(devs), b)
+	}
+	// the laptop's cert names its device id
+	certPEM, _ := os.ReadFile(filepath.Join(laptop.dir, "device.crt"))
+	blk, _ := pem.Decode(certPEM)
+	leaf, _ := x509.ParseCertificate(blk.Bytes)
+	laptopID := strings.Split(leaf.Subject.CommonName, "/")[2]
+	s.must("POST", "/v1/devices/"+laptopID+"/revoke", nil, s.token)
+
+	start := time.Now()
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	for {
+		if _, err := c.Write([]byte("x")); err != nil {
+			break
+		}
+		if _, err := c.Read(make([]byte, 1)); err != nil {
+			break
+		}
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("transfer survived %v after revocation", d)
+	}
+	if s.reachable(laptop.socks(), "erp.ztx") {
+		t.Fatal("revoked device opened a new session")
+	}
+	if !s.reachable(phone.socks(), "erp.ztx") {
+		t.Fatal("the user's other device was affected")
+	}
+}
+
+// SCN-005: site outage. The connector dies and returns; the agent resumes without a new login.
+func TestScn005SiteOutage(t *testing.T) {
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+
+	s.connProc.Process.Kill()
+	s.connProc.Wait()
+	time.Sleep(1 * time.Second)
+	if _, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"]); err == nil {
+		t.Fatal("app reachable with no connector")
+	} else if !strings.Contains(err.Error(), "socks reply 4") {
+		t.Fatalf("expected 'host unreachable' (4), got %v", err)
+	}
+	s.connProc = s.start("ztx-connector", nil, s.connArgs...) // stored identity, no token
+	eventually(t, "access after the connector returned", 30*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+}
+
+// SCN-006: contractor. A group that may reach one app only.
+func TestScn006Contractor(t *testing.T) {
+	s := newStack(t)
+	s.idp.Groups = []string{"contractors"}
+	s.ifMatch = "1" // safe-defaults created version 1
+	policy := map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "contractor-erp", "priority": 10, "action": "allow", "reason": "contractors reach the ERP only",
+		"match": map[string]any{"groups": []string{"contractors"}, "apps": []string{"erp"},
+			"posture": map[string]any{"disk_encrypted": true, "firewall_on": true, "max_age_seconds": 3600}}}}}
+	s.must("PUT", "/v1/policies/private", policy, s.token)
+	a := s.newAgent(t, "contractor")
+	s.runInst(a)
+	eventually(t, "the allowed app", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	if s.reachable(a.socks(), "wiki.ztx") {
+		t.Fatal("contractor reached an app outside the rule")
+	}
+	// the safe-default web policy still applies to the contractor
+	pc, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", a.ports["http"]))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pc.Close()
+	io.WriteString(pc, "GET http://evil.test/ HTTP/1.1\r\nHost: evil.test\r\nConnection: close\r\n\r\n")
+	resp, err := http.ReadResponse(bufio.NewReader(pc), nil)
+	if err != nil || resp.StatusCode != 403 {
+		t.Fatalf("web block for contractor: %v %v", resp, err)
 	}
 }
