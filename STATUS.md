@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I7f (test-plan gaps closed).
+**Last updated:** 2026-11-15, after I7g (exit-criteria review).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -45,7 +45,7 @@ Implementation language: **Go** (chosen by the user).
 | I7d | SCN-003 lost laptop, SCN-005 site outage, SCN-006 contractor, RES-001 with real processes (`make e2e`, 8 tests, about 35 s) | done | SCN |
 | I7e | Email alerts: SMTP notifier, per-tenant recipients (`PUT /v1/alert-settings`), `--smtp-*` flags on ztx-cp | done: ALR-004 against an in-process SMTP server; not tried against a real mail provider | ALR |
 | I7f | Traceability check, 26 missing or unlabelled tests added, and four missing features built: minimum agent version, per-identity connection limit, refuse sessions when the log cannot be written, cursor pagination; SEC-009 no-secrets scan; policy rollback refusal | done | see RESULTS.md |
-| I7g | Exit-criteria review and three clean consecutive runs | **next** | T3.7 |
+| I7g | Exit-criteria review, three consecutive clean runs, lint and vulnerability scan | done: see the review below. RB1 does not meet its own exit criteria (USE-001 open) | T3.7 |
 
 All packages pass `go vet` and `go test -race`. Fuzz targets exist for the policy loader, mux frames and posture verification.
 
@@ -72,3 +72,24 @@ All packages pass `go vet` and `go test -race`. Fuzz targets exist for the polic
 
 1. Whether RB1 should grow to include any of the newly-Must items (browser isolation is the one asked about). Default if unanswered: no.
 2. Patent review of connector stitching before any commercial use (REQUIREMENTS section 15).
+
+## RB1 exit criteria (TEST-PLAN.md T3.7), reviewed 2026-11-15
+
+| # | Criterion | State |
+|---|---|---|
+| 1 | All P1 tests pass on three consecutive nightly runs | Three consecutive rounds passed on the committed tree (unit and component tests with `-race`, then 20 end-to-end tests with the real binaries, about 60 s each). These were back-to-back runs on one machine, not nightly CI: there is no CI configured |
+| 2 | No open S1 or S2 defect | No known open defect. This is not an independent review: there has been no external penetration test or code audit, and I wrote both the code and the tests |
+| 3 | Every P2 failure has an owner and a decision | No P2 test fails. P2 items not run or not built are listed in RESULTS.md with their state |
+| 4 | Design-target misses are listed | All eight PERF targets are met on this machine, one machine only. No misses to list |
+| 5 | Traceability has no requirement in RB1 scope without tests | 169 of 172 test-plan IDs have a test or recorded result. The 3 without are USE-001..003. Separately, the plan's coverage table (T3.5) states known gaps per requirement, and the not-built items below mean some requirements are covered only partly |
+| 6 | `govulncheck` clean, dependencies reviewed | `govulncheck` reports no vulnerabilities on go1.27.4; `go vet` and `staticcheck` are clean. There are no third-party Go dependencies (standard library only), so there is nothing else to review |
+| 7 | USE-001 done by at least two people who did not write the product | **Not met.** It needs people. Not something I can do |
+
+**RB1 does not meet its own exit criteria**: criterion 7 is open, criterion 1 uses back-to-back runs on one machine rather than nightly CI, and criterion 2 has no independent review behind it.
+
+### Not built that the design or test plan expected
+
+- CP-signed policy stream (DESIGN D5.5, SEC-007): ENs trust any authenticated control plane. Rollback to an older version is refused.
+- `/v1/decisions` search and the admin UI (DESIGN D5.1, D5.2): API only, and decision records live in the EN's file.
+- Weekly digest (ADM-009), guided investigation and rule suggestions (OPS-004, OPS-005), insurance export (SMB-004), policy simulation beyond dry-run (ZPA-028, ADM-020): requirements v0.5 made these Must. Not built.
+- Everything in ROADMAP.md.
