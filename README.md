@@ -74,6 +74,186 @@ A run uses one namespace named `ztx-real-<run id>` and removes it at the end, al
 appended to [RESULTS-REAL.md](RESULTS-REAL.md) with the date, commit, the node's operating system and core count.
 All 20 planned tests exist (TEST-PLAN.md T7.6); RESULTS-REAL.md records every run, including failed ones.
 
+## How it fits with what you already have
+
+The diagrams use Mermaid, which GitHub draws in the browser. "Built" means the code does it and a test covers it; "not built" and "not tested" are said where they apply. **None of this has been tried against a real Google, Microsoft or Cloudflare account or a real office network.** The sign-in is tested against a test OIDC server, and the Kubernetes run in `RESULTS-REAL.md` is a test cluster. Treat the provider-specific steps as what the standards say should work, and report what differs.
+
+### The parts and where each one sits
+
+```mermaid
+flowchart LR
+  subgraph Device["User's laptop"]
+    B[Browser or app]
+    A["ztx-agent<br/>local SOCKS :1080<br/>local HTTP proxy :3129"]
+    B --> A
+  end
+  subgraph Cloud["Your cloud or a small server (public address)"]
+    CP["ztx-cp<br/>control plane: policy, users,<br/>admin console, logs, alerts"]
+    EN["ztx-en<br/>enforcement node:<br/>broker + web proxy"]
+    CP <-->|signed state, decision records| EN
+  end
+  subgraph Office["Office or data centre (no inbound port open)"]
+    C[ztx-connector]
+    APP["Private apps: intranet, ERP,<br/>staging site, file server"]
+    DNS[(Internal DNS)]
+    C --> APP
+    C -.->|looks up names| DNS
+  end
+  IDP["Google Workspace or<br/>Microsoft Entra (OIDC, SCIM)"]
+  NET[(The internet)]
+  A <-->|"mTLS, device certificate"| EN
+  C -->|"outbound mTLS only"| EN
+  EN -->|"web requests that policy allows"| NET
+  A -.->|"sign-in (OIDC, PKCE)"| IDP
+  CP -.->|"checks the sign-in token"| IDP
+  IDP -.->|"SCIM: joiners, leavers, groups"| CP
+  CP -->|"JSON lines or syslog over HTTPS"| SIEM[Your log system, optional]
+```
+
+Two rules shape every example below. **The connector only dials out**, so the office firewall needs no inbound rule. **Private apps are reached by a name you give them** (for example `wiki.ztx`) through the agent's local SOCKS or HTTP proxy; the product does not capture all device traffic and does not change the device's DNS.
+
+### Data flow 1: signing in and enrolling a device
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant A as Agent
+  participant I as Google or Microsoft
+  participant CP as Control plane
+  U->>A: ztx-agent enrol
+  A->>I: open browser, sign in (code flow with PKCE, MFA is the IdP's)
+  I-->>A: ID token with email and groups
+  A->>CP: token + new device key
+  CP->>I: check signature and issuer
+  CP-->>A: device certificate (short lived, renewed by the agent)
+  Note over A,CP: Rules use the groups from the token.<br/>If SCIM is on, a person who was never provisioned is refused.
+```
+
+### Data flow 2: reaching a private app
+
+```mermaid
+sequenceDiagram
+  participant B as Browser or app
+  participant A as Agent
+  participant EN as Enforcement node
+  participant C as Connector
+  participant P as Private app
+  B->>A: connect to wiki.ztx through the local SOCKS port
+  A->>A: posture check: disk encrypted, firewall on, and so on
+  A->>EN: open session "wiki" (mTLS, device certificate, posture report)
+  EN->>EN: policy: who, group, device health, time, approval
+  alt allowed
+    EN->>C: open session to the app (over the connector's own outbound link)
+    C->>P: connect to the internal address (the connector's DNS resolves names)
+    P-->>B: data flows both ways through the three hops
+  else refused
+    EN-->>A: refusal with a reason; recorded as a decision; repeated refusals raise an alert
+  end
+```
+
+### Data flow 3: browsing the web
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant A as Agent
+  participant EN as Enforcement node
+  participant W as Website
+  B->>A: request through the local HTTP proxy (browser proxy setting, or the workspace browser)
+  A->>EN: forward with the device certificate
+  EN->>EN: category, allow or block, uploads, file types
+  opt inspection is on and the site is not exempt
+    EN->>EN: decrypt with the tenant's own certificate (installed on the device), scan, re-encrypt
+  end
+  EN->>W: request from the node's address
+  W-->>B: response, or a block page that names the reason
+```
+
+The web proxy refuses to connect to private addresses, on purpose. An internal site is therefore reached as a private app (flow 2), never through the web path.
+
+### Example A: single sign-on with Google Workspace or Microsoft Entra ID
+
+*Built and tested against a test OIDC server; not yet tried with a real Google or Microsoft account.*
+
+1. Create an OAuth/OIDC client of type **public** (no secret) with the redirect URI `http://127.0.0.1/callback` (loopback, any port). Use the code flow with PKCE.
+2. Tell the control plane the provider: `PUT /v1/idp {"issuer": "...", "client_id": "...", "group_claim": "groups"}`. The issuer is `https://login.microsoftonline.com/<directory-id>/v2.0` for Microsoft and `https://accounts.google.com` for Google.
+3. **Groups.** Entra can put group names or ids in the `groups` claim. Google's standard ID token does not carry groups, so with Google either name people in rules (`users`) or provision groups with SCIM (step 4), and check on the first sign-in that the group you rely on is really in the token. A rule on a group the token never carries refuses everyone, which is the safe failure but confusing.
+4. **Joiners and leavers.** In Entra or Google Workspace point automatic provisioning at `https://<admin address>/scim/v2` with the token from `POST /v1/scim/token`. With `require_provisioned` on, someone who is removed at the provider loses access without anyone touching this product.
+5. **MFA is the provider's.** The product reads the result; it does not run a second factor of its own.
+
+### Example B: an existing LDAP or Active Directory
+
+*Not built. The product has no LDAP client.* Do not point it at a directory directly. Two ways that keep it working:
+
+- **Directory in the cloud:** sync AD to Entra ID (Entra Connect) or to Google (Cloud Directory Sync), then follow Example A. Users and groups come from the cloud provider; the product never sees LDAP.
+- **A small OIDC front for LDAP:** run an open-source identity provider that speaks LDAP behind and OIDC in front (Keycloak, Authentik or similar), emit a `groups` claim, and register it as the issuer in step 2 above. This adds a server to look after. It is the sensible choice only if you have no cloud directory.
+
+Either way the first sign-in decides it: check the token shows the email and the groups you expect before writing rules.
+
+### Example C: a small-business VPN or tunnel such as Cloudflare
+
+*Not built, not tested.* There is no Cloudflare integration. What can be said from how the parts work:
+
+| You have | What changes | Watch for |
+|---|---|---|
+| Cloudflare Tunnel (`cloudflared`) next to an internal app | `ztx-connector` plays the same role: it dials out and the office opens no port. Move one app at a time: add it as a private app, test, then retire its tunnel. | The two products have separate policies and logs; do not run both on one app and assume the stricter one wins. |
+| A device VPN or WARP-style client on laptops | The agent only opens local proxy ports and talks outward to the enforcement node, so it normally runs inside whatever tunnel the device has. | A full-tunnel client that blocks the node's address stops the agent; add the node's address to that client's allow list. Test on one laptop first. |
+| A site-to-site or remote-access VPN you want to remove | Put a connector in each network the VPN reached and list the apps people really use as private apps. | Everything not listed becomes unreachable: that is the point, and also where complaints come from. Keep the VPN until the list matches real use (use the decision log and the policy simulator). |
+
+### Example D: an existing public website
+
+*Built for access control; the public site itself is untouched.*
+
+- **The public site stays as it is.** It is not routed through this product. Put it behind your normal web host or CDN.
+- **Its admin and staging parts become private apps.** Put a connector where the web server can be reached, add a segment for `host:port` of the admin site, give it a name (`shop-admin.ztx`) in the agent's `apps` map and a rule such as "group `web-team`, healthy device". Then close the admin address to the internet. The `Apps` console screen shows in words who can reach it.
+- **Staff browsing and uploading to it** go through the web path (flow 3): you can block uploads of programs, set file types, and block lookalike or risky sites.
+- **Limit:** the product does not sit in front of the site as a reverse proxy or web application firewall for your customers. That is a different job.
+
+### Example E: a small intranet with its own DNS and proxy
+
+*Built for the intranet; no DNS service and no proxy chaining exist.*
+
+```mermaid
+flowchart LR
+  subgraph LAN["Office LAN"]
+    D[(Internal DNS<br/>wiki.corp.local)]
+    W[Intranet web server]
+    F[File server]
+    CN["ztx-connector<br/>(any small always-on machine)"]
+    CN --> W
+    CN --> F
+    CN -.-> D
+  end
+  U["Laptop at home or in a café<br/>ztx-agent"] -->|"wiki.ztx, files.ztx"| EN[Enforcement node]
+  EN -->|"over the connector's outbound link"| CN
+  U -->|"web browsing"| EN
+  EN --> I[(Internet)]
+```
+
+- **DNS.** The connector looks the target name up with *its own* resolver, so a target such as `wiki.corp.local` works if the connector machine uses the office DNS. Devices never need that DNS and are not given any: they use the short name from the agent config. Names are mapped by you in the agent's `apps` list; the product does not provide, filter or rewrite DNS (a DNS security service is in the not-built list).
+- **The office web proxy.** The enforcement node dials websites directly. It cannot hand traffic on to a proxy you already run (no upstream chaining), so place the node where it has direct internet access, outside the office proxy, and have the agent use it. People in the office who do not run the agent keep using the old proxy and are not covered.
+- **A PAC file or transparent proxy** is not offered (the spec lists them as agent alternatives, not built); browsers use the agent's local proxy port by setting it (or a managed setting from your device tool), or by using the workspace browser, which sets it itself.
+- **Order of rollout that keeps people working:** one connector and one app; five pilot users; check the decision log for refusals nobody expected; add apps; only then remove the old route.
+
+### What the product does with your data, in one picture
+
+```mermaid
+flowchart LR
+  subgraph Stays["Stays in your own tenant's store"]
+    S1[Users, groups, devices]
+    S2[Policy and its history]
+    S3["Secrets and inspection key<br/>(in clear in the store file: see limits)"]
+  end
+  subgraph Records["Decision records"]
+    R1["Disk archive in the control plane<br/>(6 months, searchable by day)"]
+    R2["Optional copy to your log system<br/>(names can be pseudonyms)"]
+  end
+  Stays --> Records
+  Records --> X["Export or erase one person<br/>(owner only)"]
+```
+
+Known limits of all of this are under *Known limits that matter before real use* below.
+
 ## Try it on one machine
 
 These steps use loopback ports and a throwaway data directory. You need an OIDC identity provider that supports the authorization-code flow with PKCE and can put a `groups` claim in the ID token (Entra ID, Google Workspace with groups, Okta). Register a **public** client with redirect URI `http://127.0.0.1/callback` (loopback with any port). Replace `ISSUER` and `CLIENT_ID` below.
