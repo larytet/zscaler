@@ -35,6 +35,7 @@ var version = "dev"
 
 func main() {
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	printOpenAPI := flag.Bool("print-openapi", false, "print the OpenAPI description of the admin API and exit")
 	data := flag.String("data", "cp-data", "data directory (CA key, store, audit log)")
 	adminL := flag.String("admin-listen", "127.0.0.1:8443", "admin API listen address")
 	enrolL := flag.String("enrol-listen", "127.0.0.1:8444", "enrolment and sync listen address")
@@ -49,6 +50,12 @@ func main() {
 	flag.Parse()
 	if *showVersion {
 		fmt.Println("ztx-cp", version)
+		return
+	}
+	if *printOpenAPI {
+		api := &cp.API{}
+		api.Handler() // registers the routes, which is what the description is built from
+		os.Stdout.Write(api.OpenAPI())
 		return
 	}
 

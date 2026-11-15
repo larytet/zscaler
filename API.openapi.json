@@ -1,0 +1,3614 @@
+{
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "description": "An administrator's token (POST /v1/admins makes more, GET /v1/admins lists them)",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "bootstrapToken": {
+        "description": "The platform's bootstrap token, for creating tenants and enforcement node tokens",
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "scimToken": {
+        "description": "The tenant's SCIM token (POST /v1/scim/token)",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Every route of the control plane's admin API, generated from the routes as registered. Request and response bodies are JSON; their fields are not described here. The enrolment and synchronisation routes used by the agent, connector and enforcement nodes (a different listener) are not part of it.",
+    "title": "SMB-ZTX admin API",
+    "version": "0.8"
+  },
+  "openapi": "3.0.3",
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "func1",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          }
+        },
+        "security": [],
+        "summary": "Func1"
+      }
+    },
+    "/scim/v2/Groups": {
+      "get": {
+        "operationId": "scimListGroups",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim list groups"
+      },
+      "post": {
+        "operationId": "scimCreateGroup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim create group"
+      }
+    },
+    "/scim/v2/Groups/{id}": {
+      "delete": {
+        "operationId": "scimDeleteGroup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim delete group"
+      },
+      "get": {
+        "operationId": "scimGetGroup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim get group"
+      },
+      "patch": {
+        "operationId": "scimPatchGroup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim patch group"
+      },
+      "put": {
+        "operationId": "scimReplaceGroup",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim replace group"
+      }
+    },
+    "/scim/v2/ResourceTypes": {
+      "get": {
+        "operationId": "scimResourceTypes",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim resource types"
+      }
+    },
+    "/scim/v2/Schemas": {
+      "get": {
+        "operationId": "scimSchemas",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim schemas"
+      }
+    },
+    "/scim/v2/ServiceProviderConfig": {
+      "get": {
+        "operationId": "scimConfig",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim config"
+      }
+    },
+    "/scim/v2/Users": {
+      "get": {
+        "operationId": "scimListUsers",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim list users"
+      },
+      "post": {
+        "operationId": "scimCreateUser",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim create user"
+      }
+    },
+    "/scim/v2/Users/{id}": {
+      "delete": {
+        "operationId": "scimDeleteUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim delete user"
+      },
+      "get": {
+        "operationId": "scimGetUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim get user"
+      },
+      "patch": {
+        "operationId": "scimPatchUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim patch user"
+      },
+      "put": {
+        "operationId": "scimReplaceUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, an invalid one, or provisioning is not enabled"
+          }
+        },
+        "security": [
+          {
+            "scimToken": []
+          }
+        ],
+        "summary": "Scim replace user"
+      }
+    },
+    "/v1/admins": {
+      "get": {
+        "operationId": "listAdmins",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List admins",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      },
+      "post": {
+        "operationId": "createAdmin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Create admin",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
+    "/v1/admins/{name}": {
+      "delete": {
+        "operationId": "removeAdmin",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Remove admin",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
+    "/v1/ai-agents": {
+      "get": {
+        "operationId": "listAIAgents",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List a i agents",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "post": {
+        "operationId": "createAIAgent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Create a i agent",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/ai-agents/{name}": {
+      "delete": {
+        "operationId": "removeAIAgent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Remove a i agent",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/ai-agents/{name}/lint": {
+      "get": {
+        "operationId": "lintAIAgent",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Lint a i agent",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/ai-agents/{name}/readonly-pack": {
+      "get": {
+        "operationId": "readonlyPack",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Readonly pack",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/alert-settings": {
+      "get": {
+        "operationId": "getAlertSettings",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get alert settings",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putAlertSettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put alert settings",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/alerts": {
+      "get": {
+        "operationId": "listAlerts",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List alerts",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/approvals": {
+      "get": {
+        "operationId": "listApprovals",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List approvals",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/approvals/{id}/approve": {
+      "post": {
+        "operationId": "approve",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission support"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Approve",
+        "x-required-permission": "support",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk"
+        ]
+      }
+    },
+    "/v1/approvals/{id}/deny": {
+      "post": {
+        "operationId": "denyRequest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission support"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Deny request",
+        "x-required-permission": "support",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk"
+        ]
+      }
+    },
+    "/v1/approvals/{id}/end": {
+      "post": {
+        "operationId": "endGrant",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission support"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "End grant",
+        "x-required-permission": "support",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk"
+        ]
+      }
+    },
+    "/v1/audit": {
+      "get": {
+        "operationId": "listAudit",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission audit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List audit",
+        "x-required-permission": "audit",
+        "x-roles": [
+          "owner",
+          "admin",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/captures": {
+      "delete": {
+        "operationId": "purgeCaptures",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Purge captures",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "get": {
+        "operationId": "listCaptures",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List captures",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/captures/{id}": {
+      "get": {
+        "operationId": "getCapture",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get capture",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/cloud-apps": {
+      "get": {
+        "operationId": "listCloudApps",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List cloud apps",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/cloud-apps/{id}": {
+      "delete": {
+        "operationId": "deleteCloudApp",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete cloud app",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "putCloudApp",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put cloud app",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/connectors/tokens": {
+      "post": {
+        "operationId": "connectorToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Connector token",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/decisions": {
+      "get": {
+        "operationId": "listDecisions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission logs"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List decisions",
+        "x-required-permission": "logs",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/decisions/history": {
+      "get": {
+        "operationId": "decisionHistory",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission logs"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Decision history",
+        "x-required-permission": "logs",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "operationId": "listDevices",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List devices",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/devices/{id}/revoke": {
+      "post": {
+        "operationId": "revokeDevice",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission support"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Revoke device",
+        "x-required-permission": "support",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk"
+        ]
+      }
+    },
+    "/v1/digest": {
+      "get": {
+        "operationId": "getDigest",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get digest",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/edm": {
+      "get": {
+        "operationId": "listEDM",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List e d m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/edm/{name}": {
+      "delete": {
+        "operationId": "deleteEDM",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete e d m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "putEDM",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put e d m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/ens/tokens": {
+      "post": {
+        "operationId": "enToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "The bootstrap token is required"
+          }
+        },
+        "security": [
+          {
+            "bootstrapToken": []
+          }
+        ],
+        "summary": "En token"
+      }
+    },
+    "/v1/evidence": {
+      "get": {
+        "operationId": "getEvidence",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission audit"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get evidence",
+        "x-required-permission": "audit",
+        "x-roles": [
+          "owner",
+          "admin",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/failure-mode": {
+      "get": {
+        "operationId": "getFailureMode",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get failure mode",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putFailureMode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put failure mode",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get health",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/idp": {
+      "put": {
+        "operationId": "putIDP",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put i d p",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/incidents": {
+      "get": {
+        "operationId": "getIncidents",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission logs"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get incidents",
+        "x-required-permission": "logs",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor"
+        ]
+      }
+    },
+    "/v1/inspection": {
+      "get": {
+        "operationId": "getInspection",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get inspection",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putInspection",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put inspection",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/inspection/ca.pem": {
+      "get": {
+        "operationId": "getInspectionCA",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get inspection c a",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/investigate": {
+      "get": {
+        "operationId": "investigate",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Investigate",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "openAPI",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Open a p i",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/policies/safe-defaults": {
+      "post": {
+        "operationId": "safeDefaults",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Safe defaults",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/policies/{kind}": {
+      "get": {
+        "operationId": "getPolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get policy",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putPolicy",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The current version of the policy (0 for a new one)",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          },
+          "412": {
+            "description": "The policy changed: read it again and retry"
+          },
+          "428": {
+            "description": "If-Match is required"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put policy",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/policies/{kind}/diff": {
+      "get": {
+        "operationId": "policyDiff",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Policy diff",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/policies/{kind}/dry-run": {
+      "post": {
+        "operationId": "dryRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Dry run",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/policies/{kind}/rollback": {
+      "post": {
+        "operationId": "policyRollback",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The current version of the policy (0 for a new one)",
+            "in": "header",
+            "name": "If-Match",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          },
+          "412": {
+            "description": "The policy changed: read it again and retry"
+          },
+          "428": {
+            "description": "If-Match is required"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Policy rollback",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/policies/{kind}/simulate": {
+      "post": {
+        "operationId": "simulate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Simulate",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/policies/{kind}/versions": {
+      "get": {
+        "operationId": "policyVersions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Policy versions",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/policies/{kind}/versions/{n}": {
+      "get": {
+        "operationId": "policyVersion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "n",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Policy version",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/privacy": {
+      "get": {
+        "operationId": "getPrivacy",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get privacy",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putPrivacy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put privacy",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/privacy/reveal": {
+      "get": {
+        "operationId": "revealUser",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Reveal user",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
+    "/v1/risk": {
+      "get": {
+        "operationId": "getRisk",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get risk",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/scim": {
+      "get": {
+        "operationId": "getSCIM",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get s c i m",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      },
+      "put": {
+        "operationId": "putSCIM",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put s c i m",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
+    "/v1/scim/token": {
+      "post": {
+        "operationId": "scimToken",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Scim token",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
+    "/v1/secrets": {
+      "get": {
+        "operationId": "listSecrets",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List secrets",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/secrets/{name}": {
+      "delete": {
+        "operationId": "deleteSecret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete secret",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "putSecret",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put secret",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/segments": {
+      "get": {
+        "operationId": "listSegments",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List segments",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "post": {
+        "operationId": "putSegment",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put segment",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/segments/{id}": {
+      "delete": {
+        "operationId": "deleteSegment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete segment",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "putSegment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put segment",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/shadow-ai": {
+      "get": {
+        "operationId": "shadowAI",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Shadow a i",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/siem": {
+      "delete": {
+        "operationId": "deleteSIEM",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete s i e m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "get": {
+        "operationId": "getSIEM",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get s i e m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "put": {
+        "operationId": "putSIEM",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put s i e m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/siem/test": {
+      "post": {
+        "operationId": "testSIEM",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission sensitive"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Test s i e m",
+        "x-required-permission": "sensitive",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/suggestions": {
+      "get": {
+        "operationId": "getSuggestions",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get suggestions",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/support-access": {
+      "post": {
+        "operationId": "supportAccess",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission admins"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Support access",
+        "x-required-permission": "admins",
+        "x-roles": [
+          "owner"
+        ]
+      }
+    },
+    "/v1/tenancy": {
+      "delete": {
+        "operationId": "deleteTenancy",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Delete tenancy",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      },
+      "get": {
+        "operationId": "getTenancy",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Get tenancy",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      },
+      "put": {
+        "operationId": "putTenancy",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Put tenancy",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/tenants": {
+      "post": {
+        "operationId": "createTenant",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "The bootstrap token is required"
+          }
+        },
+        "security": [
+          {
+            "bootstrapToken": []
+          }
+        ],
+        "summary": "Create tenant"
+      }
+    },
+    "/v1/users": {
+      "get": {
+        "operationId": "listUsers",
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission read"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "List users",
+        "x-required-permission": "read",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk",
+          "auditor",
+          "viewer"
+        ]
+      }
+    },
+    "/v1/users/{id}/disable": {
+      "post": {
+        "operationId": "disableUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission write"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Disable user",
+        "x-required-permission": "write",
+        "x-roles": [
+          "owner",
+          "admin"
+        ]
+      }
+    },
+    "/v1/users/{id}/restrict": {
+      "post": {
+        "operationId": "restrictUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission support"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Restrict user",
+        "x-required-permission": "support",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk"
+        ]
+      }
+    },
+    "/v1/users/{id}/unrestrict": {
+      "post": {
+        "operationId": "unrestrictUser",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "The request is not valid; the message says why"
+          },
+          "401": {
+            "description": "No token, or an invalid or expired one"
+          },
+          "403": {
+            "description": "The role of the token does not have the permission support"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Unrestrict user",
+        "x-required-permission": "support",
+        "x-roles": [
+          "owner",
+          "admin",
+          "helpdesk"
+        ]
+      }
+    }
+  }
+}

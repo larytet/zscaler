@@ -89,21 +89,21 @@ func (a *API) scimLog(tenant, action, object string, after any) {
 }
 
 func (a *API) mountSCIM(m *http.ServeMux) {
-	m.HandleFunc("GET /scim/v2/ServiceProviderConfig", a.scimAuth(a.scimConfig))
-	m.HandleFunc("GET /scim/v2/ResourceTypes", a.scimAuth(a.scimResourceTypes))
-	m.HandleFunc("GET /scim/v2/Schemas", a.scimAuth(a.scimSchemas))
-	m.HandleFunc("GET /scim/v2/Users", a.scimAuth(a.scimListUsers))
-	m.HandleFunc("POST /scim/v2/Users", a.scimAuth(a.scimCreateUser))
-	m.HandleFunc("GET /scim/v2/Users/{id}", a.scimAuth(a.scimGetUser))
-	m.HandleFunc("PUT /scim/v2/Users/{id}", a.scimAuth(a.scimReplaceUser))
-	m.HandleFunc("PATCH /scim/v2/Users/{id}", a.scimAuth(a.scimPatchUser))
-	m.HandleFunc("DELETE /scim/v2/Users/{id}", a.scimAuth(a.scimDeleteUser))
-	m.HandleFunc("GET /scim/v2/Groups", a.scimAuth(a.scimListGroups))
-	m.HandleFunc("POST /scim/v2/Groups", a.scimAuth(a.scimCreateGroup))
-	m.HandleFunc("GET /scim/v2/Groups/{id}", a.scimAuth(a.scimGetGroup))
-	m.HandleFunc("PUT /scim/v2/Groups/{id}", a.scimAuth(a.scimReplaceGroup))
-	m.HandleFunc("PATCH /scim/v2/Groups/{id}", a.scimAuth(a.scimPatchGroup))
-	m.HandleFunc("DELETE /scim/v2/Groups/{id}", a.scimAuth(a.scimDeleteGroup))
+	a.scimRoute(m, "GET /scim/v2/ServiceProviderConfig", a.scimConfig)
+	a.scimRoute(m, "GET /scim/v2/ResourceTypes", a.scimResourceTypes)
+	a.scimRoute(m, "GET /scim/v2/Schemas", a.scimSchemas)
+	a.scimRoute(m, "GET /scim/v2/Users", a.scimListUsers)
+	a.scimRoute(m, "POST /scim/v2/Users", a.scimCreateUser)
+	a.scimRoute(m, "GET /scim/v2/Users/{id}", a.scimGetUser)
+	a.scimRoute(m, "PUT /scim/v2/Users/{id}", a.scimReplaceUser)
+	a.scimRoute(m, "PATCH /scim/v2/Users/{id}", a.scimPatchUser)
+	a.scimRoute(m, "DELETE /scim/v2/Users/{id}", a.scimDeleteUser)
+	a.scimRoute(m, "GET /scim/v2/Groups", a.scimListGroups)
+	a.scimRoute(m, "POST /scim/v2/Groups", a.scimCreateGroup)
+	a.scimRoute(m, "GET /scim/v2/Groups/{id}", a.scimGetGroup)
+	a.scimRoute(m, "PUT /scim/v2/Groups/{id}", a.scimReplaceGroup)
+	a.scimRoute(m, "PATCH /scim/v2/Groups/{id}", a.scimPatchGroup)
+	a.scimRoute(m, "DELETE /scim/v2/Groups/{id}", a.scimDeleteGroup)
 }
 
 func (a *API) scimConfig(w http.ResponseWriter, r *http.Request, tenant string) error {

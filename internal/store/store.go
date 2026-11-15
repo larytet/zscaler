@@ -79,6 +79,17 @@ func (r Role) Can(p Perm) bool {
 	return false
 }
 
+// RolesWith lists the roles that have a permission, in a fixed order.
+func RolesWith(p Perm) []Role {
+	var out []Role
+	for _, r := range []Role{Owner, Admin, Helpdesk, Auditor, Viewer} {
+		if r.Can(p) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // ValidRole reports whether r is a role that can be given to an administrator.
 func ValidRole(r Role) bool { _, ok := rolePerms[r]; return ok }
 
