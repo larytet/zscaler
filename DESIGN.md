@@ -1,6 +1,6 @@
 # Software Design: SMB-ZTX
 
-**Status:** Draft v0.2, 2026-11-15
+**Status:** Draft v0.3, 2026-11-15
 **Input:** [REQUIREMENTS.md](REQUIREMENTS.md) v0.4 (IDs such as `ZPA-020` refer to it)
 **Next documents:** TEST-PLAN.md, then the implementation under `cmd/` and `internal/`
 
@@ -10,7 +10,7 @@ The design is written in parts. This file grows one subtask at a time:
 |---|---|---|
 | D1 | Scope of the first build, architecture, technology choices | done |
 | D2 | Policy engine and data model | done |
-| D3 | Data plane: broker, connector stitching, forward proxy | pending |
+| D3 | Data plane: broker, connector stitching, forward proxy | done |
 | D4 | Agent, posture, enrolment | pending |
 | D5 | Control-plane API, logging, security, deployment | pending |
 
@@ -257,3 +257,99 @@ Closing a session emits a second record with byte counts. Logs never contain req
 ### D2.7 Validation rules
 
 `Validate` rejects: duplicate rule IDs or priorities, an unknown action, a `private` default other than deny, an `allow` rule with no `users`, no `groups` and no `posture` and no `apps` (an accidental allow-all), unparsable CIDRs or time zones, references to unknown segments, and domain entries that contain schemes or paths. Warnings (not errors): a rule that can never match because an earlier rule shadows it.
+
+---
+
+## D3. Data plane: broker, connector, web proxy
+
+Requirements: ZPA-001..003, 010..012, 020..026 (subset), ZIA-001..005 (subset), ARCH-002, ARCH-003.
+
+### D3.1 Stream multiplexer (`internal/mux`)
+
+A connector keeps one outbound TLS connection to an EN and must carry many concurrent app sessions over it. RB1 uses a small framing protocol over the TLS stream.
+
+Frame: `type(1) | stream_id(4) | length(4) | payload`.
+
+| Type | Meaning |
+|---|---|
+| `OPEN` | Initiator opens a stream. Payload: JSON `{"app":"seg-id","host":"…","port":5432}` for connector streams |
+| `ACCEPT` / `REJECT` | Answer to `OPEN`. `REJECT` carries a short reason code |
+| `DATA` | Stream bytes |
+| `FIN` | Half-close |
+| `RST` | Abort |
+| `WINDOW` | Flow-control credit (per stream, 256 KiB initial) |
+| `PING` / `PONG` | Liveness every 15 s, connection dropped after 45 s of silence |
+
+Stream IDs: odd for streams opened by the EN, even for the connector (unused in RB1). A mux error on one stream never tears down the connection. Flow control prevents one slow app from filling memory.
+
+Alternative considered: use an existing multiplexer library. Acceptable replacement later, because the package exposes only `Session.Open`, `Session.Accept`, and `Stream` (an `io.ReadWriteCloser`).
+
+### D3.2 Enforcement node internals (`cmd/ztx-en`)
+
+```
+ listeners                    decision                    upstream
+ :443  agent TLS (mTLS) --->  authenticate (cert)  --->   connector mux session   (private)
+ :8443 connector TLS    --->  register connector          direct dial to origin    (web)
+ :3128 proxy (agent)    --->  classify + evaluate  --->
+```
+
+Roles in one process, selectable by flag, so a small deployment runs a single EN.
+
+**Registries (in memory)**
+
+- `connectors`: map of connector ID to live mux session and its `connector_group`. Multiple connectors in a group give load sharing and failover (ZPA-012).
+- `sessions`: active stitched sessions, with user, device, app, policy version, start time. Used for revocation and for re-evaluation.
+- `policy`: the current compiled policy per tenant, from D2.6.
+
+### D3.3 Private-access session flow
+
+1. Agent opens mTLS to `:443`. The EN verifies the device certificate chain, checks revocation in its cached list, and reads tenant, user and device from the certificate subject. A certificate older than its validity (12 hours default) is rejected.
+2. Agent sends `OPEN {app: "seg-erp-db", port: 5432}`. The agent only names a segment (or a hostname the agent resolves to a segment through its local config), never a raw private IP. The segment definition is on the EN.
+3. EN builds a `policy.Request` using the **latest verified posture** held for that device (posture arrives at connect and every 5 minutes, see D4).
+4. `Deny`: the EN sends `REJECT` with code `policy`. It logs `deny` with the rule ID. The user-facing reason is generic. Admins see the rule.
+5. `Allow`: the EN picks a live connector in the segment's group (round-robin among healthy), sends `OPEN {host, port}` over the connector mux, waits up to 5 s for `ACCEPT`.
+6. On `ACCEPT`, the EN replies `ACCEPT` to the agent and copies bytes both ways (`io.Copy` with the mux flow control). On `REJECT` or timeout it tries the next connector once, then fails with `unavailable`.
+7. Either side closing produces `FIN` then closure. The EN writes the second log record with byte counts.
+
+**Target allow-list.** The connector independently refuses any `host:port` not in its configured segment targets (received from the CP at enrolment and kept updated). This means a compromised EN cannot make a connector dial arbitrary internal hosts. Defence in depth, ZPA-023.
+
+**Dark apps.** The app has no listener reachable from outside. The connector dials out only. The EN never returns the target address to the agent (ZPA-010).
+
+### D3.4 Connector (`cmd/ztx-connector`)
+
+- Starts with `--token` the first time. Generates a keypair, exchanges the token for a certificate with the CP, stores the key and cert with mode 0600.
+- Dials the EN list from the CP (primary, then others) with exponential backoff and jitter up to 30 s.
+- Serves `OPEN` requests: checks the target allow-list, dials the target with a 3 s timeout, relays bytes.
+- Holds no user data and no policy beyond the target allow-list. Runs fine as an unprivileged user in a container.
+- Health: reports `last_seen`, active streams and version over the control stream every 10 s.
+
+### D3.5 Web proxy (`internal/webproxy`)
+
+- Supports HTTP forward proxying and `CONNECT` for HTTPS. **No TLS interception in RB1.**
+- Authentication: the agent connects over mTLS to the proxy port (so identity is the device certificate) and RB1 does not support unauthenticated clients.
+- Classification: take the host from the `Host` header or `CONNECT` target, lowercase, strip the port. Look up the host in the category list by walking domain suffixes (`a.b.example.com`, `b.example.com`, `example.com`) against a map. Result: zero or more categories.
+- Evaluate `policy.Request{Kind: Web, Host, Categories}`.
+  - `Allow`: dial the origin (with a deny for private and loopback ranges, to stop SSRF into the EN's own network), stitch.
+  - `Deny`: HTTP 403 (or `CONNECT` 403) with a short block page naming the category, a support contact, and a reference ID that ties to the log.
+  - `Warn`: for plain HTTP, an interstitial page with a continue link carrying a signed, short-lived token. For `CONNECT` (no decryption) a warning page cannot be shown inside TLS, so RB1 treats `warn` on HTTPS as `allow` and logs `warn-not-displayable`. That limit is explicit in the test plan.
+- DNS: the EN resolves origins itself with a resolver that rejects answers in private ranges. DNS-level filtering for non-proxied traffic is deferred.
+- Limits: header size 16 KiB, idle timeout 60 s, max 10 000 concurrent connections per EN (configurable).
+
+### D3.6 Failure behaviour
+
+| Failure | Behaviour |
+|---|---|
+| CP unreachable | ENs keep enforcing the last policy. No new enrolments. Revocation pushes stall, so the EN re-checks the cached revocation list age and denies new sessions if it is older than 15 minutes (configurable) |
+| Connector disconnects | Its streams close. New sessions go to other connectors in the group, or fail with `unavailable` |
+| EN crashes | Agents reconnect to the next EN in their list. Connectors reconnect to another EN |
+| Policy fails to compile | Rejected by the CP at save time. An EN that still receives a bad version keeps the previous one and reports an error |
+| Clock skew | Certificates validated with 2 minutes of tolerance. Posture reports older than their `max_age` are treated as missing |
+
+### D3.7 Performance and resource targets for RB1
+
+Stated so the test plan can check them. They are design targets, not parity with Zscaler.
+
+- Added latency for a private TCP session setup on one machine: under 20 ms at the 95th percentile.
+- Throughput through one EN for a single stream on loopback: at least 500 Mbit/s.
+- 1 000 concurrent stitched sessions on one EN with under 300 MB of memory.
+- Connector idle memory under 30 MB.
