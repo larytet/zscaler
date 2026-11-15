@@ -53,6 +53,9 @@ func (r *rig) connectPage(t *testing.T, target string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if resp.StatusCode == 200 { // an open tunnel: there is no body to read, and reading would wait for the connection to end
+		return 200, ""
+	}
 	b, _ := io.ReadAll(resp.Body)
 	return resp.StatusCode, string(b)
 }

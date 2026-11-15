@@ -1054,3 +1054,102 @@ func TestAgentCannotExceedItsOperator(t *testing.T) { // AGT-009, AGT-010 (AGS-0
 		t.Fatal("reason operator-disabled not logged")
 	}
 }
+
+// modeState is a state that can be stale and has a tenant's failure modes.
+type modeState struct {
+	*fakeState
+	stale          atomic.Bool
+	onStale, onLog string
+}
+
+func (m *modeState) Stale() bool                         { return m.stale.Load() }
+func (m *modeState) FailureMode(string) (string, string) { return m.onStale, m.onLog }
+
+func TestFailureGateDecisionTable(t *testing.T) { // AGT-030 (NFR-012)
+	cases := []struct {
+		name           string
+		stale, sinkOK  bool
+		onStale, onLog string
+		refuse, note   string
+	}{
+		{"healthy", false, true, FailDeny, FailDeny, "", ""},
+		{"stale, deny", true, true, FailDeny, FailDeny, "state-stale", ""},
+		{"stale, cached", true, true, FailCached, FailDeny, "", "state-stale-cached"},
+		{"log down, deny", false, false, FailDeny, FailDeny, "log-sink-unavailable", ""},
+		{"log down, allow", false, false, FailDeny, FailAllow, "", "log-sink-down-allowed"},
+		{"both, both safe", true, false, FailDeny, FailDeny, "log-sink-unavailable", ""},
+		{"both, stale ok, log refused", true, false, FailCached, FailDeny, "log-sink-unavailable", ""},
+		{"both, log ok, stale refused", true, false, FailDeny, FailAllow, "state-stale", ""},
+		{"both, both open", true, false, FailCached, FailAllow, "", "log-sink-down-allowed,state-stale-cached"},
+		{"healthy, both open", false, true, FailCached, FailAllow, "", ""},
+	}
+	for _, c := range cases {
+		st := &modeState{fakeState: &fakeState{}, onStale: c.onStale, onLog: c.onLog}
+		st.stale.Store(c.stale)
+		refuse, note := FailureGate(st, "t1", func() bool { return c.sinkOK })
+		if refuse != c.refuse || note != c.note {
+			t.Errorf("%s: got (%q, %q), want (%q, %q)", c.name, refuse, note, c.refuse, c.note)
+		}
+	}
+	// without a way to know the tenant's choice the answer is the safe one
+	st := &staleState{fakeState: &fakeState{}}
+	st.stale.Store(true)
+	if refuse, _ := FailureGate(st, "t1", nil); refuse != "state-stale" {
+		t.Fatalf("no failure modes means deny: %q", refuse)
+	}
+	// a state that cannot say whether it is stale, and no sink check: nothing to refuse for
+	if refuse, note := FailureGate(&fakeState{}, "t1", nil); refuse != "" || note != "" {
+		t.Fatalf("%q %q", refuse, note)
+	}
+	// an unknown mode value is treated as the safe one
+	st2 := &modeState{fakeState: &fakeState{}, onStale: "whatever", onLog: "whatever"}
+	st2.stale.Store(true)
+	if refuse, _ := FailureGate(st2, "t1", func() bool { return false }); refuse == "" {
+		t.Fatal("an unknown mode must not open anything")
+	}
+}
+
+func TestPrivateSessionsGoOnWhenTheTenantChoseToAndSayWhy(t *testing.T) { // AGT-030 (NFR-012)
+	r := newRig(t)
+	ms := &modeState{fakeState: r.st, onStale: FailCached, onLog: FailAllow}
+	r.en.State = ms
+	var healthy atomic.Bool
+	healthy.Store(true)
+	r.en.mu.Lock()
+	r.en.SinkHealthy = healthy.Load
+	r.en.mu.Unlock()
+	r.startConnector("c1", r.allowApp)
+	conn, _ := r.agent("alice", "d1", true)
+
+	ms.stale.Store(true)
+	s, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("stale state with the mode cached: %v", err)
+	}
+	roundTrip(t, s, []byte("x"))
+	if r.logs.find(func(x Record) bool { return x.Reason == "state-stale-cached" && x.Action == "info" }) == nil {
+		t.Fatal("going on with stale state must be recorded")
+	}
+	// the cached policy still decides: a user who is not allowed is still refused
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"hr"}})
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil {
+		t.Fatal("the last policy must still apply when state is stale")
+	}
+	r.st.setUser("t1", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"finance"}})
+	ms.stale.Store(false)
+
+	healthy.Store(false)
+	s2, err := conn.OpenApp("seg-db", "", r.app.port())
+	if err != nil {
+		t.Fatalf("log down with the mode allow: %v", err)
+	}
+	roundTrip(t, s2, []byte("y"))
+	if r.logs.find(func(x Record) bool { return x.Reason == "log-sink-down-allowed" }) == nil {
+		t.Fatal("going on without a log must be recorded")
+	}
+	// the safe modes refuse
+	ms.onStale, ms.onLog = FailDeny, FailDeny
+	if _, err := conn.OpenApp("seg-db", "", r.app.port()); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("with deny the session must be refused: %v", err)
+	}
+}

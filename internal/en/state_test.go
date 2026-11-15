@@ -378,3 +378,30 @@ func TestTenancyRestrictionReachesTheNode(t *testing.T) { // AGT-024 (DATA-002a)
 		t.Fatal("the restriction outlived its removal")
 	}
 }
+
+func TestFailureModesReachTheNode(t *testing.T) { // AGT-030 (NFR-012)
+	st := seed(t)
+	st.CreateTenant("t2", "Other")
+	if _, err := st.SetFailureMode("t1", store.FailureMode{OnStale: "cached", OnLogFailure: "allow"}); err != nil {
+		t.Fatal(err)
+	}
+	s := NewSyncState()
+	if errs := s.Apply(st.Snapshot()); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	if on, ol := s.FailureMode("t1"); on != "cached" || ol != "allow" {
+		t.Fatalf("%s %s", on, ol)
+	}
+	if on, ol := s.FailureMode("t2"); on != "deny" || ol != "deny" {
+		t.Fatalf("a tenant that chose nothing gets the safe modes: %s %s", on, ol)
+	}
+	if on, ol := s.FailureMode("nobody"); on != "deny" || ol != "deny" {
+		t.Fatalf("an unknown tenant gets the safe modes: %s %s", on, ol)
+	}
+	// only one of the two changed: the other stays safe
+	st.SetFailureMode("t1", store.FailureMode{OnStale: "cached"})
+	s.Apply(st.Snapshot())
+	if on, ol := s.FailureMode("t1"); on != "cached" || ol != "deny" {
+		t.Fatalf("%s %s", on, ol)
+	}
+}

@@ -141,6 +141,8 @@ func (a *API) Handler() http.Handler {
 	m.HandleFunc("PUT /v1/privacy", a.wrap(sensitive, a.putPrivacy))
 	m.HandleFunc("GET /v1/privacy", a.wrap(read, a.getPrivacy))
 	m.HandleFunc("GET /v1/privacy/reveal", a.wrap(admins, a.revealUser))
+	m.HandleFunc("PUT /v1/failure-mode", a.wrap(write, a.putFailureMode))
+	m.HandleFunc("GET /v1/failure-mode", a.wrap(read, a.getFailureMode))
 	m.HandleFunc("PUT /v1/tenancy", a.wrap(write, a.putTenancy))
 	m.HandleFunc("GET /v1/tenancy", a.wrap(read, a.getTenancy))
 	m.HandleFunc("DELETE /v1/tenancy", a.wrap(write, a.deleteTenancy))

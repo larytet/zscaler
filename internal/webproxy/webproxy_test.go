@@ -38,12 +38,30 @@ type state struct {
 	secrets     map[string]store.Secret
 	edm         map[string]*dlp.EDM
 	tenancyHost string // the one host the tenancy test restricts
+	stale       bool
+	onStale     string
+	onLog       string
 }
 
 func (s *state) EDM(string) map[string]*dlp.EDM {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.edm
+}
+
+func (s *state) Stale() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.stale }
+
+func (s *state) FailureMode(string) (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	on, ol := s.onStale, s.onLog
+	if on == "" {
+		on = "deny"
+	}
+	if ol == "" {
+		ol = "deny"
+	}
+	return on, ol
 }
 
 func (s *state) Secret(_, name string) (store.Secret, bool) {

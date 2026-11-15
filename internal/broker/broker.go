@@ -49,6 +49,48 @@ type Revoker interface {
 	DeviceRevoked(tenant, device string) bool
 }
 
+// Failure modes a tenant can choose (NFR-012). What they decide is exactly this: whether NEW sessions and
+// requests go on when the node has not heard from the control plane for the staleness window (using the
+// last policy it has: "cached"), or are refused ("deny"); and whether they go on when the decision log
+// cannot be written ("allow") or are refused ("deny"). Sessions already open are not cut by either.
+const (
+	FailDeny   = "deny"
+	FailCached = "cached"
+	FailAllow  = "allow"
+)
+
+// FailureModer is an optional State extension: a tenant's failure modes. Without it, both are "deny".
+type FailureModer interface {
+	FailureMode(tenant string) (onStale, onLogFailure string)
+}
+
+// FailureGate decides whether a new session or request may start given the node's health. It returns
+// a reason code to refuse with, or "" to go on; and when it goes on although something is wrong, a note
+// to record ("state-stale-cached", "log-sink-down-allowed") so the degraded decision is visible.
+func FailureGate(st State, tenant string, sinkHealthy func() bool) (refuse, note string) {
+	onStale, onLog := FailDeny, FailDeny
+	if fm, ok := st.(FailureModer); ok {
+		onStale, onLog = fm.FailureMode(tenant)
+	}
+	if sinkHealthy != nil && !sinkHealthy() {
+		if onLog != FailAllow {
+			return "log-sink-unavailable", ""
+		}
+		note = "log-sink-down-allowed"
+	}
+	if s, ok := st.(Staler); ok && s.Stale() {
+		if onStale != FailCached {
+			return "state-stale", ""
+		}
+		if note == "" {
+			note = "state-stale-cached"
+		} else {
+			note += ",state-stale-cached"
+		}
+	}
+	return "", note
+}
+
 // Staler is an optional State extension: true when the EN has not heard from
 // the control plane recently enough to trust its cache (DESIGN.md D3.6).
 type Staler interface {
@@ -450,13 +492,15 @@ func (e *EN) open(id pki.Identity, ds *deviceState, st *mux.Stream, rq openReq) 
 	e.mu.Lock()
 	sink := e.SinkHealthy
 	e.mu.Unlock()
-	if sink != nil && !sink() {
-		deny("unavailable", "log-sink-unavailable")
+	refuse, note := FailureGate(e.State, id.Tenant, sink)
+	if refuse != "" {
+		deny("unavailable", refuse)
 		return
 	}
-	if st, ok := e.State.(Staler); ok && st.Stale() {
-		deny("unavailable", "state-stale")
-		return
+	if note != "" { // going on although something is wrong: say so in the log
+		nr := rec
+		nr.Action, nr.Reason = "info", note
+		e.logRec(nr)
 	}
 	if _, ok := e.State.User(id.Tenant, id.Subject); !ok {
 		deny("policy", "unknown-user")

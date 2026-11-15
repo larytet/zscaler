@@ -299,3 +299,67 @@ func TestRealAG002CertificateRenewalOnARealClock(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 }
+
+// REAL-NFR-012 (NFR-012, NFR-011): what happens when the enforcement node loses the control plane for
+// longer than its staleness window is the tenant's choice, and is deterministic. The control plane is
+// killed for real and the node's window is 8 s. With the safe choice, new sessions are refused with a
+// reason on record, established ones go on, and access returns when the control plane does. With "cached",
+// new sessions go on under the last policy and the log says so.
+func TestRealNFR012FailureModes(t *testing.T) {
+	for _, mode := range []string{"deny", "cached"} {
+		t.Run(mode, func(t *testing.T) {
+			w := newWorldN(t, 1, func(w *world) { w.enExtra = []string{"--stale-after", "8s"} })
+			w.deployApp("erp")
+			w.deployConnector("connector")
+			a := w.newAgent("laptop", map[string]string{"erp.ztx": "erp"})
+			steady(t, a, 60*time.Second, 2)
+			if mode == "cached" {
+				w.must("PUT", "/v1/failure-mode", map[string]any{"on_stale": "cached"})
+				time.Sleep(3 * time.Second) // the node's next sync carries it
+			}
+			c := openSession(t, a)
+			defer c.Close()
+
+			w.cpProc.Process.Kill()
+			w.cpProc.Wait()
+			killed := time.Now()
+			if mode == "deny" {
+				eventually(t, "new sessions to be refused once the node's state is stale", 45*time.Second, func() bool { return !echoes(a.socks(), "erp.ztx", "x") })
+				t.Logf("REAL-NFR-012: new sessions refused %v after the control plane was lost (the node's window is 8 s)", time.Since(killed).Round(time.Second))
+				found := false
+				eventually(t, "the refusal to be recorded with its reason", 15*time.Second, func() bool {
+					for _, d := range w.decisions() {
+						if d["kind"] == "private" && d["action"] == "deny" && d["reason"] == "state-stale" {
+							found = true
+						}
+					}
+					return found
+				})
+			} else {
+				time.Sleep(12 * time.Second) // past the window
+				if !echoes(a.socks(), "erp.ztx", "still going") {
+					t.Fatal("with the mode cached, new sessions must go on under the last policy")
+				}
+				noted := false
+				eventually(t, "the degraded decision to be recorded", 15*time.Second, func() bool {
+					for _, d := range w.decisions() {
+						if d["reason"] == "state-stale-cached" {
+							noted = true
+						}
+					}
+					return noted
+				})
+			}
+			// established sessions are not cut in either mode
+			c.SetDeadline(time.Now().Add(5 * time.Second))
+			c.Write([]byte("during"))
+			b := make([]byte, 6)
+			if _, err := c.Read(b); err != nil || string(b) != "during" {
+				t.Fatalf("the established session must go on: %v %q", err, b)
+			}
+			// the control plane returns: access is as before in both modes
+			w.restartCP()
+			eventually(t, "access after the control plane returned", 45*time.Second, func() bool { return echoes(a.socks(), "erp.ztx", "back") })
+		})
+	}
+}

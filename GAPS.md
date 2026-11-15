@@ -39,7 +39,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G7 | NFR-033, ADM-006b | Privacy mode that hides usernames (and paths) in logs | **done for decision records (S28)**; audit log, alert and e-mail text, user and device lists are not covered; paths were never logged |
 | G8 | ZIA-014 | Reason strings on block pages for every deny reason, not only some | **done for the web proxy (S29)**; private-app refusals (SOCKS) still carry no message to the user |
 | G9 | INT-002 | SCIM provisioning of users and groups | **done (S30), not tested against a real Entra ID or Okta**; no Enterprise User extension, no bulk, no group nesting |
-| G10 | NFR-012 | Per-tenant fail-open or fail-closed setting, documented and tested (today only fail-closed) | queued |
+| G10 | NFR-012 | Per-tenant fail-open or fail-closed setting, documented and tested | **done (S31)** for two faults: a node cut off from the control plane, and a node that cannot write its log; other faults are not covered |
 | G11 | ZIA-011 | Cloud app control: a catalogue of apps with actions (upload, post, share) as rule conditions | queued |
 
 ## Not feasible without a new subsystem or an outside party (stays a gap)

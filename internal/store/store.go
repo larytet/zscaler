@@ -168,10 +168,11 @@ type Tenant struct {
 	Inspect     InspectCfg                      `json:"inspect,omitempty"`
 	Secrets     map[string]Secret               `json:"secrets,omitempty"`
 	EDM         map[string]EDMSet               `json:"edm,omitempty"`
-	SIEM        *siem.Config                    `json:"siem,omitempty"`    // where this tenant\'s logs are streamed (INT-004)
-	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"` // tenancy restriction on SaaS sign-in (DATA-002a)
-	Privacy     *privacy.Config                 `json:"privacy,omitempty"` // log privacy mode (NFR-033)
-	SCIM        *SCIMConfig                     `json:"scim,omitempty"`    // provisioning from the identity provider (INT-002)
+	SIEM        *siem.Config                    `json:"siem,omitempty"`         // where this tenant\'s logs are streamed (INT-004)
+	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"`      // tenancy restriction on SaaS sign-in (DATA-002a)
+	Privacy     *privacy.Config                 `json:"privacy,omitempty"`      // log privacy mode (NFR-033)
+	Failure     *FailureMode                    `json:"failure_mode,omitempty"` // fail-open or fail-closed choices (NFR-012)
+	SCIM        *SCIMConfig                     `json:"scim,omitempty"`         // provisioning from the identity provider (INT-002)
 	SCIMUsers   map[string]SCIMUser             `json:"scim_users,omitempty"`
 	SCIMGroups  map[string]SCIMGroup            `json:"scim_groups,omitempty"`
 	SCIMGone    map[string]bool                 `json:"scim_gone,omitempty"` // people whose SCIM user was removed: no access until provisioned again
@@ -665,6 +666,7 @@ type TenantSnap struct {
 	Secrets        []Secret
 	EDM            []EDMSet // exact-data-match sets: salted hashes only
 	Tenancy        *tenancy.Config
+	Failure        *FailureMode
 }
 
 // Grant is an admin-approved, time-limited access (just-in-time).
@@ -736,6 +738,7 @@ func (s *Store) Snapshot() *Snapshot {
 			ts.EDM = append(ts.EDM, e)
 		}
 		ts.Tenancy = t.Tenancy
+		ts.Failure = t.Failure
 		for _, sc := range t.Secrets {
 			ts.Secrets = append(ts.Secrets, sc)
 		}
@@ -1335,4 +1338,51 @@ func (s *Store) Privacy(tenant string) *privacy.Config {
 	}
 	c := *t.Privacy
 	return &c
+}
+
+// FailureMode is a tenant's choice of what happens when a node is unhealthy (NFR-012). The zero value
+// and an empty field both mean the safe choice: refuse.
+type FailureMode struct {
+	OnStale      string `json:"on_stale"`       // "deny" (default) or "cached"
+	OnLogFailure string `json:"on_log_failure"` // "deny" (default) or "allow"
+}
+
+// SetFailureMode stores a tenant's failure modes after checking them.
+func (s *Store) SetFailureMode(tenant string, f FailureMode) (FailureMode, error) {
+	if f.OnStale == "" {
+		f.OnStale = broker.FailDeny
+	}
+	if f.OnLogFailure == "" {
+		f.OnLogFailure = broker.FailDeny
+	}
+	if f.OnStale != broker.FailDeny && f.OnStale != broker.FailCached {
+		return f, errors.New("on_stale must be deny or cached")
+	}
+	if f.OnLogFailure != broker.FailDeny && f.OnLogFailure != broker.FailAllow {
+		return f, errors.New("on_log_failure must be deny or allow")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, err := s.tenant(tenant)
+	if err != nil {
+		return f, err
+	}
+	t.Failure = &f
+	return f, s.save()
+}
+
+// FailureModeOf returns the tenant's failure modes, with the defaults filled in.
+func (s *Store) FailureModeOf(tenant string) FailureMode {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	f := FailureMode{OnStale: broker.FailDeny, OnLogFailure: broker.FailDeny}
+	if t, err := s.tenant(tenant); err == nil && t.Failure != nil {
+		if t.Failure.OnStale != "" {
+			f.OnStale = t.Failure.OnStale
+		}
+		if t.Failure.OnLogFailure != "" {
+			f.OnLogFailure = t.Failure.OnLogFailure
+		}
+	}
+	return f
 }

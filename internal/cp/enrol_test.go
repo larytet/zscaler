@@ -1153,3 +1153,49 @@ func TestPolicyHistoryDiffAndRollback(t *testing.T) { // AGT-021 (ADM-004)
 		t.Fatalf("tenant b read tenant a's history: %s", b)
 	}
 }
+
+func TestFailureModeEndpoint(t *testing.T) { // AGT-030 (NFR-012)
+	e := newEnrolEnv(t)
+	c, b, _ := e.call("GET", "/v1/failure-mode", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), `"on_stale":"deny"`) || !strings.Contains(string(b), `"on_log_failure":"deny"`) || !strings.Contains(string(b), "never cut") {
+		t.Fatalf("the defaults are the safe ones, and the answer explains itself: %d %s", c, b)
+	}
+	c, b, _ = e.call("PUT", "/v1/failure-mode", e.adminA, map[string]any{"on_stale": "cached", "on_log_failure": "allow"})
+	if c != 200 || !strings.Contains(string(b), `"on_stale":"cached"`) || !strings.Contains(string(b), `"on_log_failure":"allow"`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	// the node's snapshot carries it
+	if snap := e.api.Store.Snapshot().Tenants["a"]; snap == nil || snap.Failure == nil || snap.Failure.OnStale != "cached" {
+		t.Fatalf("%+v", snap)
+	}
+	// bad values are refused and change nothing
+	for name, body := range map[string]map[string]any{"bad stale": {"on_stale": "open"}, "bad log": {"on_log_failure": "cached"}, "unknown field": {"on_stale": "deny", "bogus": 1}} {
+		if c, _, _ := e.call("PUT", "/v1/failure-mode", e.adminA, body); c != 400 {
+			t.Errorf("%s: %d", name, c)
+		}
+	}
+	if f := e.api.Store.FailureModeOf("a"); f.OnStale != "cached" {
+		t.Fatalf("a refused change altered the setting: %+v", f)
+	}
+	// a field left out means the safe value
+	e.call("PUT", "/v1/failure-mode", e.adminA, map[string]any{"on_stale": "cached"})
+	if f := e.api.Store.FailureModeOf("a"); f.OnStale != "cached" || f.OnLogFailure != "deny" {
+		t.Fatalf("%+v", f)
+	}
+	// roles and tenants
+	for _, role := range []store.Role{store.Viewer, store.Helpdesk, store.Auditor} {
+		tok, _ := e.api.Store.AddAdmin("a", "r-"+string(role), role)
+		if c, _, _ := e.call("GET", "/v1/failure-mode", tok, nil); c != 200 {
+			t.Errorf("%s could not read: %d", role, c)
+		}
+		if c, _, _ := e.call("PUT", "/v1/failure-mode", tok, map[string]any{"on_stale": "deny"}); c != 403 {
+			t.Errorf("%s changed it: %d", role, c)
+		}
+	}
+	if _, b, _ := e.call("GET", "/v1/failure-mode", e.adminB, nil); !strings.Contains(string(b), `"on_stale":"deny"`) {
+		t.Fatalf("tenant b: %s", b)
+	}
+	if _, ab, _ := e.call("GET", "/v1/audit", e.adminA, nil); !strings.Contains(string(ab), "failure-mode.put") {
+		t.Fatalf("%s", ab)
+	}
+}

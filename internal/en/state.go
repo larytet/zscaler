@@ -43,6 +43,7 @@ type tenantView struct {
 	secrets map[string]store.Secret
 	edm     map[string]*dlp.EDM
 	tenancy *tenancy.Config
+	failure store.FailureMode
 }
 
 type view struct{ tenants map[string]*tenantView }
@@ -97,6 +98,15 @@ func (s *SyncState) Apply(snap *store.Snapshot) []error {
 			tv.secrets[sc.Name] = sc
 		}
 		tv.tenancy = t.Tenancy
+		tv.failure = store.FailureMode{OnStale: broker.FailDeny, OnLogFailure: broker.FailDeny}
+		if t.Failure != nil {
+			if t.Failure.OnStale != "" {
+				tv.failure.OnStale = t.Failure.OnStale
+			}
+			if t.Failure.OnLogFailure != "" {
+				tv.failure.OnLogFailure = t.Failure.OnLogFailure
+			}
+		}
 		for _, e := range t.EDM {
 			if salt, err := hex.DecodeString(e.Salt); err == nil {
 				if e.Kind == "documents" {
@@ -192,6 +202,14 @@ func (s *SyncState) Inspection(tenant string) (bool, []string, *pki.CA) {
 		return true, t.exempt, t.ca
 	}
 	return false, nil, nil
+}
+
+// FailureMode returns what the tenant chose for a node that is unhealthy; an unknown tenant gets the safe choice (NFR-012).
+func (s *SyncState) FailureMode(tenant string) (string, string) {
+	if t := s.t(tenant); t != nil {
+		return t.failure.OnStale, t.failure.OnLogFailure
+	}
+	return broker.FailDeny, broker.FailDeny
 }
 
 // TenancyHeaders returns the sign-in restriction headers to add to a request to host (DATA-002a).

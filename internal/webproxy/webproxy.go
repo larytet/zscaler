@@ -63,6 +63,9 @@ type Proxy struct {
 	Classifier *Classifier
 	Log        func(broker.Record)
 	Name       string
+	// SinkHealthy, when set, says whether the decision log can be written; a tenant chooses what happens to
+	// new requests when it cannot (NFR-012).
+	SinkHealthy func() bool
 	// Exempt allows specific dial targets that would otherwise be refused as
 	// private. nil in production; tests use it for a loopback origin.
 	Exempt func(netip.AddrPort) bool
@@ -185,6 +188,16 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ws := id.Role == pki.RoleWorkspace
 	rec := broker.Record{Workspace: ws, TS: time.Now().UTC(), Tenant: id.Tenant, Kind: "web", User: id.Subject, Device: id.Device,
 		Target: net.JoinHostPort(host, strconv.Itoa(port)), EN: p.Name, Event: "open"}
+	if refuse, note := broker.FailureGate(p.State, id.Tenant, p.SinkHealthy); refuse != "" {
+		rec.Action, rec.Reason, rec.Ref = "deny", refuse, ref
+		p.Log(rec)
+		errorPage(w, http.StatusServiceUnavailable, "Temporarily unavailable", reasonText(refuse, nil), ref)
+		return
+	} else if note != "" { // going on although something is wrong: say so in the log
+		nr := rec
+		nr.Action, nr.Reason = "info", note
+		p.Log(nr)
+	}
 	cats := p.Classifier.Categories(host)
 	pol := p.State.Policy(id.Tenant, policy.Web)
 	var d policy.Decision
@@ -262,18 +275,20 @@ func splitHostPort(r *http.Request) (string, int) {
 // reasonTexts turns the reason codes the proxy and the policy engine give into a sentence a person can
 // act on (ZIA-014). A reason that is not a code is the text an admin wrote on the rule, and is shown as it is.
 var reasonTexts = map[string]string{
-	"default":             "Your organisation's web policy has no rule that allows this site.",
-	"no-policy":           "Your organisation has not set up a web policy yet, so nothing is allowed.",
-	"user-disabled":       "Your account has been disabled.",
-	"device-revoked":      "This device has been removed from your organisation's access.",
-	"evaluation-error":    "The policy could not be checked, so access was refused to be safe.",
-	"inspection-required": "This site would need its traffic to be checked, and that is not possible for it, so it is refused.",
-	"secret-unavailable":  "A credential that this service needs from your organisation is not available.",
-	"host-mismatch":       "The request named a different site from the one the connection was made to.",
-	"workspace-required":  "This site can only be opened in your organisation's protected workspace browser.",
-	"file-type-download":  "Your organisation does not allow this kind of file to be downloaded.",
-	"dlp-response":        "What the site sent back appears to contain sensitive data.",
-	"approval-required":   "This needs an approval from your administrator first.",
+	"default":              "Your organisation's web policy has no rule that allows this site.",
+	"no-policy":            "Your organisation has not set up a web policy yet, so nothing is allowed.",
+	"user-disabled":        "Your account has been disabled.",
+	"device-revoked":       "This device has been removed from your organisation's access.",
+	"evaluation-error":     "The policy could not be checked, so access was refused to be safe.",
+	"inspection-required":  "This site would need its traffic to be checked, and that is not possible for it, so it is refused.",
+	"secret-unavailable":   "A credential that this service needs from your organisation is not available.",
+	"host-mismatch":        "The request named a different site from the one the connection was made to.",
+	"workspace-required":   "This site can only be opened in your organisation's protected workspace browser.",
+	"file-type-download":   "Your organisation does not allow this kind of file to be downloaded.",
+	"dlp-response":         "What the site sent back appears to contain sensitive data.",
+	"approval-required":    "This needs an approval from your administrator first.",
+	"state-stale":          "Your organisation's security service has not been reachable for a while, so new connections are refused to be safe.",
+	"log-sink-unavailable": "The security log cannot be written right now, so new connections are refused to be safe.",
 }
 
 // reasonText returns the sentence for a decision. code is the decision's reason (a code or an admin's

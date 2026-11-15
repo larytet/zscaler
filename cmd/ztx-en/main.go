@@ -38,6 +38,7 @@ func main() {
 	allowDial := flag.String("lab-allow-dial", "", "LAB ONLY: comma-separated host:port targets the web proxy may reach even though they are private (weakens the SSRF guard)")
 	upstreamCA := flag.String("lab-upstream-ca", "", "LAB ONLY: extra CA file trusted when verifying origin servers of inspected connections")
 	every := flag.Duration("sync-every", en.DefaultSyncEvery, "state poll interval")
+	staleAfter := flag.Duration("stale-after", 15*time.Minute, "how long without hearing from the control plane before this node counts its state as stale (what then happens to new sessions is each tenant's choice, NFR-012)")
 	flag.Parse()
 
 	caPEM, err := os.ReadFile(*cpCA)
@@ -55,6 +56,10 @@ func main() {
 	}
 
 	state := en.NewSyncState()
+	if *staleAfter < 5*time.Second || *staleAfter > 24*time.Hour {
+		log.Fatal("--stale-after must be between 5s and 24h")
+	}
+	state.StaleAfter = *staleAfter
 	rev := pki.NewRevocations(nil)
 	lp := *logPath
 	if lp == "" {
@@ -115,7 +120,7 @@ func main() {
 		}
 	}
 	classifier = webproxy.NewClassifier(lists)
-	px := &webproxy.Proxy{CA: verifier, Rev: rev, State: state, Classifier: classifier, Log: logRec, Name: *name}
+	px := &webproxy.Proxy{CA: verifier, Rev: rev, State: state, Classifier: classifier, Log: logRec, Name: *name, SinkHealthy: sinkOK.Load}
 	if *allowDial != "" {
 		allowed := map[string]bool{}
 		for _, t := range strings.Split(*allowDial, ",") {
