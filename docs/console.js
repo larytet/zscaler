@@ -39,7 +39,7 @@ const S = {
   share: [],
   audit: [],
   capUsed: 0, capLimit: 500, capState: "running",
-  tab: "agents",
+  tab: "agents", chartMode: "both", wmode: "ask", wiz: null, ai: { assistant: "Allow", free: "Warn", transl: "Block" },
 };
 
 // ---------- audit with hash chain ----------
@@ -99,6 +99,81 @@ function detect(text) {
   return { found: [...new Set(found)], masked };
 }
 
+
+// ---------- small UI parts ----------
+const spark = (arr, w = 120, h = 34) => {
+  const mx = Math.max(...arr), mn = Math.min(...arr);
+  const pts = arr.map((v, i) => [(i / (arr.length - 1)) * w, h - 3 - ((v - mn) / (mx - mn || 1)) * (h - 8)]);
+  const d = pts.map((p, i) => (i ? "L" : "M") + p[0].toFixed(1) + " " + p[1].toFixed(1)).join(" ");
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none" aria-hidden="true"><path d="${d} L${w} ${h} L0 ${h} Z" fill="var(--accent)" opacity=".15"/><path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6" vector-effect="non-scaling-stroke"/></svg>`;
+};
+const kpi = (label, value, note, arr) => `<div class="kpi"><div class="muted">${esc(label)}</div><div class="kpi-v">${esc(value)} <span class="muted">${esc(note)}</span></div>${spark(arr)}</div>`;
+const seg = (key, opts, cur) => `<div class="seg" role="group">${opts.map(([v, l]) => `<button type="button" data-seg="${key}:${v}" aria-pressed="${cur === v}">${esc(l)}</button>`).join("")}</div>`;
+function setPath(path, val) { const k = path.split("."); let o = S; while (k.length > 1) o = o[k.shift()]; o[k[0]] = val; }
+
+const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const ALLOWED = [120, 140, 135, 160, 150, 90, 110], BLOCKED = [3, 5, 2, 9, 14, 4, 6];
+function lineChart(series) {
+  const W = 640, H = 200, L = 34, B = 24, T = 10, R = 8;
+  const mx = Math.max(...series.flatMap((x) => x.data), 1) * 1.1;
+  const x = (i) => L + (i / (DAYS.length - 1)) * (W - L - R), y = (v) => H - B - (v / mx) * (H - B - T);
+  const grid = [0, 0.25, 0.5, 0.75, 1].map((f) => { const v = mx * f; return `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${L - 4}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="var(--muted)">${Math.round(v)}</text>`; }).join("");
+  const labels = DAYS.map((d, i) => `<text x="${x(i)}" y="${H - 6}" text-anchor="middle" font-size="10" fill="var(--muted)">${d}</text>`).join("");
+  const lines = series.map((sr) => `<path d="${sr.data.map((v, i) => (i ? "L" : "M") + x(i).toFixed(1) + " " + y(v).toFixed(1)).join(" ")}" fill="none" stroke="${sr.color}" stroke-width="2.2"/>` + sr.data.map((v, i) => `<circle cx="${x(i)}" cy="${y(v)}" r="2.6" fill="${sr.color}"/>`).join("")).join("");
+  const legend = series.map((sr) => `<span class="row"><i class="swatch" style="background:${sr.color}"></i>${esc(sr.name)}</span>`).join("");
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Agent calls per day, ${series.map((x) => x.name).join(" and ")}">${grid}${labels}${lines}</svg><div class="row legend">${legend}</div>`;
+}
+
+// ---------- add-agent wizard with a criteria builder ----------
+const STEPS = ["Identity", "Apps", "Rules", "Review", "Create"];
+const ALL_APPS = ["Accounting database", "Mail", "Shared files", "Client CRM"];
+const OWNER_APPS = { priya: ALL_APPS, lena: ["Shared files", "Client CRM", "Mail"], maya: ["Accounting database", "Mail"], sam: ["Accounting database", "Client CRM"] };
+const FIELDS = { Method: ["GET", "POST", "PATCH", "DELETE"], Time: ["Business hours", "Any time"], "Owner device": ["Disk encrypted", "Any state"], "Data in response": ["Card number", "IBAN", "National ID"] };
+const newWiz = () => ({ step: 0, name: "report-helper", owner: "priya", ttl: "4 hours", apps: ["Accounting database"], writes: "ask", crit: [{ f: "Method", v: ["GET"] }, { f: "Time", v: ["Business hours"] }], done: false });
+function wizEffective(w) { return w.apps.filter((a) => OWNER_APPS[w.owner].includes(a)); }
+function wizRisk(w) {
+  const apps = wizEffective(w), m = (w.crit.find((c) => c.f === "Method") || { v: [] }).v;
+  const priv = apps.some((a) => a === "Accounting database" || a === "Client CRM");
+  const untrusted = apps.includes("Mail");
+  const out = w.writes === "allow" && m.some((x) => x !== "GET") || apps.includes("Mail") && m.includes("POST");
+  return { priv, untrusted, out, all: priv && untrusted && out };
+}
+function wizardView() {
+  const w = S.wiz;
+  const crumbs = `<ol class="crumbs" aria-label="Steps">${STEPS.map((n, i) => `<li ${i === w.step ? 'aria-current="step"' : ""} class="${i < w.step ? "done" : ""}">${esc(n)}</li>`).join("")}</ol>`;
+  let body = "";
+  if (w.step === 0) body = `<div class="grid2"><div><label for="wn">Agent name</label><input id="wn" data-w="name" value="${esc(w.name)}"></div>
+    <div><label for="wo">Owner (a person is always responsible)</label><select id="wo" data-w="owner">${S.users.filter((u) => OWNER_APPS[u.id]).map((u) => `<option value="${u.id}" ${w.owner === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div>
+    <div><label for="wt">Access ends after</label><select id="wt" data-w="ttl">${["1 hour", "4 hours", "1 day", "7 days"].map((t) => `<option ${w.ttl === t ? "selected" : ""}>${t}</option>`).join("")}</select></div></div>
+    <p class="muted">There is no "never" option: access always ends, and the owner renews it.</p>`;
+  if (w.step === 1) body = `<p>Which apps may this agent reach? The agent can never get more than its owner has (the owner cap).</p>
+    ${ALL_APPS.map((a) => { const ok = OWNER_APPS[w.owner].includes(a); return `<label class="check"><input type="checkbox" data-wapp="${esc(a)}" ${w.apps.includes(a) ? "checked" : ""} ${ok ? "" : "disabled"}> ${esc(a)} ${ok ? "" : '<span class="muted">(owner has no access)</span>'}</label>`; }).join("")}`;
+  if (w.step === 2) {
+    const unused = Object.keys(FIELDS).filter((f) => !w.crit.some((c) => c.f === f));
+    body = `<p>Allow the agent when <strong>all</strong> of these match. Values inside one box match if <strong>any</strong> is true.</p>
+    <div class="crit-box">${w.crit.map((c, i) => (i ? '<div class="and-wrap"><span class="and-box">AND</span></div>' : "") + `<div class="crit"><div class="row between"><strong>${esc(c.f)} is</strong><button data-wiz="rmcrit:${i}">Remove</button></div>
+      <div class="row">${c.v.map((v, j) => (j ? '<span class="or">OR</span>' : "") + `<span class="chip">${esc(v)}<button aria-label="Remove ${esc(v)}" data-wiz="rmval:${i}:${j}">&times;</button></span>`).join("")}
+      <select aria-label="Add a value to ${esc(c.f)}" data-wadd="${i}"><option value="">+ value</option>${FIELDS[c.f].filter((x) => !c.v.includes(x)).map((x) => `<option>${esc(x)}</option>`).join("")}</select></div></div>`).join("")}
+      ${unused.length ? `<div class="row" style="margin-top:.6rem"><select id="addcrit" aria-label="Criteria to add">${unused.map((f) => `<option>${esc(f)}</option>`).join("")}</select><button data-wiz="addcrit">+ Add criteria</button></div>` : ""}</div>
+    <p></p><label>When the agent wants to change data</label>${seg("wiz.writes", [["deny", "Deny"], ["ask", "Ask the owner"], ["allow", "Allow"]], w.writes)}`;
+  }
+  if (w.step === 3) {
+    const eff = wizEffective(w), r = wizRisk(w);
+    body = `<div class="reveal"><strong>${esc(w.name)}</strong>, owned by ${esc(user(w.owner).name)}, access ends after ${esc(w.ttl)}.<br>
+      Apps: ${eff.map(esc).join(", ") || "<em>none</em>"} ${eff.length < w.apps.length ? '<span class="pill-warn">(some removed by the owner cap)</span>' : ""}<br>
+      Allowed when ${w.crit.map((c) => `<strong>${esc(c.f)}</strong> is ${c.v.map(esc).join(" or ")}`).join(" <span class=\"and-box\">AND</span> ")}.<br>
+      Changes to data: <strong>${{ deny: "denied", ask: "wait for the owner", allow: "allowed" }[w.writes]}</strong>.</div>
+      <h3>Safety check</h3><ul class="keypoints">
+      <li class="${r.priv ? "pill-warn" : "pill-ok"}">Reads private data: ${r.priv ? "yes" : "no"}</li>
+      <li class="${r.untrusted ? "pill-warn" : "pill-ok"}">Reads untrusted input (mail): ${r.untrusted ? "yes" : "no"}</li>
+      <li class="${r.out ? "pill-warn" : "pill-ok"}">Can send or change data without asking: ${r.out ? "yes" : "no"}</li></ul>
+      ${r.all ? '<p class="pill-bad"><strong>All three at once.</strong> A poisoned email could make this agent send data out. Go back and choose "Ask the owner" or remove Mail.</p>' : '<p class="pill-ok">No dangerous combination.</p>'}`;
+  }
+  if (w.step === 4) body = w.done ? '<p class="pill-ok"><strong>Created.</strong> The agent is in the registry and the audit log has the line.</p>' : `<p>Create <strong>${esc(w.name)}</strong> now? Its identity token is shown once. The agent never receives an app password.</p><button class="primary" data-wiz="create">Create agent</button>`;
+  const nav = `<div class="row between"><button data-wiz="cancel">${w.done ? "Close" : "Cancel"}</button><div class="row">${w.step > 0 && !w.done ? '<button data-wiz="back">Back</button>' : ""}${w.step < 4 ? '<button class="primary" data-wiz="next">Next</button>' : ""}</div></div>`;
+  return `<div class="card"><h2 style="text-transform:uppercase;letter-spacing:.04em;font-size:1rem">Add AI agent ${badge("proposed")}</h2>${crumbs}${body}<p></p>${nav}</div>`;
+}
+
 // ---------- views ----------
 const TABS = [
   ["agents", "AI agents"], ["aiuse", "AI tool use"], ["audit", "Audit log"], ["today", "Today"],
@@ -111,7 +186,9 @@ const V = {};
 V.today = () => {
   const open = S.alerts.filter((a) => a.open);
   const sc = score();
+  const pendingN = S.approvals.filter((a) => a.state === "pending").length;
   return `<h1>Today</h1>
+  <div class="kpis">${kpi("Access decisions", "1,284", "37 blocked", [180, 210, 190, 230, 205, 160, 175])}${kpi("AI agent calls", "812", "14 blocked", ALLOWED)}${kpi("Waiting for approval", String(pendingN), "", [1, 2, 1, 4, 3, 2, pendingN])}${kpi("Devices below baseline", String(S.users.filter((u) => !u.disk).length), "of " + S.users.length, [3, 3, 2, 3, 3, 3, S.users.filter((u) => !u.disk).length])}</div>
   <div class="card grid2">
     <div><div class="muted">Security score (demo formula)</div><div class="score" aria-label="score ${sc} out of 100">${sc}</div><div class="bar" aria-hidden="true"><i style="width:${sc}%"></i></div></div>
     <div><p><strong>${open.length}</strong> thing${open.length === 1 ? "" : "s"} need${open.length === 1 ? "s" : ""} you. Each one says what happened, why it matters and gives one clear action.</p>
@@ -150,9 +227,15 @@ V.contractors = () => `<h1>Contractor access</h1>
 
 V.agents = () => {
   const pend = S.approvals.filter((a) => a.state === "pending");
+  if (S.wiz) return `<h1>AI agents</h1>${wizardView()}`;
+  const series = [{ name: "Allowed", data: ALLOWED, color: "var(--accent)" }, { name: "Blocked", data: BLOCKED, color: "var(--series2)" }].filter((x) => S.chartMode === "both" || x.name.toLowerCase() === S.chartMode);
   return `<h1>AI agents</h1>
-  <p>Agents get their own identity, tied to the person who owns them. They go through the same gatekeeper as people.
-  ${badge("basic")} identities, grants, approvals &middot; ${badge("proposed")} everything marked below.</p>
+  <div class="kpis">${kpi("Agent calls (24 h)", "812", "+6%", ALLOWED)}${kpi("Blocked", "14", "1.7%", BLOCKED)}${kpi("Writes held for approval", String(pend.length), "", [2, 1, 3, 2, 4, 3, pend.length])}${kpi("Values masked", "9", "this week", [0, 1, 0, 2, 1, 3, 2])}</div>
+  <div class="card"><div class="row between"><h3>Agent activity, 7 days ${badge("proposed")}</h3>${seg("chartMode", [["both", "Both"], ["allowed", "Allowed"], ["blocked", "Blocked"]], S.chartMode)}</div>${lineChart(series)}</div>
+  <div class="card"><div class="row between"><h3>Default for every agent: changes to data</h3>${seg("wmode", [["deny", "Read only"], ["ask", "Ask the owner"], ["allow", "Allow"]], S.wmode)}</div>
+    <p class="muted">${{ deny: "Safest. Agents can read what you allow and nothing else (the read-only pack, AGS-002).", ask: "Reads are free. Every write waits for a person (built: just-in-time approval).", allow: "Not recommended. A tricked agent can change or delete data without anyone seeing it first." }[S.wmode]}</p></div>
+  <div class="row between"><p>Agents get their own identity, tied to the person who owns them. They go through the same gatekeeper as people.
+  ${badge("basic")} identities, grants, approvals &middot; ${badge("proposed")} everything marked below.</p><button class="primary" data-wiz="start">Add agent</button></div>
 
   <h2>Registry ${badge("proposed")}</h2>
   <div class="card table-wrap"><table><thead><tr><th>Agent</th><th>Owner</th><th>Apps</th><th>Last used</th><th>Access ends</th><th></th></tr></thead><tbody>
@@ -187,9 +270,9 @@ V.agents = () => {
 V.aiuse = () => `<h1>AI tool use</h1>
   <p class="muted">Which AI tools staff use, and what they paste. ${badge("basic")} paste scanning (cards, IBAN, SSN, keys) &middot; ${badge("proposed")} per-tool setting.</p>
   <div class="card table-wrap"><table><thead><tr><th>Tool</th><th>People</th><th>Last 7 days</th><th>Setting</th></tr></thead><tbody>
-  <tr><td>Approved assistant (company plan)</td><td>6</td><td>312 prompts</td><td><select aria-label="setting"><option selected>Allow</option><option>Warn</option><option>Block</option></select></td></tr>
-  <tr><td>Free chatbot (personal account)</td><td>4</td><td>57 prompts, 2 blocked</td><td><select aria-label="setting"><option>Allow</option><option selected>Warn</option><option>Block</option></select></td></tr>
-  <tr><td>Browser translation add-on</td><td>2</td><td>9 uploads</td><td><select aria-label="setting"><option>Allow</option><option>Warn</option><option selected>Block</option></select></td></tr>
+  <tr><td>Approved assistant (company plan)</td><td>6</td><td>312 prompts</td><td>${seg("ai.assistant", [["Allow", "Allow"], ["Warn", "Warn"], ["Block", "Block"]], S.ai.assistant)}</td></tr>
+  <tr><td>Free chatbot (personal account)</td><td>4</td><td>57 prompts, 2 blocked</td><td>${seg("ai.free", [["Allow", "Allow"], ["Warn", "Warn"], ["Block", "Block"]], S.ai.free)}</td></tr>
+  <tr><td>Browser translation add-on</td><td>2</td><td>9 uploads</td><td>${seg("ai.transl", [["Allow", "Allow"], ["Warn", "Warn"], ["Block", "Block"]], S.ai.transl)}</td></tr>
   </tbody></table></div>
   <h2>Try the paste scanner</h2>
   <div class="card"><label for="dlp">Type or paste text (runs only in this page)</label>
@@ -272,6 +355,23 @@ async function act(k, alertId) {
 function wire() {
   const v = document.getElementById("view");
   v.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => act(b.dataset.act, b.dataset.alert)));
+
+  v.querySelectorAll("[data-seg]").forEach((b) => b.addEventListener("click", () => { const [k, val] = b.dataset.seg.split(/:(.*)/s); setPath(k, val); render(); }));
+  v.querySelectorAll("[data-w]").forEach((e) => e.addEventListener("input", () => { S.wiz[e.dataset.w] = e.value; if (e.dataset.w === "owner") S.wiz.apps = S.wiz.apps.filter((a) => OWNER_APPS[e.value].includes(a)); }));
+  v.querySelectorAll("[data-wapp]").forEach((e) => e.addEventListener("change", () => { const a = e.dataset.wapp, l = S.wiz.apps; if (e.checked && !l.includes(a)) l.push(a); if (!e.checked) S.wiz.apps = l.filter((x) => x !== a); }));
+  v.querySelectorAll("[data-wadd]").forEach((e) => e.addEventListener("change", () => { if (e.value) { S.wiz.crit[+e.dataset.wadd].v.push(e.value); render(); } }));
+  v.querySelectorAll("[data-wiz]").forEach((b) => b.addEventListener("click", async () => {
+    const [k, a, c] = b.dataset.wiz.split(":"), w = S.wiz;
+    if (k === "start") S.wiz = newWiz();
+    else if (k === "cancel") S.wiz = null;
+    else if (k === "next") { if (w.step === 0 && !w.name.trim()) { toast("Give the agent a name."); return; } if (w.step === 1 && !wizEffective(w).length) { toast("Pick at least one app the owner can reach."); return; } w.step++; }
+    else if (k === "back") w.step--;
+    else if (k === "rmcrit") w.crit.splice(+a, 1);
+    else if (k === "rmval") { w.crit[+a].v.splice(+c, 1); if (!w.crit[+a].v.length) w.crit.splice(+a, 1); }
+    else if (k === "addcrit") { const f = document.getElementById("addcrit").value; w.crit.push({ f, v: [FIELDS[f][0]] }); }
+    else if (k === "create") { const eff = wizEffective(w); S.agents.push({ name: w.name.trim(), owner: user(w.owner).name.split(" ")[0], apps: eff.join(", "), last: "never", expires: "in " + w.ttl, state: "active" }); await logEvent("Created agent " + w.name.trim() + " (owner " + user(w.owner).name + ", ends in " + w.ttl + ", writes: " + w.writes + ")"); w.done = true; toast("Agent created."); }
+    render();
+  }));
   const on = (id, fn) => { const e = document.getElementById(id); if (e) e.addEventListener("click", fn); };
   const out = (id, html) => { document.getElementById(id).innerHTML = html; };
 
