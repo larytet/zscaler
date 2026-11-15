@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -107,6 +108,8 @@ type world struct {
 	ifMatch string
 	fakeBin string
 	site    *webSite
+	cpArgs  []string
+	cpProc  *exec.Cmd
 	ens     []*enInst
 	enExtra []string // extra enforcement node arguments, set before the nodes start
 	connImg string
@@ -135,6 +138,11 @@ func (w *world) start(name string, env []string, args ...string) *exec.Cmd {
 
 func (w *world) api(method, path string, body any) (int, []byte) {
 	w.t.Helper()
+	return w.apiWithIfMatch(method, path, body)
+}
+
+func (w *world) apiWithIfMatch(method, path string, body any) (int, []byte) {
+	w.t.Helper()
 	var rd io.Reader
 	if body != nil {
 		b, _ := json.Marshal(body)
@@ -142,7 +150,7 @@ func (w *world) api(method, path string, body any) (int, []byte) {
 	}
 	req, _ := http.NewRequest(method, w.adminU+path, rd)
 	req.Header.Set("Authorization", "Bearer "+w.token)
-	if method == "PUT" && strings.HasPrefix(path, "/v1/policies/") {
+	if method == "PUT" && strings.HasPrefix(path, "/v1/policies/") || w.ifMatch != "" && method == "POST" && strings.HasSuffix(path, "/rollback") {
 		req.Header.Set("If-Match", w.ifMatch)
 	}
 	resp, err := w.admin.Do(req)
@@ -271,10 +279,11 @@ func newWorldN(t *testing.T, n int, pre ...func(*world)) *world {
 	w.ports["enrol"] = freePort(t, w.hostIP)
 	w.ports["admin"] = freePort(t, "127.0.0.1")
 	cpData := filepath.Join(dir, "cp")
-	w.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=" + bootTok}, "--data", cpData,
+	w.cpArgs = []string{"--data", cpData,
 		"--admin-listen", fmt.Sprintf("127.0.0.1:%d", w.ports["admin"]),
 		"--enrol-listen", fmt.Sprintf("%s:%d", w.hostIP, w.ports["enrol"]),
-		"--names", "localhost,127.0.0.1,"+w.hostIP)
+		"--names", "localhost,127.0.0.1," + w.hostIP}
+	w.cpProc = w.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=" + bootTok}, w.cpArgs...)
 	waitAddr(t, fmt.Sprintf("127.0.0.1:%d", w.ports["admin"]))
 	waitAddr(t, fmt.Sprintf("%s:%d", w.hostIP, w.ports["enrol"]))
 	w.caPath = filepath.Join(cpData, "ca.pem")
@@ -462,11 +471,18 @@ func indent(s, pre string) string {
 type agentInst struct {
 	dir   string
 	ports map[string]int
+	cmd   *exec.Cmd
 }
 
 func (a *agentInst) socks() string { return fmt.Sprintf("127.0.0.1:%d", a.ports["socks"]) }
 
 func (w *world) newAgent(name string, apps map[string]string) *agentInst {
+	return w.newAgentTok(name, apps, "")
+}
+
+// newAgentTok is newAgent; with a service token the agent enrols as a service identity (an AI agent)
+// instead of through the browser sign-in.
+func (w *world) newAgentTok(name string, apps map[string]string, serviceToken string) *agentInst {
 	t := w.t
 	a := &agentInst{dir: filepath.Join(w.dir, name), ports: map[string]int{}}
 	for _, n := range []string{"socks", "http", "status"} {
@@ -483,7 +499,12 @@ func (w *world) newAgent(name string, apps map[string]string) *agentInst {
 	os.MkdirAll(a.dir, 0o700)
 	os.WriteFile(filepath.Join(a.dir, "config.json"), b, 0o600)
 	env := []string{"PATH=" + w.fakeBin + string(os.PathListSeparator) + os.Getenv("PATH")}
-	cmd := exec.Command(filepath.Join(w.bin, "ztx-agent"), "--dir", a.dir, "--no-browser", "enrol")
+	sub := "enrol"
+	if serviceToken != "" {
+		sub = "enrol-service"
+		env = append(env, "ZTX_AGENT_TOKEN="+serviceToken)
+	}
+	cmd := exec.Command(filepath.Join(w.bin, "ztx-agent"), "--dir", a.dir, "--no-browser", sub)
 	cmd.Env = append(os.Environ(), env...)
 	out, _ := cmd.StdoutPipe()
 	var errb bytes.Buffer
@@ -502,7 +523,7 @@ func (w *world) newAgent(name string, apps map[string]string) *agentInst {
 	if err := cmd.Wait(); err != nil {
 		t.Fatalf("enrol %s: %v\n%s", name, err, errb.String())
 	}
-	w.start("ztx-agent", env, "--dir", a.dir, "run")
+	a.cmd = w.start("ztx-agent", []string{env[0]}, "--dir", a.dir, "run")
 	waitAddr(t, a.socks())
 	return a
 }
@@ -634,4 +655,22 @@ func (w *world) decisions() []map[string]any {
 		}
 	}
 	return out
+}
+
+// restartCP starts the control plane again with the same data directory and ports.
+func (w *world) restartCP() {
+	w.cpProc = w.start("ztx-cp", []string{"ZTX_BOOTSTRAP_TOKEN=" + bootTok}, w.cpArgs...)
+	waitAddr(w.t, fmt.Sprintf("127.0.0.1:%d", w.ports["admin"]))
+}
+
+// deviceID reads the device id out of an agent's certificate.
+func deviceID(t *testing.T, a *agentInst) string {
+	t.Helper()
+	b := mustRead(t, filepath.Join(a.dir, "device.crt"))
+	blk, _ := pem.Decode([]byte(b))
+	leaf, err := x509.ParseCertificate(blk.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(leaf.Subject.CommonName, "/")[2]
 }
