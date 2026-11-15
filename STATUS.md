@@ -1,6 +1,6 @@
 # Status
 
-**Last updated:** 2026-11-15, after I5a-2 (control-plane API).
+**Last updated:** 2026-11-15, after I5b-1 (OIDC ID-token verifier).
 **Rule:** this file is updated, committed and pushed at the end of every subtask.
 
 ## Goal
@@ -31,7 +31,8 @@ Implementation language: **Go** (chosen by the user).
 | I3 | Enforcement node broker, connector, agent client | done | PA, SEC, AG (component level) |
 | I4 | Web proxy, classifier, SSRF guard, warn page | done | WEB |
 | I5a | Store and control-plane admin API | done | STO, CP, VAL-012 |
-| I5b | OIDC verification, login and enrolment endpoints | **next** | IDP, AG-001..004, AG-014 |
+| I5b-1 | OIDC ID-token verifier and in-process test IdP | done | IDP |
+| I5b-2 | Device and connector enrolment endpoints (cert issuance) | **next** | AG-001..004, AG-014, PKI |
 | I5c | Agent (local proxies, posture probes, renewal) | pending | AG |
 | I5d | `cmd/` binaries for cp, en, connector, agent | pending | |
 | I6 | End-to-end scenarios, alerts, run instructions | pending | SCN, ALR |
