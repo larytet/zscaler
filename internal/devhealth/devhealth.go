@@ -6,6 +6,7 @@ package devhealth
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,6 +19,9 @@ type Snapshot struct {
 	CPULoadPct  *int `json:"cpu_load_pct,omitempty"`  // 1-minute load average as a percentage of core count
 	MemUsedPct  *int `json:"mem_used_pct,omitempty"`  // memory in use, not counting reclaimable cache
 	DiskUsedPct *int `json:"disk_used_pct,omitempty"` // the volume holding the home directory
+	// Measured by the agent from its own traffic (DEX-001), in milliseconds.
+	ENConnectMs *int           `json:"en_connect_ms,omitempty"` // time to connect to the enforcement node
+	AppOpenMs   map[string]int `json:"app_open_ms,omitempty"`   // median time to open a session, per app
 }
 
 func pct(n int) *int {
@@ -129,7 +133,8 @@ type Device struct {
 	Reported time.Time `json:"reported"`
 	Stale    bool      `json:"stale"` // no report for more than 15 minutes
 	Snapshot
-	Findings []Finding `json:"findings"`
+	Findings   []Finding  `json:"findings"`
+	Experience Experience `json:"experience"`
 }
 
 // List returns a tenant's devices with findings. now is injectable for tests.
@@ -143,6 +148,7 @@ func (s *Store) List(tenant string, now time.Time) []Device {
 		}
 		d := Device{Device: e.Device, User: e.User, Reported: e.At, Snapshot: e.Snapshot, Stale: now.Sub(e.At) > 15*time.Minute, Findings: []Finding{}}
 		d.Findings = Findings(e)
+		d.Experience = Score(e)
 		out = append(out, d)
 	}
 	sortDevices(out)
@@ -170,4 +176,73 @@ func sortDevices(d []Device) {
 			d[j], d[j-1] = d[j-1], d[j]
 		}
 	}
+}
+
+// Experience is a 0 to 100 score for how usable this device's access feels, and the part of
+// the path most to blame when it is low (DEX-001, and the cause split of DEX-002; there are
+// no hop-by-hop probes). Fixed thresholds, no model.
+type Experience struct {
+	Score   int    `json:"score"`
+	Cause   string `json:"cause"`   // "none", "device", "network" or "app"
+	Explain string `json:"explain"` // one plain sentence
+	Known   bool   `json:"known"`   // false when the agent has not reported enough to judge
+}
+
+// Score applies the thresholds. Missing measurements are not treated as bad.
+func Score(e Entry) Experience {
+	var dev, net, app int
+	var appName string
+	if v := e.CPULoadPct; v != nil && *v >= 150 {
+		dev += 30
+	}
+	if v := e.MemUsedPct; v != nil && *v >= 90 {
+		dev += 20
+	}
+	if v := e.DiskUsedPct; v != nil && *v >= 95 {
+		dev += 10
+	}
+	switch v := e.ENConnectMs; {
+	case v == nil:
+	case *v > 300:
+		net = 40
+	case *v > 150:
+		net = 20
+	case *v > 80:
+		net = 10
+	}
+	names := make([]string, 0, len(e.AppOpenMs))
+	for n := range e.AppOpenMs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		p := 0
+		switch ms := e.AppOpenMs[n]; {
+		case ms > 2000:
+			p = 25
+		case ms > 800:
+			p = 10
+		}
+		if p > app {
+			app, appName = p, n
+		}
+	}
+	known := e.CPULoadPct != nil || e.MemUsedPct != nil || e.ENConnectMs != nil || len(e.AppOpenMs) > 0
+	x := Experience{Score: 100 - dev - net - app, Cause: "none", Known: known}
+	if x.Score < 0 {
+		x.Score = 0
+	}
+	switch {
+	case !known:
+		x.Explain = "No measurements from this device yet."
+	case dev == 0 && net == 0 && app == 0:
+		x.Explain = "Nothing slow was measured."
+	case dev >= net && dev >= app:
+		x.Cause, x.Explain = "device", fmt.Sprintf("%s's device is the likely cause: it is overloaded or short of memory or disk.", e.User)
+	case net >= app:
+		x.Cause, x.Explain = "network", fmt.Sprintf("%s's connection to the enforcement node is slow (%d ms): look at their Wi-Fi or internet.", e.User, *e.ENConnectMs)
+	default:
+		x.Cause, x.Explain = "app", fmt.Sprintf("Opening %s takes %d ms while the connection and device look fine: the app or its connector is the likely cause.", appName, e.AppOpenMs[appName])
+	}
+	return x
 }

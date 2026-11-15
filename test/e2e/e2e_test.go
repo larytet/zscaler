@@ -1781,3 +1781,45 @@ func TestScn016DeveloperToolsThroughInspection(t *testing.T) {
 		}
 	}
 }
+
+// DEX-001: the agent measures how long connecting and opening apps take, from its own traffic.
+func TestDex001ExperienceFromRealMeasurements(t *testing.T) {
+	if _, err := os.Stat("/proc/loadavg"); err != nil {
+		t.Skip("health collection is implemented for Linux only")
+	}
+	s := newStack(t)
+	a := s.newAgent(t, "laptop")
+	s.runInst(a)
+	eventually(t, "access", 20*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	type dev struct {
+		ConnectMs *int           `json:"en_connect_ms"`
+		AppOpen   map[string]int `json:"app_open_ms"`
+		Exp       struct {
+			Score int
+			Cause string
+			Known bool
+		} `json:"experience"`
+	}
+	var got dev
+	eventually(t, "connect and app-open measurements", 20*time.Second, func() bool {
+		s.reachable(a.socks(), "erp.ztx") // real traffic is what gets measured
+		_, b := s.api("GET", "/v1/health", nil, s.token)
+		var list []dev
+		json.Unmarshal(b, &list)
+		if len(list) == 1 && list[0].ConnectMs != nil && list[0].AppOpen["erp"] > 0 {
+			got = list[0]
+			return true
+		}
+		return false
+	})
+	if *got.ConnectMs < 0 || *got.ConnectMs > 5000 || got.AppOpen["erp"] > 10000 {
+		t.Fatalf("implausible measurements on loopback: %+v", got)
+	}
+	if !got.Exp.Known || got.Exp.Score < 0 || got.Exp.Score > 100 {
+		t.Fatalf("%+v", got.Exp)
+	}
+	// on a loopback test rig nothing should be blamed on the network or the app
+	if got.Exp.Cause == "network" || got.Exp.Cause == "app" {
+		t.Fatalf("a loopback connection was blamed for slowness: %+v", got)
+	}
+}

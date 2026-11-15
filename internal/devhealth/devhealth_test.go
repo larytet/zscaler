@@ -71,3 +71,59 @@ func TestListScopedByTenantAndStale(t *testing.T) {
 		t.Fatal("the latest report must replace the older one")
 	}
 }
+
+func TestExperienceScoreAndCause(t *testing.T) { // DEX-001, DEX-002 (cause split only)
+	ms := func(n int) *int { return &n }
+	healthy := Entry{User: "alice", Snapshot: Snapshot{CPULoadPct: ms(20), MemUsedPct: ms(40), ENConnectMs: ms(30), AppOpenMs: map[string]int{"erp": 120}}}
+	if x := Score(healthy); x.Score != 100 || x.Cause != "none" || !x.Known {
+		t.Fatalf("%+v", x)
+	}
+	slowNet := healthy
+	slowNet.ENConnectMs = ms(400)
+	if x := Score(slowNet); x.Cause != "network" || x.Score != 60 || !strings.Contains(x.Explain, "400 ms") {
+		t.Fatalf("%+v", x)
+	}
+	slowApp := healthy
+	slowApp.AppOpenMs = map[string]int{"erp": 3000, "wiki": 100}
+	if x := Score(slowApp); x.Cause != "app" || !strings.Contains(x.Explain, "erp") || !strings.Contains(x.Explain, "3000") {
+		t.Fatalf("a slow app with a healthy device and connection is the app's problem: %+v", x)
+	}
+	slowDev := healthy
+	slowDev.CPULoadPct, slowDev.MemUsedPct = ms(200), ms(95)
+	if x := Score(slowDev); x.Cause != "device" || x.Score != 50 {
+		t.Fatalf("%+v", x)
+	}
+	// device trouble outranks an equal-sized network penalty only when it is larger; a slow
+	// network with an idle device must not be blamed on the device
+	if x := Score(Entry{User: "a", Snapshot: Snapshot{CPULoadPct: ms(10), ENConnectMs: ms(500)}}); x.Cause != "network" {
+		t.Fatalf("%+v", x)
+	}
+}
+
+func TestExperienceNeverInventsBadNews(t *testing.T) {
+	x := Score(Entry{User: "alice"})
+	if x.Known || x.Score != 100 || x.Cause != "none" || !strings.Contains(x.Explain, "No measurements") {
+		t.Fatalf("no data must not look like a problem or like a clean bill of health: %+v", x)
+	}
+	// only some measurements present: judged on those
+	ms := 500
+	if x := Score(Entry{User: "a", Snapshot: Snapshot{ENConnectMs: &ms}}); !x.Known || x.Cause != "network" {
+		t.Fatalf("%+v", x)
+	}
+	// scores stay within bounds however bad things get
+	bad, one := 999, 5000
+	worst := Score(Entry{User: "a", Snapshot: Snapshot{CPULoadPct: &bad, MemUsedPct: &bad, DiskUsedPct: &bad, ENConnectMs: &one, AppOpenMs: map[string]int{"x": one}}})
+	if worst.Score < 0 || worst.Score > 100 {
+		t.Fatalf("%+v", worst)
+	}
+}
+
+func TestListCarriesTheExperience(t *testing.T) {
+	s := New()
+	ms := 400
+	s.Put(Entry{Tenant: "a", User: "alice", Device: "d1", At: time.Now(), Snapshot: Snapshot{ENConnectMs: &ms}})
+	got := s.List("a", time.Now())
+	if len(got) != 1 || got[0].Experience.Cause != "network" {
+		t.Fatalf("%+v", got)
+	}
+}

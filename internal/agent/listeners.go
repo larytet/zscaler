@@ -31,7 +31,12 @@ func (a *Agent) opener() Opener {
 		if err != nil {
 			return nil, err
 		}
-		return c.OpenApp(app, "", port)
+		started := time.Now()
+		st, err := c.OpenApp(app, "", port)
+		if err == nil {
+			a.noteAppOpen(app, time.Since(started)) // only successful opens: a refusal says nothing about speed
+		}
+		return st, err
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -54,15 +55,17 @@ type Agent struct {
 	Dir string
 	Cfg Config
 
-	mu       sync.Mutex
-	key      *ecdsa.PrivateKey
-	cert     tls.Certificate
-	leaf     *x509.Certificate
-	caPool   *x509.CertPool
-	conn     *broker.Conn
-	lastPos  *posture.Report
-	deviceID string
-	minAgent string
+	mu        sync.Mutex
+	key       *ecdsa.PrivateKey
+	cert      tls.Certificate
+	leaf      *x509.Certificate
+	caPool    *x509.CertPool
+	conn      *broker.Conn
+	lastPos   *posture.Report
+	deviceID  string
+	minAgent  string
+	enConnect time.Duration
+	appOpens  map[string][]time.Duration
 }
 
 var errNotEnrolled = errors.New("agent: not enrolled")
@@ -399,9 +402,11 @@ func (a *Agent) Connect() (*broker.Conn, error) {
 	}
 	var last error
 	for _, addr := range a.Cfg.ENAddrs {
+		started := time.Now()
 		c, err := broker.Dial(addr, cfg)
 		if err == nil {
 			a.mu.Lock()
+			a.enConnect = time.Since(started)
 			a.conn = c
 			a.mu.Unlock()
 			return c, nil
@@ -466,6 +471,7 @@ func (a *Agent) SendPosture(c *broker.Conn) error {
 	a.mu.Unlock()
 	rep := Collect(DefaultProbes())
 	h := devhealth.Collect()
+	a.addMeasurements(&h)
 	rep.Health = &h
 	rep.DeviceID, rep.TS, rep.Nonce, rep.AgentVersion = id, time.Now().UTC(), posture.NewNonce(), Version
 	tok, err := posture.Sign(k, rep)
@@ -512,6 +518,39 @@ func (a *Agent) PostureLoop(ctx context.Context, every time.Duration) {
 			if c, err := a.liveConn(); err == nil {
 				a.SendPosture(c)
 			}
+		}
+	}
+}
+
+// noteAppOpen records how long opening a session took, keeping the last nine per app.
+func (a *Agent) noteAppOpen(app string, d time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.appOpens == nil {
+		a.appOpens = map[string][]time.Duration{}
+	}
+	l := append(a.appOpens[app], d)
+	if len(l) > 9 {
+		l = l[len(l)-9:]
+	}
+	a.appOpens[app] = l
+}
+
+// addMeasurements fills in what the agent measured from its own traffic. Nothing is measured
+// by sending extra traffic: an idle agent reports nothing rather than a guess.
+func (a *Agent) addMeasurements(h *devhealth.Snapshot) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.enConnect > 0 {
+		ms := int(a.enConnect.Milliseconds())
+		h.ENConnectMs = &ms
+	}
+	if len(a.appOpens) > 0 {
+		h.AppOpenMs = map[string]int{}
+		for app, l := range a.appOpens {
+			s := append([]time.Duration(nil), l...)
+			sort.Slice(s, func(i, j int) bool { return s[i] < s[j] })
+			h.AppOpenMs[app] = int(s[len(s)/2].Milliseconds())
 		}
 	}
 }

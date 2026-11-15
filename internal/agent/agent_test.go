@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/larytet/zscaler/internal/devhealth"
 	"io"
 	"net"
 	"net/http"
@@ -452,5 +453,29 @@ func TestMinimumAgentVersion(t *testing.T) { // AG-011
 	}
 	if b.tooOld() {
 		t.Fatal("still too old after the minimum was lowered")
+	}
+}
+
+func TestMeasurementsAreMediansOfRealOpens(t *testing.T) { // DEX-001
+	a := &Agent{}
+	var h devhealth.Snapshot
+	a.addMeasurements(&h)
+	if h.ENConnectMs != nil || h.AppOpenMs != nil {
+		t.Fatal("an idle agent must report nothing, not a guess")
+	}
+	for _, ms := range []int{900, 100, 120, 110, 5000} { // one outlier
+		a.noteAppOpen("erp", time.Duration(ms)*time.Millisecond)
+	}
+	a.enConnect = 42 * time.Millisecond
+	a.addMeasurements(&h)
+	if h.AppOpenMs["erp"] != 120 || h.ENConnectMs == nil || *h.ENConnectMs != 42 {
+		t.Fatalf("%+v %v", h.AppOpenMs, h.ENConnectMs)
+	}
+	for i := 0; i < 30; i++ { // only the last nine count
+		a.noteAppOpen("erp", 10*time.Millisecond)
+	}
+	a.addMeasurements(&h)
+	if h.AppOpenMs["erp"] != 10 {
+		t.Fatalf("old samples were not dropped: %d", h.AppOpenMs["erp"])
 	}
 }

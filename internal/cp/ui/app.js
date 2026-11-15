@@ -61,7 +61,7 @@ const tabs = {
     const [users, devices, risks, health] = await Promise.all([api('GET', '/v1/users'), api('GET', '/v1/devices'), api('GET', '/v1/risk'), api('GET', '/v1/health')]);
     const healthOf = {}; health.forEach((h) => { healthOf[h.device] = h; });
     const pctText = (v) => (v === undefined || v === null ? '?' : v + '%');
-    const healthText = (id) => { const h = healthOf[id]; if (!h) return 'no report'; const t = 'CPU ' + pctText(h.cpu_load_pct) + ', memory ' + pctText(h.mem_used_pct) + ', disk ' + pctText(h.disk_used_pct) + (h.stale ? ' (old report)' : ''); return h.findings.length ? t + ' - ' + h.findings.map((f) => f.message).join('; ') : t; };
+    const healthText = (id) => { const h = healthOf[id]; if (!h) return 'no report'; const t = 'CPU ' + pctText(h.cpu_load_pct) + ', memory ' + pctText(h.mem_used_pct) + ', disk ' + pctText(h.disk_used_pct) + (h.stale ? ' (old report)' : ''); const x = h.experience && h.experience.known ? ' | Experience ' + h.experience.score + '/100: ' + h.experience.explain : ''; return h.findings.length ? t + x + ' - ' + h.findings.map((f) => f.message).join('; ') : t + x; };
     const riskOf = {}; risks.forEach((r) => { riskOf[r.user] = r; });
     const reload = () => tabs.People().catch(failure);
     const isRestricted = (x) => (x.Groups || []).indexOf('restricted') >= 0;
