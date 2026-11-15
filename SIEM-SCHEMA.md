@@ -53,6 +53,7 @@ Every event is one JSON object with these fields, and then the fields of its typ
 | `app`, `target` | The app segment, or the host and port reached |
 | `action` | `allow`, `deny`, `warn`, `pass`, `fail`, `info` |
 | `rule`, `reason` | The rule that decided and why (a plain sentence or a code such as `default`, `posture`, `approval-required`) |
+| `ref` | On refusals and warnings: the reference the user saw on the page, so a person's report can be matched to the record |
 | `policy_version` | Version of the policy that decided |
 | `en` | Name of the enforcement node |
 | `inspected`, `workspace` | Present when the request was decrypted, or came from the workspace browser |

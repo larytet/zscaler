@@ -113,3 +113,29 @@ func TestDecisionHistoryEndpoint(t *testing.T) { // AGT-026 (ADM-006, FW-010, AD
 		t.Fatalf("tenant isolation: %d %s", c2, b)
 	}
 }
+
+func TestDecisionsCanBeFoundByTheReferenceOnABlockPage(t *testing.T) { // AGT-028 (ZIA-014)
+	e := newEnrolEnv(t)
+	e.api.Decisions = decisions.New()
+	arch, _ := decisions.OpenArchive(t.TempDir()+"/d", decisions.DefaultRetention)
+	defer arch.Close()
+	e.api.Decisions.SetArchive(arch)
+	now := time.Now().UTC()
+	recs := []broker.Record{
+		{Tenant: "a", Kind: "web", Action: "deny", Event: "open", User: "u1", Target: "x.example:443", Rule: "block-x", Ref: "0123456789ab", TS: now},
+		{Tenant: "a", Kind: "web", Action: "deny", Event: "open", User: "u2", Target: "y.example:443", Ref: "ba9876543210", TS: now},
+		{Tenant: "b", Kind: "web", Action: "deny", Event: "open", User: "x", Target: "z.example:443", Ref: "0123456789ab", TS: now}, // the same reference in another tenant
+	}
+	if c, _ := e.post("/ingest/records", recs, enCert(t, e)); c != 200 {
+		t.Fatalf("ingest %d", c)
+	}
+	for _, path := range []string{"/v1/decisions?ref=0123456789ab", "/v1/decisions/history?ref=0123456789ab"} {
+		c, b, _ := e.call("GET", path, e.adminA, nil)
+		if c != 200 || !strings.Contains(string(b), `"block-x"`) || strings.Contains(string(b), "ba9876543210") || strings.Contains(string(b), `"z.example`) {
+			t.Fatalf("%s: %d %s", path, c, b)
+		}
+	}
+	if _, b, _ := e.call("GET", "/v1/decisions/history?ref=nonesuch", e.adminA, nil); strings.Contains(string(b), "block-x") {
+		t.Fatalf("an unknown reference found a record: %s", b)
+	}
+}

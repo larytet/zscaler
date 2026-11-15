@@ -206,17 +206,17 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch d.Action {
 	case policy.Deny:
-		rec.Action = "deny"
+		rec.Action, rec.Ref = "deny", ref
 		p.Log(rec)
-		blockPage(w, host, cats, ref)
+		blockPage(w, host, cats, ref, reasonText(d.Reason, cats))
 		return
 	case policy.Warn:
 		if connect {
 			rec.Reason = "warn-not-displayable"
 		} else if !p.warnPassed(r, id, host) {
-			rec.Action = "warn"
+			rec.Action, rec.Ref = "warn", ref
 			p.Log(rec)
-			p.warnPage(w, r, id, host, cats, ref)
+			p.warnPage(w, r, id, host, cats, ref, warnReason(d.Reason, cats))
 			return
 		}
 	}
@@ -259,13 +259,68 @@ func splitHostPort(r *http.Request) (string, int) {
 	return policy.NormalizeHost(host), port
 }
 
-func blockPage(w http.ResponseWriter, host string, cats []string, ref string) {
+// reasonTexts turns the reason codes the proxy and the policy engine give into a sentence a person can
+// act on (ZIA-014). A reason that is not a code is the text an admin wrote on the rule, and is shown as it is.
+var reasonTexts = map[string]string{
+	"default":             "Your organisation's web policy has no rule that allows this site.",
+	"no-policy":           "Your organisation has not set up a web policy yet, so nothing is allowed.",
+	"user-disabled":       "Your account has been disabled.",
+	"device-revoked":      "This device has been removed from your organisation's access.",
+	"evaluation-error":    "The policy could not be checked, so access was refused to be safe.",
+	"inspection-required": "This site would need its traffic to be checked, and that is not possible for it, so it is refused.",
+	"secret-unavailable":  "A credential that this service needs from your organisation is not available.",
+	"host-mismatch":       "The request named a different site from the one the connection was made to.",
+	"workspace-required":  "This site can only be opened in your organisation's protected workspace browser.",
+	"file-type-download":  "Your organisation does not allow this kind of file to be downloaded.",
+	"dlp-response":        "What the site sent back appears to contain sensitive data.",
+	"approval-required":   "This needs an approval from your administrator first.",
+}
+
+// reasonText returns the sentence for a decision. code is the decision's reason (a code or an admin's
+// text); cats are the site's categories.
+func reasonText(code string, cats []string) string {
+	if t, ok := reasonTexts[code]; ok {
+		return t
+	}
+	if code != "" {
+		return code
+	}
+	if len(cats) > 0 {
+		return "The site is in a category your organisation blocks (" + strings.Join(cats, ", ") + ")."
+	}
+	return "A rule in your organisation's web policy does not allow this."
+}
+
+// pageTail is what every block page ends with: the reason and the reference to quote.
+func pageTail(why, ref string) string {
+	return fmt.Sprintf(`<p><b>Why:</b> %s</p>
+<p>If you need access, contact your IT administrator and quote reference <b>%s</b>. They can find it in the decision log.</p>`,
+		html.EscapeString(why), html.EscapeString(ref))
+}
+
+func blockPage(w http.ResponseWriter, host string, cats []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>This site is blocked</h1>
-<p>%s was blocked by your organisation's security policy (category: %s).</p>
-<p>If you need access, contact your IT administrator and quote reference <b>%s</b>.</p>`,
-		html.EscapeString(host), html.EscapeString(strings.Join(cats, ", ")), ref)
+<p>%s was blocked by your organisation's security policy%s.</p>
+%s`, html.EscapeString(host), categoryNote(cats), pageTail(why, ref))
+}
+
+// categoryNote says which categories the site is in, when it has any: users and admins both want to see it.
+func categoryNote(cats []string) string {
+	if len(cats) == 0 {
+		return ""
+	}
+	return " (category: " + html.EscapeString(strings.Join(cats, ", ")) + ")"
+}
+
+// errorPage answers a request the proxy cannot serve for a reason of its own (not a policy block),
+// with the reason and a reference in the log, instead of a bare status line.
+func errorPage(w http.ResponseWriter, status int, title, why, ref string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.WriteHeader(status)
+	fmt.Fprintf(w, `<!doctype html><title>%s</title><h1>%s</h1>
+%s`, html.EscapeString(title), html.EscapeString(title), pageTail(why, ref))
 }
 
 const warnTTL = 5 * time.Minute
@@ -306,7 +361,19 @@ func (p *Proxy) warnPassed(r *http.Request, id pki.Identity, host string) bool {
 	return true
 }
 
-func (p *Proxy) warnPage(w http.ResponseWriter, r *http.Request, id pki.Identity, host string, cats []string, ref string) {
+// warnReason is the sentence on a warning page: the admin's text on the rule if there is one, else the
+// category, else a plain statement.
+func warnReason(code string, cats []string) string {
+	switch {
+	case code != "" && reasonTexts[code] == "":
+		return code
+	case len(cats) > 0:
+		return "The site is in a category your organisation flags (" + strings.Join(cats, ", ") + ")."
+	}
+	return "A rule in your organisation's web policy asks for care with this site."
+}
+
+func (p *Proxy) warnPage(w http.ResponseWriter, r *http.Request, id pki.Identity, host string, cats []string, ref, why string) {
 	u := *r.URL
 	if !u.IsAbs() {
 		u.Scheme, u.Host = "http", r.Host
@@ -320,9 +387,11 @@ func (p *Proxy) warnPage(w http.ResponseWriter, r *http.Request, id pki.Identity
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `<!doctype html><title>Warning</title><h1>Proceed with care</h1>
-<p>%s is in a category your organisation flags (%s). Your visit is logged.</p>
-<p><a href="%s">Continue anyway</a></p><p>Reference %s</p>`,
-		html.EscapeString(host), html.EscapeString(strings.Join(cats, ", ")), html.EscapeString(u.String()), ref)
+<p>Your organisation asks you to take care with %s. Your visit is logged.</p>
+<p><b>Why:</b> %s</p>
+<p><a href="%s">Continue anyway</a></p>
+<p>If you need to ask about this, quote reference <b>%s</b>. Your IT administrator can find it in the decision log.</p>`,
+		html.EscapeString(host), html.EscapeString(why), html.EscapeString(u.String()), html.EscapeString(ref))
 }
 
 var hopHeaders = []string{"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate",

@@ -628,7 +628,7 @@ func (a *API) listDecisions(w http.ResponseWriter, r *http.Request, c ctxInfo) (
 		return []decisions.Entry{}, nil
 	}
 	q := r.URL.Query()
-	f := decisions.Filter{App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind")}
+	f := decisions.Filter{App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind"), Ref: q.Get("ref")}
 	var alt []string
 	f.User, alt = a.userFilter(c.tenant, q.Get("user"))
 	if len(alt) > 0 {

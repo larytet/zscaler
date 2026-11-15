@@ -123,6 +123,9 @@ type Record struct {
 	Workspace bool `json:"workspace,omitempty"`
 	// DLP lists the data types found in a blocked or logged request body. Never the data.
 	DLP []string `json:"dlp,omitempty"`
+	// Ref is the reference a user was shown on a block or warning page, so an administrator who is
+	// given it can find the decision (ZIA-014).
+	Ref string `json:"ref,omitempty"`
 	// FileTypes are the kinds of file a blocked upload or download carried (ZIA-013), never the file.
 	FileTypes []string `json:"file_types,omitempty"`
 	// Health is set on records of Kind "health": the latest device health numbers.

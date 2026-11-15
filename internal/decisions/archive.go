@@ -170,6 +170,7 @@ func dayOf(name string) (time.Time, bool) {
 type Query struct {
 	From, To                time.Time
 	User, App, Action, Kind string
+	Ref                     string   // the reference a user was shown on a block page
 	Alt                     []string // other stored values of User that also match (the same person's real name, when the filter is a pseudonym)
 	Limit                   int      // default 100, at most 1000
 	Cursor                  string   // from a previous result
@@ -259,7 +260,7 @@ func (a *Archive) Query(tenant string, q Query) (Result, error) {
 				if json.Unmarshal(line, &r) == nil && r.Tenant == tenant &&
 					(q.From.IsZero() || !r.TS.Before(q.From)) && !r.TS.After(to) &&
 					(q.User == "" || r.User == q.User || contains(q.Alt, r.User)) && (q.App == "" || r.App == q.App) &&
-					(q.Action == "" || r.Action == q.Action) && (q.Kind == "" || r.Kind == q.Kind) {
+					(q.Action == "" || r.Action == q.Action) && (q.Kind == "" || r.Kind == q.Kind) && (q.Ref == "" || r.Ref == q.Ref) {
 					res.Records = append(res.Records, r)
 					if len(res.Records) == q.Limit {
 						f.Close()

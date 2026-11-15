@@ -37,7 +37,7 @@ Each is done as one subtask: change, test, STATUS.md, commit, push. Order is by 
 | G5 | ZIA-013 | File type control on inspected uploads and downloads (by extension, content type and file signature) | **done (S26)**; no content disarm, archives not opened, no console page |
 | G6 | ADM-006, FW-010, ADM-007 | Decision logs kept six months and searchable by date | **done on the control plane (S27)**; the enforcement node's own file is still not rotated; no console page; no dashboards |
 | G7 | NFR-033, ADM-006b | Privacy mode that hides usernames (and paths) in logs | **done for decision records (S28)**; audit log, alert and e-mail text, user and device lists are not covered; paths were never logged |
-| G8 | ZIA-014 | Reason strings on block pages for every deny reason, not only some | queued |
+| G8 | ZIA-014 | Reason strings on block pages for every deny reason, not only some | **done for the web proxy (S29)**; private-app refusals (SOCKS) still carry no message to the user |
 | G9 | INT-002 | SCIM provisioning of users and groups | queued |
 | G10 | NFR-012 | Per-tenant fail-open or fail-closed setting, documented and tested (today only fail-closed) | queued |
 | G11 | ZIA-011 | Cloud app control: a catalogue of apps with actions (upload, post, share) as rule conditions | queued |

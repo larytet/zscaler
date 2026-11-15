@@ -17,6 +17,7 @@ type Entry struct {
 
 type Filter struct {
 	User, App, Action, Kind string
+	Ref                     string // the reference a user was shown on a block page
 	Since                   time.Time
 	After                   int // return entries with Seq greater than this
 	Limit                   int
@@ -101,7 +102,7 @@ func (s *Store) Query(tenant string, f Filter) (out []Entry, next int) {
 	for _, e := range s.data[tenant] {
 		if e.Seq <= f.After ||
 			(f.User != "" && e.User != f.User) || (f.App != "" && e.App != f.App) ||
-			(f.Action != "" && e.Action != f.Action) || (f.Kind != "" && e.Kind != f.Kind) ||
+			(f.Action != "" && e.Action != f.Action) || (f.Kind != "" && e.Kind != f.Kind) || (f.Ref != "" && e.Ref != f.Ref) ||
 			(!f.Since.IsZero() && e.TS.Before(f.Since)) {
 			continue
 		}

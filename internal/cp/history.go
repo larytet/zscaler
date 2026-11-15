@@ -35,7 +35,7 @@ func (a *API) decisionHistory(w http.ResponseWriter, r *http.Request, c ctxInfo)
 		return nil, fail(503, "unavailable", "decision records are not being kept on disk by this control plane")
 	}
 	q := r.URL.Query()
-	dq := decisions.Query{App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind"), Cursor: q.Get("cursor")}
+	dq := decisions.Query{App: q.Get("app"), Action: q.Get("action"), Kind: q.Get("kind"), Ref: q.Get("ref"), Cursor: q.Get("cursor")}
 	dq.User, dq.Alt = a.userFilter(c.tenant, q.Get("user"))
 	var err error
 	if v := q.Get("from"); v != "" {

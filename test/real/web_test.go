@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"mime/multipart"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -246,6 +247,21 @@ func TestRealZIA005FileTypeControl(t *testing.T) {
 	}
 	if seen, _ := w.originSeen(); len(seen) != len(before) {
 		t.Errorf("%d refused uploads reached the origin", len(seen)-len(before))
+	}
+	// the reference on a refused page finds the decision in the admin's history
+	{
+		ct, body := form("tool.exe", pe)
+		r = w.get(a, ca, "POST", "/up", body, map[string]string{"Content-Type": ct})
+		m := regexp.MustCompile(`reference <b>([0-9a-f]{12})</b>`).FindStringSubmatch(r.body)
+		if r.code != 403 || m == nil || !strings.Contains(r.body, "Why:") {
+			t.Fatalf("the refusal page needs a reason and a reference: %+v", r)
+		}
+		var found struct{ Records []map[string]any }
+		eventually(t, "the reference to be found in the history", 20*time.Second, func() bool {
+			_, hb := w.api("GET", "/v1/decisions/history?ref="+m[1], nil)
+			json.Unmarshal(hb, &found)
+			return len(found.Records) == 1 && found.Records[0]["action"] == "deny" && found.Records[0]["rule"] == "no-exe-up"
+		})
 	}
 	for _, p := range []string{"/dl/setup.exe", "/dl/holiday.jpg"} {
 		if r = w.get(a, ca, "GET", p, "", nil); r.code != 403 || !strings.Contains(r.body, "File blocked") {

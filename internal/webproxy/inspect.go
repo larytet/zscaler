@@ -130,9 +130,9 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	rec.Event = "open"
 	// A request for another host inside this tunnel is domain fronting: refuse it.
 	if h, _ := splitHost(q.Host); h != host {
-		rec.Action, rec.Reason = "deny", "host-mismatch"
+		rec.Action, rec.Reason, rec.Ref = "deny", "host-mismatch", refID()
 		p.Log(rec)
-		http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+		errorPage(w, http.StatusMisdirectedRequest, "Request refused", reasonText("host-mismatch", nil), rec.Ref)
 		return
 	}
 	pol := p.State.Policy(id.Tenant, policy.Web)
@@ -168,30 +168,30 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	}
 	switch d.Action {
 	case policy.Deny:
-		rec.Action = "deny"
+		rec.Action, rec.Ref = "deny", ref
 		p.Log(rec)
 		if d.Capture {
 			p.Log(captureRecord(rec, d.RuleID, "deny", q, reqBody, http.StatusForbidden, nil, nil, reqTrunc))
 		}
 		if len(rec.FileTypes) > 0 {
-			fileBlockPage(w, host, "upload", rec.FileTypes, ref)
+			fileBlockPage(w, host, "upload", rec.FileTypes, ref, reasonText(d.Reason, nil))
 			return
 		}
 		if len(hits) > 0 && d.RuleID != "" && ruleUsesDLP(pol, d.RuleID) {
-			dlpBlockPage(w, host, hits, ref)
+			dlpBlockPage(w, host, hits, ref, reasonText(d.Reason, nil))
 			return
 		}
-		blockPage(w, host, cats, ref)
+		blockPage(w, host, cats, ref, reasonText(d.Reason, cats))
 		return
 	case policy.Warn:
 		q.URL.Scheme, q.URL.Host = "https", q.Host // so the continue link stays on HTTPS
 		if !p.warnPassed(q, id, host) {
-			rec.Action = "warn"
+			rec.Action, rec.Ref = "warn", ref
 			p.Log(rec)
 			if d.Capture {
 				p.Log(captureRecord(rec, d.RuleID, "warn", q, reqBody, http.StatusOK, nil, nil, reqTrunc))
 			}
-			p.warnPage(w, q, id, host, cats, ref)
+			p.warnPage(w, q, id, host, cats, ref, warnReason(d.Reason, cats))
 			return
 		}
 	}
@@ -227,9 +227,9 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 		if !ok || !(h == sh || strings.HasSuffix(h, "."+sh)) {
 			// missing secret or a host it is not bound to: refuse rather than send the request without it
 			fail := rec
-			fail.Action, fail.Reason = "deny", "secret-unavailable"
+			fail.Action, fail.Reason, fail.Ref = "deny", "secret-unavailable", ref
 			p.Log(fail)
-			http.Error(w, "credential unavailable", http.StatusBadGateway)
+			errorPage(w, http.StatusBadGateway, "Service unavailable", reasonText("secret-unavailable", nil), ref)
 			return
 		}
 		out.Header.Set(sc.Header, sc.Value) // replaces whatever the agent sent
@@ -268,7 +268,7 @@ func (p *Proxy) inspectedRequest(w http.ResponseWriter, q *http.Request, id pki.
 	if injected != "" {
 		// an API that echoes its request headers would hand the credential back to the agent: scrub it
 		if !scrubInjected(resp, injected) {
-			http.Error(w, "response too large to check for the injected credential", http.StatusBadGateway)
+			errorPage(w, http.StatusBadGateway, "Service unavailable", "The answer was too large to check for a credential that the platform added to the request, so it was not passed on.", ref)
 			return
 		}
 	}
@@ -390,13 +390,12 @@ func ruleUsesDLP(p *policy.Policy, id string) bool {
 	return false
 }
 
-func dlpBlockPage(w http.ResponseWriter, host string, types []string, ref string) {
+func dlpBlockPage(w http.ResponseWriter, host string, types []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Upload blocked</h1>
 <p>What you sent to %s appears to contain sensitive data (%s) and your organisation does not allow that.</p>
-<p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
-		html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
+%s`, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), pageTail(why, ref))
 }
 
 // textual reports whether a content type is something a scan can read as text.
@@ -434,18 +433,18 @@ func (p *Proxy) scanResponse(w http.ResponseWriter, resp *http.Response, pol *po
 	}
 	rec := base
 	rec.TS, rec.Action, rec.Rule, rec.Reason, rec.DLP, rec.Inspected = time.Now().UTC(), "deny", d.RuleID, "dlp-response", hits, true
+	rec.Ref = refID()
 	p.Log(rec)
-	responseBlockPage(w, host, hits, refID())
+	responseBlockPage(w, host, hits, rec.Ref, reasonText("dlp-response", nil))
 	return true
 }
 
-func responseBlockPage(w http.ResponseWriter, host string, types []string, ref string) {
+func responseBlockPage(w http.ResponseWriter, host string, types []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>Response blocked</h1>
 <p>What %s sent back appears to contain sensitive data (%s) and your organisation does not allow that to reach you.</p>
-<p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
-		html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
+%s`, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), pageTail(why, ref))
 }
 
 // MaxInjectedResponse bounds a response that must be scrubbed of an injected credential.
@@ -503,17 +502,17 @@ func (p *Proxy) checkDownload(w http.ResponseWriter, resp *http.Response, pol *p
 	}
 	rec := base
 	rec.TS, rec.Action, rec.Rule, rec.Reason, rec.FileTypes, rec.Inspected = time.Now().UTC(), "deny", d.RuleID, "file-type-download", files, true
+	rec.Ref = refID()
 	p.Log(rec)
 	resp.Body.Close()
-	fileBlockPage(w, host, "download", files, refID())
+	fileBlockPage(w, host, "download", files, rec.Ref, reasonText("file-type-download", nil))
 	return true
 }
 
-func fileBlockPage(w http.ResponseWriter, host, direction string, types []string, ref string) {
+func fileBlockPage(w http.ResponseWriter, host, direction string, types []string, ref, why string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
 	fmt.Fprintf(w, `<!doctype html><title>Blocked</title><h1>File blocked</h1>
 <p>A file you tried to %s with %s looks like a kind your organisation does not allow (%s).</p>
-<p>If this is a mistake, contact your IT administrator and quote reference <b>%s</b>.</p>`,
-		direction, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), ref)
+%s`, direction, html.EscapeString(host), html.EscapeString(strings.Join(types, ", ")), pageTail(why, ref))
 }
