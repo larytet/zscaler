@@ -38,7 +38,7 @@ log="test/real/last-run.log"
 set +e
 # build in a container as the node user (so the files are not root-owned): the binaries for the
 # product and one compiled test binary. CGO is off so they are static.
-$ssh_ "mkdir -p ~/ztx-real/bin ~/ztx-real/cache && $DOCKER run --rm --user \$(id -u):\$(id -g) -e HOME=/tmp -e GOCACHE=/cache/build -e GOPATH=/cache/gopath -e GOTOOLCHAIN=local -e CGO_ENABLED=0 -v \$HOME/ztx-real/src:/src -v \$HOME/ztx-real/bin:/out -v \$HOME/ztx-real/cache:/cache -w /src $BUILD_IMAGE sh -c 'go build -o /out/ ./cmd/... ./test/real/echoapp && go test -c -tags real -o /out/real.test ./test/real'" 2>&1 | tee "$log" &&
+$ssh_ "mkdir -p ~/ztx-real/bin ~/ztx-real/cache && $DOCKER run --rm --user \$(id -u):\$(id -g) -e HOME=/tmp -e GOCACHE=/cache/build -e GOPATH=/cache/gopath -e GOTOOLCHAIN=local -e CGO_ENABLED=0 -v \$HOME/ztx-real/src:/src -v \$HOME/ztx-real/bin:/out -v \$HOME/ztx-real/cache:/cache -w /src $BUILD_IMAGE sh -c 'go build -o /out/ ./cmd/... ./test/real/echoapp ./test/real/originapp && go test -c -tags real -o /out/real.test ./test/real'" 2>&1 | tee "$log" &&
 $ssh_ "cd ~/ztx-real && ZTX_BIN=\$HOME/ztx-real/bin ZTX_TEST_KUBECTL='${ZTX_TEST_KUBECTL:-sudo kubectl}' ZTX_TEST_DOCKER='$DOCKER' ./bin/real.test -test.v -test.count=1 -test.timeout 30m -test.run '$pattern'" 2>&1 | tee -a "$log"
 status=$?
 set -e

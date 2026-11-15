@@ -106,7 +106,9 @@ type world struct {
 	bufs    map[string]*lockedBuf
 	ifMatch string
 	fakeBin string
+	site    *webSite
 	ens     []*enInst
+	enExtra []string // extra enforcement node arguments, set before the nodes start
 	connImg string
 	echoImg string
 	nodeCtr string // the container that is the cluster node (for removing loaded images)
@@ -233,8 +235,10 @@ const labels = `    app.kubernetes.io/part-of: ztx-real-test`
 // newWorld builds the service side on the node and the customer side in the cluster.
 func newWorld(t *testing.T) *world { return newWorldN(t, 1) }
 
+// pre runs after the node's address is known and before the enforcement nodes start.
+
 // newWorldN builds the service side with n enforcement nodes.
-func newWorldN(t *testing.T, n int) *world {
+func newWorldN(t *testing.T, n int, pre ...func(*world)) *world {
 	t.Helper()
 	e := newEnv(t)
 	bin := os.Getenv("ZTX_BIN")
@@ -250,6 +254,9 @@ func newWorldN(t *testing.T, n int) *world {
 	w := &world{env: e, t: t, dir: dir, bin: bin, ports: map[string]int{}, bufs: map[string]*lockedBuf{}, ifMatch: "0"}
 	w.hostIP = e.hostAddress()
 	w.nodeCtr = e.clusterNodeContainer()
+	for _, f := range pre {
+		f(w)
+	}
 	w.idp = tidp.New("cid")
 	t.Cleanup(w.idp.Close)
 
@@ -584,8 +591,9 @@ func (w *world) runEN(e *enInst, first bool) {
 	if first {
 		env = []string{"ZTX_EN_TOKEN=" + e.token}
 	}
-	e.proc = w.start("ztx-en", env, "--name", e.name, "--cp", w.enrolU, "--cp-ca", w.caPath, "--data", e.data,
-		"--listen", e.brokerAddr(w), "--proxy-listen", fmt.Sprintf("%s:%d", w.hostIP, e.proxy), "--sync-every", "500ms")
+	args := []string{"--name", e.name, "--cp", w.enrolU, "--cp-ca", w.caPath, "--data", e.data,
+		"--listen", e.brokerAddr(w), "--proxy-listen", fmt.Sprintf("%s:%d", w.hostIP, e.proxy), "--sync-every", "500ms"}
+	e.proc = w.start("ztx-en", env, append(args, w.enExtra...)...)
 	waitAddr(w.t, e.brokerAddr(w))
 }
 
