@@ -2,7 +2,7 @@
 
 **Working name:** SMB-ZTX (placeholder)
 **Goal:** Feature parity with the Zscaler Zero Trust Exchange (ZIA, ZPA, ZDX, data security) for organisations of roughly 5–250 people with no dedicated security team.
-**Status:** Draft v0.3, 2026-11-15
+**Status:** Draft v0.4, 2026-11-15
 **Audience:** Product, architecture, engineering
 
 ---
@@ -529,3 +529,81 @@ Known from search result summaries only (pages not opened in full):
 - **0.1** First draft from product pages, one help page, the NIST white paper and two patents.
 - **0.2** Read the ZIA and ZPA data sheets. Corrected: ZPA inspection design (ZPA-031a), availability (NFR-010, 99.99% to 99.999%), log retention (ADM-006, 30 days to 6 months). Added: ZPA-050 to ZPA-058, ZIA-017 to ZIA-019, ZIA-022 to ZIA-022f, DATA-002a, ADM-006a/b, NFR-000, and section 13.1 (packaging and seat minimums).
 - **0.3** Read the firewall, bandwidth control, Client Connector and Private Service Edge sheets. Corrected minimum client OS versions (AGT-001). Added: AGT-001a to AGT-001d, AGT-012 to AGT-015, sections 6.1a, 6.1b and 6.1c, expanded ZPA-043, SMB-006 and SMB-007.
+- **0.4** Added `COMPETITIVE-ANALYSIS.md` (Cato Networks, Palo Alto Networks) and section 18 below. PDFs now live in the git-ignored `.doc/` folder.
+
+---
+
+## 18. Ideas adopted from Cato Networks and Palo Alto Networks (new in 0.4)
+
+Detail, sources and research limits are in `COMPETITIVE-ANALYSIS.md`. These are **ideas** for differentiation. They are not part of Zscaler parity. Each cites its source. Cato's SPACE white paper and Palo Alto's current spec sheet were not read, so details here come from solution briefs, one knowledge-base article, one blog post and old data sheets.
+
+### 18.1 Platform design
+
+- **ARCH-030 (M) one rule base.** All enforcement (firewall, web, SaaS, DLP, private access) uses a single policy model and one rule list, instead of separate modules with an evaluation order `[V: Cato "single policy engine"; contrast with Zscaler's multi-module order in 6.2]`. For a customer with no security team this removes the main source of mistakes. Internally the engine may still run modules in order, but the admin sees one list.
+- **ARCH-031 (M) decrypt once, inspect in one pass.** TLS is terminated once per flow and all engines work on the same decrypted stream `[V: Cato SPACE, Palo Alto "single-pass"]`. Needed to meet NFR-001.
+- **ARCH-032 (S) open per-flow data store.** Every flow's user, device, app, data and verdict context is stored once and queryable through the API and SIEM export `[V: Cato "open data lake"]`. Feeds ADM-005, INT-004 and the AI analyst in 18.5.
+- **NFR-050 (M) make-before-break maintenance.** Before upgrading a node, move existing tunnels to another node, then upgrade. No user session may drop for a routine release `[V: description of Cato application US 2026/0186764 A1; claims unread, patent risk unknown]`. Counsel review needed before copying the mechanism. The requirement (no drops on upgrade) is a goal, not a copy of their method.
+- **NFR-051 (S) no hyperscaler dependency for the data plane**, or a documented fallback, so a single cloud vendor outage does not take the service down `[V: Cato claim; vendor marketing]`.
+
+### 18.2 Private access additions
+
+- **ZPA-060 (M) connector groups by default.** Applications bind to a connector **group**, not a single connector, for failover and load distribution `[V: Cato Private Access]`. Refines ZPA-011.
+- **ZPA-061 (M) overlapping-IP safe publishing.** Publish an app by DNS name, hide the real address behind a carrier-grade-NAT range (Cato defaults: 100.64.0.0/16 management, 100.65.0.0/16 applications, user-overridable) `[V: Cato Private Access]`. Lets a small company onboard a partner or an acquired business with no re-addressing.
+- **ZPA-062 (M) default-deny and user-initiated only in v1.** Server-initiated and bidirectional flows are out of scope for the basic ZTNA tier and go to the connector-site tier (ZPA-050) `[V: Cato states the same split]`.
+- **ZPA-063 (S) outbound DTLS or QUIC from the connector** (UDP-based transport, avoids TCP-over-TCP) `[V: Cato uses DTLS; Zscaler client uses DTLS and QUIC per AGT-001c]`.
+
+### 18.3 Continuous trust and identity (Palo Alto "ZTNA 2.0")
+
+- **ZPA-070 (M) continuous trust assessment.** Re-score a session when device posture, location or network changes (for example public Wi-Fi, or a session resumed from a new device) `[V: Palo Alto blog]`. Zscaler's equivalent is ZPA-058.
+- **ZPA-071 (M) risk-based MFA step-up.** Ask for a stronger factor when the user opens a more sensitive app or the risk score rises, not only at sign-in `[V: Palo Alto blog]`.
+- **ZPA-072 (S) fast group reaction.** Policy reacts to risk before the identity provider's group membership changes (for example drop a user into a "restricted" group in the product) `[V: Palo Alto blog, "dynamic user group monitoring"]`.
+- **ZPA-073 (S) enforce at the first packet** to prevent lateral movement before a connection opens `[V: Palo Alto blog]`.
+- **ZPA-074 (S) sub-application control.** Rules on the application and on parts of it (for example allow reading an admin console, block its upload function) using app identification `[V: Palo Alto "app and sub-app"; marketing claim, mechanics not read]`.
+- **ZIA-040 (S) credential-theft prevention.** Detect a corporate password being typed into an untrusted site and block it, by comparing entered credentials with corporate ones `[V: Palo Alto blog]`. High value for phishing, which is the top SMB risk.
+- **ADM-020 (S) change modelling.** Before saving a policy change, show who would gain or lose access and which flows would break `[V: Palo Alto AIOps "change-management modelling and policy analysis"]`. Refines ZPA-028.
+
+### 18.4 Unmanaged devices: a secure workspace browser
+
+The most distinctive idea for a business with contractors and personal laptops and **no mobile device management**.
+
+- **BYOD-001 (S).** A managed browser (or browser profile) that gives an isolated corporate workspace on an unmanaged device, installable in minutes, with no agent and no MDM `[V: Palo Alto Prisma Access Browser white paper]`.
+- **BYOD-002 (S).** Last-mile data controls: block screenshots, camera and microphone, mask sensitive fields, watermark, encrypt downloaded files `[V: same]`.
+- **BYOD-003 (S).** Last-mile access controls: login restrictions, MFA, admin approval for sensitive actions `[V: same]`.
+- **BYOD-004 (S).** Re-check device posture about every 90 seconds and defend against malicious extensions `[V: same; the 90-second figure is Palo Alto's]`.
+- **BYOD-005 (C).** Inspect browser traffic that proxies miss (QUIC, ECH, large files) because inspection happens inside the browser `[V: same]`.
+
+This overlaps ZPA-055 (isolated browser access) and ZIA-022d (application isolation). The difference is that the browser runs on the user's device, not as streamed pixels. Both models should be evaluated. A secure browser is cheaper to run (no remote rendering farm) but needs a native app per OS.
+
+### 18.5 Operations for people without a security team (the main Cato lesson)
+
+- **OPS-001 (M) three management models:** self-service, co-managed (customer delegates changes or troubleshooting to the vendor or partner), and fully managed by a partner `[V: Cato solution brief]`. Maps to personas P1 and P3.
+- **OPS-002 (M) managed detection and response** offered by the vendor or MSP, with a monthly plain-language report of threats, risk levels and affected users `[V: Cato "Managed XDR" and monthly report]`.
+- **OPS-003 (S) named customer success contact** for the first 90 days `[V: Cato "Customer Success Engineer"]`.
+- **OPS-004 (S) AI-written incident stories** that correlate flow, device and identity signals into a short, ordered investigation with guided remediation, using playbooks `[V: Cato XDR; Gen-AI claim is marketing]`. For SMB the first version can be rule-based.
+- **OPS-005 (S) intent-driven policy UI** and **autonomous policy** suggestions: the product proposes rules from observed traffic and the admin accepts or rejects `[V: Cato "autonomous policies, automated posture management, intent-driven UI"; mechanics unread]`. Complements ZPA-057.
+- **OPS-006 (S) SaaS security posture management:** continuous check of Microsoft 365, Google Workspace and similar settings against a known framework, with one-click fixes `[V: Palo Alto SSPM]`. Refines DATA-003.
+- **OPS-007 (S) explicit-proxy mode** so a customer can move from an existing proxy or PAC setup with no network change `[V: Palo Alto]`. Matches AGT-007.
+
+### 18.6 Network edge (only if the product includes branches, see section 8)
+
+- **BR-020 (C) zero-touch edge device or image** with active/active multi-link, per-app dynamic path selection, packet-loss mitigation (including duplicating packets for critical apps), BGP, and high availability at no extra recurring charge `[V: Cato Socket]`. Priority is **C** because Zscaler leaves this to the customer and building a backbone is a different business. A software-only variant (router or VM) is the realistic SMB version.
+- **BR-021 (C) agentless cloud connection** through the cloud provider's own IPsec gateway, with no virtual appliance `[V: Cato]`. Complements BR-003.
+- **BR-022 (C) smart egress:** application-level rule choosing the PoP that exits specific traffic nearest the SaaS or cloud instance `[V: Cato]`. Complements ZIA-006.
+
+### 18.7 Endpoint-assisted enforcement
+
+- **FW-020 (C) process-aware traffic steering.** The agent maps each connection to its process hash. Traffic from unknown or risky processes is steered for deeper inspection, trusted processes keep the short path, and the product can ask the agent to stop a process `[V: description of Palo Alto US 12,003,485; claims unread; active to about 2037 per Google's estimate]`. **Patent risk is real.** Zscaler's Endpoint App Control (FW-004) is a related but different feature. Get counsel review first.
+- **ZPA-075 (C) bundled endpoint protection**, using a licensed third-party engine, in the same console `[V: Cato EPP uses a SentinelOne engine]`.
+
+### 18.8 Packaging, MSP and compliance
+
+- **SMB-020 (M) service-provider multi-tenancy** with per-tenant separation, white label and usage-based billing `[V: Palo Alto "Clean Pipe" for service providers; Cato's partner-managed model]`. Refines ADM-010.
+- **SMB-021 (M) logging included.** Palo Alto's 2020 sheet makes its data lake a required, paid add-on, Zscaler includes 6 months, so default to included `[V: 2020 sheet, may have changed]`.
+- **SMB-022 (S) exclusions from inspection** for privacy-sensitive categories (banking, health) with one switch, and a published "inspected data is never stored" commitment `[V: Cato brief; Zscaler has similar]`. Refines ZIA-032.
+- **NFR-060 (S) compliance targets** to publish: PCI DSS 4.0, SOC 1 and 2, ISO 27001, 27017, 27018, 27701 `[V: Cato's list]`. Zscaler lists FedRAMP, ISO 27001, SOC 2 and 3. Union is the long-term target.
+
+### 18.9 Not adopted
+
+- Building a private global backbone (Cato) and SD-WAN hardware (both): capital intensive, outside "small business, no network team".
+- 5G appliances, SD-branch switching with uPoE (Palo Alto): hardware business.
+- Marketing statistics (95% of web threats stopped inline, 10x better SLAs, and so on): vendor claims with no method.
