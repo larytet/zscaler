@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/alerts"
+	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/decisions"
 )
 
@@ -19,17 +20,19 @@ type Pair struct {
 }
 
 type Digest struct {
-	Tenant        string    `json:"tenant"`
-	From          time.Time `json:"from"`
-	To            time.Time `json:"to"`
-	PrivateAllow  int       `json:"private_sessions_allowed"`
-	PrivateDeny   int       `json:"private_sessions_denied"`
-	WebBlocked    int       `json:"web_requests_blocked"`
-	WebWarned     int       `json:"web_requests_warned"`
-	TopDenied     []Pair    `json:"top_denied"`
-	OpenAlerts    []string  `json:"open_alerts"`
-	ThingsToFix   []string  `json:"things_to_fix"`
-	NoDataWarning string    `json:"no_data_warning,omitempty"`
+	Tenant       string    `json:"tenant"`
+	From         time.Time `json:"from"`
+	To           time.Time `json:"to"`
+	PrivateAllow int       `json:"private_sessions_allowed"`
+	PrivateDeny  int       `json:"private_sessions_denied"`
+	WebBlocked   int       `json:"web_requests_blocked"`
+	WebWarned    int       `json:"web_requests_warned"`
+	TopDenied    []Pair    `json:"top_denied"`
+	OpenAlerts   []string  `json:"open_alerts"`
+	ThingsToFix  []string  `json:"things_to_fix"`
+	// AdminChanges lists who was given, lost or had replaced administrator access in the period.
+	AdminChanges  []string `json:"administrator_changes"`
+	NoDataWarning string   `json:"no_data_warning,omitempty"`
 }
 
 // Build summarises [from, to). Only "open" events of access decisions count.
@@ -89,6 +92,36 @@ func Build(tenant string, from, to time.Time, entries []decisions.Entry, al []al
 	return d
 }
 
+// adminActions are the audit events that change who can administer the tenant.
+var adminActions = map[string]string{
+	"admin.create": "gave administrator access to",
+	"admin.remove": "removed administrator access of",
+	"admin.rotate": "replaced the token of",
+	"owner.reset":  "reset the owner token of",
+}
+
+// AddAdminChanges adds the changes of administrator access found in the audit events of the period. A reset
+// of an owner from the server's command line is also put first among the things to fix: it is the one
+// change that bypasses the console, so it is worth a look by whoever did not do it.
+func (d *Digest) AddAdminChanges(ev []audit.Event) {
+	d.AdminChanges = []string{}
+	for _, e := range ev {
+		verb, ok := adminActions[e.Action]
+		if !ok || e.Tenant != d.Tenant || e.TS.Before(d.From) || !e.TS.Before(d.To) {
+			continue
+		}
+		line := fmt.Sprintf("%s: %s %s %s", e.TS.UTC().Format("2 Jan 15:04"), e.Actor, verb, e.Object)
+		if e.Action == "owner.reset" {
+			line += " (from the server's command line, not the console)"
+			d.ThingsToFix = append([]string{fmt.Sprintf("An owner account (%s) was reset from the server's command line on %s. If that was not you or your IT person, treat it as a break-in: replace every administrator token and check the audit log.", e.Object, e.TS.UTC().Format("2 Jan"))}, d.ThingsToFix...)
+			if len(d.ThingsToFix) > 3 {
+				d.ThingsToFix = d.ThingsToFix[:3]
+			}
+		}
+		d.AdminChanges = append(d.AdminChanges, line)
+	}
+}
+
 // Text renders the digest as a short plain-text email body.
 func (d Digest) Text() string {
 	var b strings.Builder
@@ -108,6 +141,12 @@ func (d Digest) Text() string {
 		b.WriteString("\r\nOpen alerts:\r\n")
 		for _, a := range d.OpenAlerts {
 			fmt.Fprintf(&b, "  - %s\r\n", a)
+		}
+	}
+	if len(d.AdminChanges) > 0 {
+		b.WriteString("\r\nAdministrator access changes:\r\n")
+		for _, c := range d.AdminChanges {
+			fmt.Fprintf(&b, "  - %s\r\n", c)
 		}
 	}
 	if len(d.ThingsToFix) > 0 {

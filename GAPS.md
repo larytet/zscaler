@@ -62,7 +62,7 @@ These are written as proposals in REQUIREMENTS.md section 20. None is built. The
 |---|---|---|---|
 | G19 | GAP-REQ-01 | Backup and restore of the control plane with a restore test | done: S41 |
 | G20 | GAP-REQ-02 | Secrets and private keys encrypted at rest | done: S42 |
-| G21 | GAP-REQ-03 | Break-glass recovery when the last owner token is lost | proposed |
+| G21 | GAP-REQ-03 | Break-glass recovery when the last owner token is lost | done: S44 |
 | G22 | GAP-REQ-04 | Rate limits and lockout on admin, enrolment and sign-in | proposed |
 | G23 | GAP-REQ-05 | Key and certificate rotation and a compromise procedure | partly done: S43 (admin tokens, inspection CA, master key, key status page, a written procedure); rotating the root CA and the policy signing key with an overlap is **not built** |
 | G24 | GAP-REQ-07 | "Person left" in one action with a checklist | done: S40 (first, in the order the product owner chose: 07, 01, 02, 05, then the rest) |

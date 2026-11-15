@@ -745,7 +745,13 @@ func (a *API) BuildDigest(tenant string, days int) digest.Digest {
 	if a.Alerts != nil {
 		al = a.Alerts.List(tenant, true)
 	}
-	return digest.Build(tenant, from, to, es, al)
+	d := digest.Build(tenant, from, to, es, al)
+	if a.AuditPath != "" {
+		if ev, _ := audit.ReadAll(a.AuditPath, tenant); ev != nil {
+			d.AddAdminChanges(ev)
+		}
+	}
+	return d
 }
 
 func (a *API) getDigest(w http.ResponseWriter, r *http.Request, c ctxInfo) (any, error) {

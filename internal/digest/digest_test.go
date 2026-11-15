@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/larytet/zscaler/internal/alerts"
+	"github.com/larytet/zscaler/internal/audit"
 	"github.com/larytet/zscaler/internal/broker"
 	"github.com/larytet/zscaler/internal/decisions"
 )
@@ -87,5 +88,39 @@ func TestTextIsPlain(t *testing.T) {
 		if !strings.Contains(txt, want) {
 			t.Errorf("missing %q in:\n%s", want, txt)
 		}
+	}
+}
+
+func TestDigestListsAdministratorAccessChangesAndOwnerResets(t *testing.T) { // AGT-043 (GAP-REQ-03)
+	from := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	to := from.Add(7 * 24 * time.Hour)
+	ev := []audit.Event{
+		{Tenant: "t1", TS: from.Add(time.Hour), Actor: "owner", Action: "admin.create", Object: "carol"},
+		{Tenant: "t1", TS: from.Add(2 * time.Hour), Actor: "owner", Action: "policy.save", Object: "web"}, // not about access
+		{Tenant: "t1", TS: from.Add(3 * time.Hour), Actor: "host:ops", Action: "owner.reset", Object: "owner"},
+		{Tenant: "t2", TS: from.Add(time.Hour), Actor: "x", Action: "admin.remove", Object: "someone-else"}, // another tenant
+		{Tenant: "t1", TS: from.Add(-time.Hour), Actor: "owner", Action: "admin.remove", Object: "too-early"},
+		{Tenant: "t1", TS: to, Actor: "owner", Action: "admin.remove", Object: "too-late"},
+	}
+	d := Build("t1", from, to, nil, []alerts.Alert{{Message: "m", Action: "do a"}, {Message: "n", Action: "do b"}, {Message: "o", Action: "do c"}})
+	d.AddAdminChanges(ev)
+	if len(d.AdminChanges) != 2 {
+		t.Fatalf("%v", d.AdminChanges)
+	}
+	if !strings.Contains(d.AdminChanges[1], "host:ops reset the owner token of owner") || !strings.Contains(d.AdminChanges[1], "not the console") {
+		t.Errorf("%q", d.AdminChanges[1])
+	}
+	// the reset is the first thing to look at, and the list is still short
+	if len(d.ThingsToFix) != 3 || !strings.Contains(d.ThingsToFix[0], "break-in") {
+		t.Errorf("things to fix: %v", d.ThingsToFix)
+	}
+	if txt := d.Text(); !strings.Contains(txt, "Administrator access changes") || !strings.Contains(txt, "gave administrator access to carol") || strings.Contains(txt, "too-early") || strings.Contains(txt, "someone-else") {
+		t.Errorf("%s", txt)
+	}
+	// no changes: no section
+	clean := Build("t1", from, to, nil, nil)
+	clean.AddAdminChanges(nil)
+	if clean.AdminChanges == nil || strings.Contains(clean.Text(), "Administrator access changes") {
+		t.Errorf("an empty week must show no section: %q", clean.Text())
 	}
 }

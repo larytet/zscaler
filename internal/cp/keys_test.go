@@ -211,3 +211,24 @@ func toStrings(v any) []string {
 	}
 	return out
 }
+
+// The weekly summary shows who was given or lost administrator access, and an owner reset made at the server (GAP-REQ-03).
+func TestDigestShowsOwnerResetFromTheServer(t *testing.T) { // AGT-043
+	e := newEnrolEnv(t)
+	if e.api.Audit == nil || e.api.AuditPath == "" {
+		t.Skip("this environment has no audit log")
+	}
+	e.call("POST", "/v1/admins", e.adminA, map[string]string{"name": "dana", "role": "viewer"})
+	e.api.Audit.Append("a", "host:ops", "owner.reset", "owner", nil, nil) // what `ztx-cp reset-owner` writes
+	e.api.Audit.Append("b", "host:ops", "owner.reset", "owner", nil, nil) // another tenant's
+	_, b, _ := e.call("GET", "/v1/digest?format=text", e.adminA, nil)
+	txt := string(b)
+	for _, want := range []string{"Administrator access changes", "gave administrator access to dana", "reset the owner token of owner", "break-in"} {
+		if !strings.Contains(txt, want) {
+			t.Errorf("missing %q in:\n%s", want, txt)
+		}
+	}
+	if strings.Count(txt, "reset the owner token") != 1 {
+		t.Errorf("another tenant's reset leaked into this digest:\n%s", txt)
+	}
+}

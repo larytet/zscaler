@@ -35,7 +35,7 @@ import (
 var version = "dev"
 
 func main() {
-	if runBackupCommand(os.Args[1:]) {
+	if runBackupCommand(os.Args[1:]) || runRecoverCommand(os.Args[1:]) {
 		return
 	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
