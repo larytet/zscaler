@@ -171,6 +171,11 @@ func (e *Enrol) device(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
+	if blocked, why := e.API.Store.SCIMBlocks(in.Tenant, cl.Subject, cl.Email); blocked {
+		e.API.log(ctxInfo{tenant: in.Tenant, actor: "anonymous"}, "enrol.device.refused", "not-provisioned", nil, nil)
+		writeErr(w, fail(403, "not_provisioned", why))
+		return
+	}
 	if u, ok := e.API.Store.User(in.Tenant, cl.Subject); ok && u.Disabled {
 		writeErr(w, fail(403, "user_disabled", "this account is disabled"))
 		return

@@ -585,7 +585,8 @@ type agentInst struct {
 	ports map[string]int
 }
 
-func (s *stack) newAgent(t *testing.T, name string) *agentInst {
+// tryAgent configures and enrols an agent, and returns the error instead of failing the test.
+func (s *stack) tryAgent(t *testing.T, name string) (*agentInst, error) {
 	a := &agentInst{dir: filepath.Join(s.dir, name), ports: map[string]int{}}
 	for _, n := range []string{"socks", "http", "status"} {
 		a.ports[n] = freePort(t)
@@ -615,7 +616,15 @@ func (s *stack) newAgent(t *testing.T, name string) *agentInst {
 		}
 	}
 	if err := cmd.Wait(); err != nil {
-		t.Fatalf("enrol %s: %v\n%s", name, err, errb.String())
+		return a, fmt.Errorf("enrol %s: %v\n%s", name, err, errb.String())
+	}
+	return a, nil
+}
+
+func (s *stack) newAgent(t *testing.T, name string) *agentInst {
+	a, err := s.tryAgent(t, name)
+	if err != nil {
+		t.Fatal(err)
 	}
 	return a
 }
@@ -2277,5 +2286,114 @@ func TestScn021LogStreaming(t *testing.T) {
 	}
 	if _, b := s.api("GET", "/v1/audit", nil, s.token); strings.Contains(string(b), "SIEM-TOKEN-e2e") {
 		t.Fatal("the audit log holds the token")
+	}
+}
+
+// SCN-022 (INT-002): SCIM provisioning through the real sign-in. With provisioning required, a person the
+// identity provider has not provisioned cannot enrol; once provisioned they can, and the group that
+// grants access comes from SCIM, not from the sign-in token; taking them out of the group, or
+// deactivating them, ends their access.
+func TestScn022SCIMProvisioning(t *testing.T) {
+	s := newStack(t)
+	// access is granted by the group "scim-staff" only: the sign-in token's own group ("all-staff") is not enough
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/private", map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "scim-staff", "priority": 1, "action": "allow", "match": map[string]any{"groups": []string{"scim-staff"}, "apps": []string{"erp", "wiki"}}}}}, s.token)
+	s.must("PUT", "/v1/scim", map[string]any{"enabled": true, "require_provisioned": true}, s.token)
+	code, b := s.api("POST", "/v1/scim/token", nil, s.token)
+	var tk struct{ Token string }
+	json.Unmarshal(b, &tk)
+	if code != 200 || tk.Token == "" {
+		t.Fatalf("%d %s", code, b)
+	}
+	s.secrets = append(s.secrets, tk.Token)
+	scim := func(method, path string, body any) (int, map[string]any) {
+		var rd io.Reader
+		if body != nil {
+			bb, _ := json.Marshal(body)
+			rd = bytes.NewReader(bb)
+		}
+		req, _ := http.NewRequest(method, s.adminU+"/scim/v2"+path, rd)
+		req.Header.Set("Authorization", "Bearer "+tk.Token)
+		resp, err := s.admin.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out map[string]any
+		json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	// not provisioned: the real sign-in succeeds at the identity provider, and the platform refuses to enrol
+	if _, err := s.tryAgent(t, "early"); err == nil || !strings.Contains(err.Error(), "provision") {
+		t.Fatalf("an unprovisioned person must not be able to enrol: %v", err)
+	}
+
+	// provisioned, but in no group: enrolled, and still no access
+	c, u := scim("POST", "/Users", map[string]any{"userName": "u1@example.com", "displayName": "U One", "emails": []map[string]any{{"value": "u1@example.com", "primary": true}}, "active": true})
+	if c != 201 {
+		t.Fatalf("%d %v", c, u)
+	}
+	uid := u["id"].(string)
+	a, err := s.tryAgent(t, "laptop")
+	if err != nil {
+		t.Fatalf("a provisioned person must be able to enrol: %v", err)
+	}
+	s.runInst(a)
+	time.Sleep(3 * time.Second)
+	if s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("access without a SCIM group: the token's group must not be enough")
+	}
+
+	// put them in the group: access, from SCIM
+	c, g := scim("POST", "/Groups", map[string]any{"displayName": "scim-staff", "members": []map[string]string{{"value": uid}}})
+	if c != 201 {
+		t.Fatalf("%d %v", c, g)
+	}
+	gid := g["id"].(string)
+	eventually(t, "access from the SCIM group", 30*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	conn, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	echoOnce(t, conn, "before")
+
+	// out of the group: access ends
+	scim("PATCH", "/Groups/"+gid, map[string]any{"schemas": []string{"urn:ietf:params:scim:api:messages:2.0:PatchOp"},
+		"Operations": []map[string]any{{"op": "remove", "path": `members[value eq "` + uid + `"]`}}})
+	eventually(t, "access to end when the group membership is removed", 40*time.Second, func() bool { return !s.reachable(a.socks(), "erp.ztx") })
+	// back in
+	scim("PATCH", "/Groups/"+gid, map[string]any{"Operations": []map[string]any{{"op": "add", "path": "members", "value": []map[string]string{{"value": uid}}}}})
+	eventually(t, "access to return", 40*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+
+	// deactivated: the open session ends at once and new ones are refused
+	conn2, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close()
+	scim("PATCH", "/Users/"+uid, map[string]any{"Operations": []map[string]any{{"op": "Replace", "path": "active", "value": "False"}}})
+	start := time.Now()
+	conn2.SetReadDeadline(time.Now().Add(15 * time.Second))
+	for {
+		if _, err := conn2.Write([]byte("x")); err != nil {
+			break
+		}
+		if _, err := conn2.Read(make([]byte, 1)); err != nil {
+			break
+		}
+		if time.Since(start) > 14*time.Second {
+			t.Fatal("the session of a deactivated user survived")
+		}
+	}
+	if s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("a deactivated user opened a new session")
+	}
+	// the token is not in any log the node or the control plane wrote
+	raw, _ := os.ReadFile(filepath.Join(s.dir, "en", "decisions.jsonl"))
+	if strings.Contains(string(raw), tk.Token) {
+		t.Fatal("the SCIM token reached the node's log")
 	}
 }

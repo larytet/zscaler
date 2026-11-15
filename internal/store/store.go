@@ -171,6 +171,10 @@ type Tenant struct {
 	SIEM        *siem.Config                    `json:"siem,omitempty"`    // where this tenant\'s logs are streamed (INT-004)
 	Tenancy     *tenancy.Config                 `json:"tenancy,omitempty"` // tenancy restriction on SaaS sign-in (DATA-002a)
 	Privacy     *privacy.Config                 `json:"privacy,omitempty"` // log privacy mode (NFR-033)
+	SCIM        *SCIMConfig                     `json:"scim,omitempty"`    // provisioning from the identity provider (INT-002)
+	SCIMUsers   map[string]SCIMUser             `json:"scim_users,omitempty"`
+	SCIMGroups  map[string]SCIMGroup            `json:"scim_groups,omitempty"`
+	SCIMGone    map[string]bool                 `json:"scim_gone,omitempty"` // people whose SCIM user was removed: no access until provisioned again
 	Devices     map[string]Device               `json:"devices"`
 }
 
@@ -183,6 +187,8 @@ type adminRec struct {
 type file struct {
 	Tenants map[string]*Tenant  `json:"tenants"`
 	Admins  map[string]adminRec `json:"admins"` // sha256(token) -> record
+	// SCIMTokens maps sha256(token) to a tenant: the tokens an identity provider uses to provision users.
+	SCIMTokens map[string]string `json:"scim_tokens,omitempty"`
 }
 
 type Store struct {
@@ -521,6 +527,7 @@ func (s *Store) SetUserDisabled(tenant, subject string, disabled bool) error {
 // effective adds product-side groups to what the identity provider said.
 func (t *Tenant) effective(u policy.User) policy.User {
 	u.Risk = t.risk[u.Subject]
+	u = t.scimOverlay(u)
 	if _, ok := t.Restricted[u.Subject]; ok {
 		g := make([]string, 0, len(u.Groups)+1)
 		for _, x := range u.Groups {
