@@ -108,6 +108,8 @@ Just-in-time access: give a rule the action `require_approval` (it must name its
 
 Device health: `GET /v1/health` shows each device's CPU load, memory and disk use as last reported by the agent (Linux agents only) with plain-language findings such as a nearly full disk.
 
+AI agents: `POST /v1/ai-agents {"name":"code-helper","operator":"alice","apps":["erp"],"minutes":120}` creates a named identity run by a person, allowed only those apps for that long, and returns a one-time token for `ztx-agent enrol-service`. Add a `require_approval` rule for the group `ai-agent` (naming the apps) or the agent gets nothing. `DELETE /v1/ai-agents/{name}` ends it at once.
+
 Risk: `GET /v1/risk` lists users with a 0 to 100 score and the reasons. A rule can use it with `"max_risk": 49` or `"min_risk": 70`. The safe defaults do not, so nothing is blocked on risk until you add such a rule.
 
 Console: open `https://localhost:8443/` (the admin listener) and sign in with the admin token. It shows alerts, access decisions, people and devices, apps, a policy simulator, reports and an investigation page. It was walked through by hand in Chrome against sample data, but not on phones, other browsers or with assistive technology: report anything odd. To look at it without deploying anything, run `go run ./cmd/ztx-demo` (lab only: plain HTTP, loopback only, sample data in memory; it prints a token).

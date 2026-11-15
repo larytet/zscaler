@@ -265,6 +265,24 @@ func (t *Tokens) Redeem(tok string) (tenant, group string, err error) {
 	return rec.Tenant, rec.Group, nil
 }
 
+// RedeemIf consumes the token only if want accepts its tenant and group. A token offered
+// to the wrong kind of endpoint is refused and stays valid for the right one.
+func (t *Tokens) RedeemIf(tok string, want func(tenant, group string) bool) (tenant, group string, err error) {
+	h := hashToken(tok)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	rec, ok := t.byH[h]
+	if !ok || t.now().After(rec.Expires) {
+		delete(t.byH, h)
+		return "", "", ErrBadToken
+	}
+	if !want(rec.Tenant, rec.Group) {
+		return "", "", ErrBadToken
+	}
+	delete(t.byH, h)
+	return rec.Tenant, rec.Group, nil
+}
+
 // Stored returns what is held at rest, for tests that check nothing leaks.
 func (t *Tokens) Stored() []string {
 	t.mu.Lock()

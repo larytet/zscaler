@@ -1194,3 +1194,88 @@ func TestDex003DeviceHealthReported(t *testing.T) {
 		t.Fatalf("implausible or missing numbers from a real machine: %+v (mem %v disk %v)", got, got.Mem, got.Disk)
 	}
 }
+
+// SCN-010 (AI-001, AI-002): an AI agent reaches only the apps it was granted, then is removed.
+func TestScn010AIAgent(t *testing.T) {
+	s := newStack(t)
+	human := s.newAgent(t, "alice-laptop") // creates the person (u1) the agent will be run by
+	_ = human
+	s.ifMatch = "1"
+	s.must("PUT", "/v1/policies/private", map[string]any{"default_action": "deny", "rules": []map[string]any{{
+		"id": "agents-jit", "priority": 10, "action": "require_approval",
+		"match": map[string]any{"groups": []string{"ai-agent"}, "apps": []string{"erp", "wiki"}}}}}, s.token)
+	code, b := s.api("POST", "/v1/ai-agents", map[string]any{"name": "code-helper", "operator": "u1", "apps": []string{"erp"}, "minutes": 30}, s.token)
+	var created struct {
+		Token string `json:"enrolment_token"`
+	}
+	json.Unmarshal(b, &created)
+	if code != 200 || created.Token == "" {
+		t.Fatalf("%d %s", code, b)
+	}
+	s.secrets = append(s.secrets, created.Token)
+
+	// the agent's own machine: a separate state directory, enrolled with the service token (no login)
+	a := &agentInst{dir: filepath.Join(s.dir, "bot"), ports: map[string]int{}}
+	for _, n := range []string{"socks", "http", "status"} {
+		a.ports[n] = freePort(t)
+	}
+	cfg := map[string]any{"tenant": "t1", "issuer": s.idp.URL, "client_id": "cid", "enrol_url": s.enrolU, "enrol_ca_pem": string(s.caPEM),
+		"en_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["broker"])}, "proxy_addrs": []string{fmt.Sprintf("127.0.0.1:%d", s.ports["proxy"])},
+		"en_name": "localhost", "socks_addr": a.socks(), "http_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["http"]), "status_addr": fmt.Sprintf("127.0.0.1:%d", a.ports["status"]),
+		"apps": map[string]string{"erp.ztx": "erp", "wiki.ztx": "wiki"}}
+	cb, _ := json.Marshal(cfg)
+	os.MkdirAll(a.dir, 0o700)
+	os.WriteFile(filepath.Join(a.dir, "config.json"), cb, 0o600)
+	cmd := exec.Command(filepath.Join(s.bin, "ztx-agent"), "--dir", a.dir, "enrol-service")
+	cmd.Env = append(os.Environ(), append(s.agentEnv(), "ZTX_AGENT_TOKEN="+created.Token)...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("enrol-service: %v\n%s", err, out)
+	}
+	s.runInst(a)
+
+	eventually(t, "the granted app to work", 25*time.Second, func() bool { return s.reachable(a.socks(), "erp.ztx") })
+	if s.reachable(a.socks(), "wiki.ztx") {
+		t.Fatal("the AI agent reached an app it was not granted")
+	}
+	// the same service token cannot be used again
+	cmd2 := exec.Command(filepath.Join(s.bin, "ztx-agent"), "--dir", filepath.Join(s.dir, "bot2"), "enrol-service")
+	os.MkdirAll(filepath.Join(s.dir, "bot2"), 0o700)
+	os.WriteFile(filepath.Join(s.dir, "bot2", "config.json"), cb, 0o600)
+	cmd2.Env = append(os.Environ(), append(s.agentEnv(), "ZTX_AGENT_TOKEN="+created.Token)...)
+	if err := cmd2.Run(); err == nil {
+		t.Fatal("a service token was accepted twice")
+	}
+	// decisions are logged under the agent's own name
+	found := false
+	for _, d := range s.decisions() {
+		if d["user"] == "agent:code-helper" && d["action"] == "allow" && d["reason"] == "approved" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no decision logged under the agent's identity")
+	}
+	// removing the agent ends its access within seconds
+	c, err := socksConnect(a.socks(), "erp.ztx", s.ports["echo"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	s.must("DELETE", "/v1/ai-agents/code-helper", nil, s.token)
+	c.SetReadDeadline(time.Now().Add(10 * time.Second))
+	start := time.Now()
+	for {
+		if _, err := c.Write([]byte("x")); err != nil {
+			break
+		}
+		if _, err := c.Read(make([]byte, 1)); err != nil {
+			break
+		}
+	}
+	if d := time.Since(start); d > 8*time.Second {
+		t.Fatalf("the agent's session survived %v after it was removed", d)
+	}
+	if s.reachable(a.socks(), "erp.ztx") {
+		t.Fatal("a removed agent opened a new session")
+	}
+}

@@ -635,3 +635,115 @@ func TestHealthEndpoint(t *testing.T) { // DEX-003
 		t.Fatalf("tenant isolation: %s", b)
 	}
 }
+
+func TestAIAgentLifecycle(t *testing.T) { // AI-001, AI-002
+	e := newEnrolEnv(t)
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "wiki", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{2}}}})
+	e.api.Store.UpsertUser("a", policy.User{Subject: "alice", Email: "alice@example.com", Groups: []string{"finance"}})
+	create := func(body map[string]any) (int, map[string]any) {
+		c, b, _ := e.call("POST", "/v1/ai-agents", e.adminA, body)
+		var out map[string]any
+		json.Unmarshal(b, &out)
+		return c, out
+	}
+	for name, body := range map[string]map[string]any{
+		"bad name":          {"name": "Bad Name!", "operator": "alice", "apps": []string{"erp"}},
+		"no apps":           {"name": "bot", "operator": "alice", "apps": []string{}},
+		"unknown app":       {"name": "bot", "operator": "alice", "apps": []string{"ghost"}},
+		"unknown operator":  {"name": "bot", "operator": "nobody", "apps": []string{"erp"}},
+		"too long":          {"name": "bot", "operator": "alice", "apps": []string{"erp"}, "minutes": 5000},
+		"agent as operator": {"name": "bot", "operator": "agent:other", "apps": []string{"erp"}},
+	} {
+		if c, _ := create(body); c != 400 {
+			t.Errorf("%s accepted: %d", name, c)
+		}
+	}
+	code, out := create(map[string]any{"name": "code-helper", "operator": "alice", "apps": []string{"erp"}, "minutes": 30})
+	if code != 200 || out["agent"] != "agent:code-helper" || out["operator"] != "alice" {
+		t.Fatalf("%d %v", code, out)
+	}
+	tok := out["enrolment_token"].(string)
+	// the identity exists, is in the ai-agent group only, and holds a grant for exactly the listed app
+	u, ok := e.api.Store.User("a", "agent:code-helper")
+	if !ok || len(u.Groups) != 1 || u.Groups[0] != AIAgentGroup || !strings.Contains(u.Email, "alice") {
+		t.Fatalf("%+v", u)
+	}
+	if !e.api.Store.Granted("a", "agent:code-helper", "erp", time.Now()) || e.api.Store.Granted("a", "agent:code-helper", "wiki", time.Now()) {
+		t.Fatal("grant must cover exactly the listed apps")
+	}
+	if e.api.Store.Granted("a", "agent:code-helper", "erp", time.Now().Add(31*time.Minute)) {
+		t.Fatal("grant outlived its time limit")
+	}
+	// the token is single-use, and it enrols a device cert whose subject is the agent
+	_, pub := newKey(t)
+	c, b := e.post("/enrol/service", map[string]string{"token": tok, "public_key": pub}, nil)
+	var cert certOut
+	json.Unmarshal(b, &cert)
+	if c != 200 || cert.Cert == "" {
+		t.Fatalf("%d %s", c, b)
+	}
+	der, _ := base64.StdEncoding.DecodeString(cert.Cert)
+	leaf, _ := x509.ParseCertificate(der)
+	id, err := e.ca.Verify(leaf, nil)
+	if err != nil || id.Subject != "agent:code-helper" || id.Role != pki.RoleDevice || id.Tenant != "a" {
+		t.Fatalf("%+v %v", id, err)
+	}
+	if c, _ := e.post("/enrol/service", map[string]string{"token": tok, "public_key": pub}, nil); c != 401 {
+		t.Fatalf("service token reused: %d", c)
+	}
+	// tenant isolation and roles
+	if _, b, _ := e.call("GET", "/v1/ai-agents", e.adminB, nil); strings.Contains(string(b), "code-helper") {
+		t.Fatalf("tenant b sees tenant a's agents: %s", b)
+	}
+	if c, _, _ := e.call("DELETE", "/v1/ai-agents/code-helper", e.adminB, nil); c != 404 {
+		t.Fatalf("tenant b removed tenant a's agent: %d", c)
+	}
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("POST", "/v1/ai-agents", viewer, map[string]any{"name": "x", "operator": "alice", "apps": []string{"erp"}}); c != 403 {
+		t.Fatalf("viewer created an agent: %d", c)
+	}
+	if c, b, _ := e.call("GET", "/v1/ai-agents", viewer, nil); c != 200 || !strings.Contains(string(b), `"operator":"alice"`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	// removing the agent disables it and ends its grants at once; it cannot enrol again or renew
+	if c, _, _ := e.call("DELETE", "/v1/ai-agents/code-helper", e.adminA, nil); c != 200 {
+		t.Fatal(c)
+	}
+	if e.api.Store.Granted("a", "agent:code-helper", "erp", time.Now()) {
+		t.Fatal("grant survived removal")
+	}
+	tok2 := e.api.Tokens.Issue("a", ServiceTokenPrefix+"agent:code-helper")
+	if c, _ := e.post("/enrol/service", map[string]string{"token": tok2, "public_key": pub}, nil); c != 403 {
+		t.Fatalf("a removed agent enrolled: %d", c)
+	}
+	_, ab, _ := e.call("GET", "/v1/audit", e.adminA, nil)
+	if !strings.Contains(string(ab), "ai-agent.create") || !strings.Contains(string(ab), "ai-agent.remove") || !strings.Contains(string(ab), "alice") {
+		t.Fatalf("not audited with the operator: %s", ab)
+	}
+}
+
+func TestTokenKindsAreNotInterchangeable(t *testing.T) {
+	e := newEnrolEnv(t)
+	_, pub := newKey(t)
+	conn := e.api.Tokens.Issue("a", "site1")
+	svc := e.api.Tokens.Issue("a", ServiceTokenPrefix+"agent:x")
+	en := e.api.Tokens.Issue("", ENTokenPrefix+"localhost")
+	// every wrong pairing is refused ...
+	for name, c := range map[string]struct{ path, tok string }{
+		"service token at connector": {"/enrol/connector", svc}, "EN token at connector": {"/enrol/connector", en},
+		"connector token at service": {"/enrol/service", conn}, "EN token at service": {"/enrol/service", en},
+		"connector token at EN": {"/enrol/en", conn}, "service token at EN": {"/enrol/en", svc},
+	} {
+		if code, _ := e.post(c.path, map[string]string{"token": c.tok, "public_key": pub}, nil); code != 401 {
+			t.Errorf("%s accepted: %d", name, code)
+		}
+	}
+	// ... and a refused attempt does not burn the token: it still works at the right endpoint
+	if code, _ := e.post("/enrol/connector", map[string]string{"token": conn, "public_key": pub}, nil); code != 200 {
+		t.Errorf("connector token was burnt by a misdirected attempt: %d", code)
+	}
+	if code, _ := e.post("/enrol/en", map[string]string{"token": en, "public_key": pub}, nil); code != 200 {
+		t.Errorf("EN token was burnt by a misdirected attempt: %d", code)
+	}
+}

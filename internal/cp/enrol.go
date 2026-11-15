@@ -70,6 +70,7 @@ func (e *Enrol) Handler() http.Handler {
 	m.HandleFunc("POST /enrol/connector", e.connector)
 	m.HandleFunc("GET /enrol/targets", e.targets)
 	m.HandleFunc("POST /enrol/en", e.enrolEN)
+	m.HandleFunc("POST /enrol/service", e.enrolService)
 	m.HandleFunc("GET /sync/state", e.syncState)
 	m.HandleFunc("POST /ingest/records", e.ingest)
 	return m
@@ -254,7 +255,10 @@ func (e *Enrol) connector(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	tenant, group, err := e.API.Tokens.Redeem(in.Token)
+	// only a tenant connector token: not an enforcement-node or AI-agent token
+	tenant, group, err := e.API.Tokens.RedeemIf(in.Token, func(t, g string) bool {
+		return t != "" && !strings.HasPrefix(g, ENTokenPrefix) && !strings.HasPrefix(g, ServiceTokenPrefix)
+	})
 	if err != nil {
 		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
 		return
@@ -312,8 +316,8 @@ func (e *Enrol) enrolEN(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, err)
 		return
 	}
-	tenant, group, err := e.API.Tokens.Redeem(in.Token)
-	if err != nil || tenant != "" || !strings.HasPrefix(group, ENTokenPrefix) {
+	_, group, err := e.API.Tokens.RedeemIf(in.Token, func(t, g string) bool { return t == "" && strings.HasPrefix(g, ENTokenPrefix) })
+	if err != nil {
 		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
 		return
 	}
@@ -401,4 +405,48 @@ func (e *Enrol) ingest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]int{"accepted": len(recs)})
+}
+
+// ServiceTokenPrefix marks a token for an AI agent or other non-interactive identity.
+const ServiceTokenPrefix = "svc:"
+
+// enrolService redeems a one-time service token for a device certificate whose subject is
+// the agent identity ("agent:<name>"). The identity, its operator and its app grants were
+// set up by an admin (see POST /v1/ai-agents); nothing here widens them.
+func (e *Enrol) enrolService(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<16)
+	var in struct {
+		Token     string `json:"token"`
+		PublicKey string `json:"public_key"`
+	}
+	if err := decode(r, &in); err != nil {
+		writeErr(w, err)
+		return
+	}
+	pub, err := parsePub(in.PublicKey)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	tenant, group, err := e.API.Tokens.RedeemIf(in.Token, func(t, g string) bool { return t != "" && strings.HasPrefix(g, ServiceTokenPrefix) })
+	if err != nil {
+		writeErr(w, fail(401, "unauthenticated", "invalid, used or expired token"))
+		return
+	}
+	subject := strings.TrimPrefix(group, ServiceTokenPrefix)
+	u, ok := e.API.Store.User(tenant, subject)
+	if !ok || u.Disabled {
+		writeErr(w, fail(403, "agent_disabled", "this agent identity is disabled or was removed"))
+		return
+	}
+	did := deviceID(in.PublicKey)
+	out, cert, err := e.issue(pub, pki.Identity{Tenant: tenant, Subject: subject, Device: did, Role: pki.RoleDevice}, pki.DeviceTTL)
+	if err != nil {
+		writeErr(w, err)
+		return
+	}
+	e.API.Store.PutDevice(tenant, store.Device{ID: did, User: subject, Serial: cert.SerialNumber.String()})
+	e.API.log(ctxInfo{tenant: tenant, actor: subject}, "enrol.service", did, nil, nil)
+	out.DeviceID = did
+	writeJSON(w, 200, out)
 }

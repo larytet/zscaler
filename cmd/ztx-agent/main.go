@@ -14,10 +14,11 @@ import (
 	"runtime"
 
 	"github.com/larytet/zscaler/internal/agent"
+	"github.com/larytet/zscaler/internal/cli"
 )
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ztx-agent [--config file] [--dir dir] enrol|run|status")
+	fmt.Fprintln(os.Stderr, "usage: ztx-agent [--config file] [--dir dir] enrol|enrol-service|run|status")
 	os.Exit(2)
 }
 
@@ -35,6 +36,7 @@ func main() {
 	home, _ := os.UserHomeDir()
 	dir := flag.String("dir", filepath.Join(home, ".ztx-agent"), "agent state directory")
 	cfgPath := flag.String("config", "", "config file (default <dir>/config.json)")
+	tokenFile := flag.String("token-file", "", "service token file for enrol-service (or ZTX_AGENT_TOKEN)")
 	noBrowser := flag.Bool("no-browser", false, "print the sign-in URL instead of opening a browser")
 	flag.Parse()
 	if flag.NArg() != 1 {
@@ -73,6 +75,16 @@ func main() {
 		}
 		exp, _ := a.Expires()
 		fmt.Println("Enrolled. Certificate valid until", exp.Format("2006-01-02 15:04 MST"))
+	case "enrol-service":
+		tok, err := cli.Secret(*tokenFile, "ZTX_AGENT_TOKEN")
+		if err != nil || tok == "" {
+			log.Fatal("a service token is required (--token-file or ZTX_AGENT_TOKEN)")
+		}
+		if err := a.EnrolService(tok); err != nil {
+			log.Fatal(err)
+		}
+		exp, _ := a.Expires()
+		fmt.Println("Enrolled as a service identity. Certificate valid until", exp.Format("2006-01-02 15:04 MST"))
 	case "run":
 		if err := a.Load(); err != nil {
 			log.Fatalf("%v (run `ztx-agent enrol` first)", err)

@@ -226,6 +226,21 @@ func (a *Agent) Enrol(ctx context.Context, openURL func(string) error) error {
 	return a.install(c)
 }
 
+// EnrolService enrols a non-interactive identity (an AI agent) with a one-time token from
+// POST /v1/ai-agents. There is no login: the identity, its operator and the apps it may
+// reach were fixed by an admin.
+func (a *Agent) EnrolService(token string) error {
+	pub, err := a.pubB64()
+	if err != nil {
+		return err
+	}
+	c, err := a.post(false, "/enrol/service", map[string]string{"token": token, "public_key": pub})
+	if err != nil {
+		return err
+	}
+	return a.install(c)
+}
+
 // Load restores a previously issued certificate from disk.
 func (a *Agent) Load() error {
 	k, err := a.loadKey()
