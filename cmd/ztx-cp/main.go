@@ -34,6 +34,9 @@ import (
 var version = "dev"
 
 func main() {
+	if runBackupCommand(os.Args[1:]) {
+		return
+	}
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	printOpenAPI := flag.Bool("print-openapi", false, "print the OpenAPI description of the admin API and exit")
 	data := flag.String("data", "cp-data", "data directory (CA key, store, audit log)")

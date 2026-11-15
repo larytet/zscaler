@@ -60,7 +60,7 @@ These are written as proposals in REQUIREMENTS.md section 20. None is built. The
 
 | # | Requirement | What is missing | State |
 |---|---|---|---|
-| G19 | GAP-REQ-01 | Backup and restore of the control plane with a restore test | proposed |
+| G19 | GAP-REQ-01 | Backup and restore of the control plane with a restore test | done: S41 |
 | G20 | GAP-REQ-02 | Secrets and private keys encrypted at rest | proposed |
 | G21 | GAP-REQ-03 | Break-glass recovery when the last owner token is lost | proposed |
 | G22 | GAP-REQ-04 | Rate limits and lockout on admin, enrolment and sign-in | proposed |
