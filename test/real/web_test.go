@@ -332,3 +332,43 @@ func TestRealZIA006CloudAppControl(t *testing.T) {
 		return found
 	})
 }
+
+// REAL-ZIA-007 (SMB-002): the shipped safe-defaults pack, applied as it is with inspection turned on, refuses
+// a program sent out, a program disguised as a picture coming down, and a post to an anonymous sharing
+// service (here the origin stands in for it), and leaves ordinary traffic alone.
+func TestRealZIA007SafeDefaultsPack(t *testing.T) {
+	w, a := startWeb(t)
+	// the origin is declared to be the anonymous sharing service WeTransfer, by replacing the built-in app
+	w.must("PUT", "/v1/cloud-apps/wetransfer", map[string]any{"domains": []string{w.site.ip}, "actions": map[string]any{
+		"upload": []map[string]any{{"methods": []string{"POST"}, "paths": []string{"/transfer"}}}}})
+	c, b := w.api("POST", "/v1/policies/safe-defaults", map[string]any{"inspection": true})
+	if c != 200 || !strings.Contains(string(b), "must trust the inspection CA") {
+		t.Fatalf("%d %s", c, b)
+	}
+	ca := w.inspectionPool()
+	var r webResult
+	eventually(t, "ordinary traffic to go through the pack", 60*time.Second, func() bool {
+		r = w.get(a, ca, "GET", "/hello", "", nil)
+		return r.err == nil && r.code == 200
+	})
+	pe := append([]byte("MZ\x90\x00\x03"), make([]byte, 200)...)
+	if r = w.get(a, ca, "PUT", "/tool", string(pe), map[string]string{"Content-Type": "application/octet-stream"}); r.code != 403 || !strings.Contains(r.body, "Programs may not be sent out") {
+		t.Errorf("a program sent out: %+v", r)
+	}
+	if r = w.get(a, ca, "GET", "/dl/holiday.jpg", "", nil); r.code != 403 || !strings.Contains(r.body, "File blocked") {
+		t.Errorf("a program disguised as a picture: %+v", r)
+	}
+	if r = w.get(a, ca, "POST", "/transfer", "a file", nil); r.code != 403 || !strings.Contains(r.body, "Anonymous file and text sharing") {
+		t.Errorf("an upload to the anonymous sharing service: %+v", r)
+	}
+	if r = w.get(a, ca, "POST", "/msg", "hello", nil); r.code != 200 {
+		t.Errorf("an ordinary post: %+v", r)
+	}
+	if r = w.get(a, ca, "GET", "/dl/report.pdf", "", nil); r.code != 200 || r.body != "%PDF-1.7 a clean document" {
+		t.Errorf("a document: %+v", r)
+	}
+	seen, _ := w.originSeen()
+	if contains(seen, "POST /transfer") || contains(seen, "PUT /tool") {
+		t.Errorf("a refused request reached the origin: %v", seen)
+	}
+}

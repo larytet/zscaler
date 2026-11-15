@@ -1353,3 +1353,56 @@ func TestInspectionManagedExemptionsEndpoint(t *testing.T) { // AGT-032 (ZIA-032
 }
 
 func mustBody(_ int, b []byte, _ http.Header) []byte { return b }
+
+func TestSafeDefaultsEndpointAndInspectionChoice(t *testing.T) { // AGT-034 (SMB-002)
+	e := newEnrolEnv(t)
+	e.call("POST", "/v1/segments", e.adminA, map[string]any{"id": "erp", "group": "g", "targets": []map[string]any{{"host": "h", "ports": []int{1}}}})
+	// no body: the pack, and a warning that inspection is off so the file rules do nothing yet
+	c, b, _ := e.call("POST", "/v1/policies/safe-defaults", e.adminA, nil)
+	if c != 200 || !strings.Contains(string(b), `"inspection":false`) || !strings.Contains(string(b), "match nothing yet") || !strings.Contains(string(b), `"web":`) {
+		t.Fatalf("%d %s", c, b)
+	}
+	if ic, _ := e.api.Store.Inspection("a"); ic.Enabled {
+		t.Fatal("inspection must not be turned on unless asked for: devices must trust the CA first")
+	}
+	// asked for: inspection on, with the managed exemptions, and the warning about trust
+	c, b, _ = e.call("POST", "/v1/policies/safe-defaults", e.adminA, map[string]any{"inspection": true, "block_uploads_to": []string{"dropbox"}})
+	if c != 200 || !strings.Contains(string(b), "must trust the inspection CA") {
+		t.Fatalf("%d %s", c, b)
+	}
+	ic, _ := e.api.Store.Inspection("a")
+	if !ic.Enabled || ic.ManagedOff || len(ic.EffectiveExemptCategories()) != 2 {
+		t.Fatalf("inspection with the managed exemptions: %+v", ic)
+	}
+	// the extra app is in the web policy that was saved, and the versions moved on
+	_, pb, _ := e.call("GET", "/v1/policies/web", e.adminA, nil)
+	if !strings.Contains(string(pb), "dropbox") || !strings.Contains(string(pb), "sd-no-exe-upload") {
+		t.Fatalf("%s", pb)
+	}
+	var out struct{ Web int }
+	json.Unmarshal(b, &out)
+	if out.Web != 2 {
+		t.Fatalf("the second run is version 2: %d", out.Web)
+	}
+	// the exempt list of the organisation is kept when inspection is turned on this way
+	e.call("PUT", "/v1/inspection", e.adminA, map[string]any{"enabled": false, "exempt": []string{"mine.example"}})
+	e.call("POST", "/v1/policies/safe-defaults", e.adminA, map[string]any{"inspection": true})
+	if ic, _ := e.api.Store.Inspection("a"); len(ic.Exempt) != 1 || ic.Exempt[0] != "mine.example" {
+		t.Fatalf("the organisation's own exempt list was lost: %v", ic.Exempt)
+	}
+	// bad input changes nothing
+	before := e.api.Store.Snapshot().Tenants["a"].Policies[policy.Web].Version
+	for name, body := range map[string]map[string]any{"unknown app": {"block_uploads_to": []string{"nonesuch"}}, "unknown field": {"bogus": 1}} {
+		if c, _, _ := e.call("POST", "/v1/policies/safe-defaults", e.adminA, body); c != 400 {
+			t.Errorf("%s: %d", name, c)
+		}
+	}
+	if after := e.api.Store.Snapshot().Tenants["a"].Policies[policy.Web].Version; after != before {
+		t.Fatal("a refused request changed the policy")
+	}
+	// roles
+	viewer, _ := e.api.Store.AddAdmin("a", "vera", store.Viewer)
+	if c, _, _ := e.call("POST", "/v1/policies/safe-defaults", viewer, nil); c != 403 {
+		t.Fatalf("a viewer applied the pack: %d", c)
+	}
+}

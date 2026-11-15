@@ -422,8 +422,26 @@ func (a *API) safeDefaults(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 	if err != nil {
 		return nil, err
 	}
-	priv, web := SafeDefaults(segs)
-	out := map[string]int{}
+	var in struct {
+		// Inspection turns TLS inspection on (with the managed exemptions) so the file and sharing rules can
+		// see what is sent. It is off unless asked for: devices must trust the inspection CA first.
+		Inspection bool `json:"inspection"`
+		// BlockUploadsTo names more apps of the catalogue whose uploads and posts are refused.
+		BlockUploadsTo []string `json:"block_uploads_to"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, &in); err != nil {
+			return nil, err
+		}
+	}
+	cat := a.Store.CloudCatalog(c.tenant)
+	for _, id := range in.BlockUploadsTo {
+		if !cat.Has(id) {
+			return nil, fail(400, "invalid", "unknown app "+id+" (see GET /v1/cloud-apps)")
+		}
+	}
+	priv, web := SafeDefaultsWith(segs, SafeDefaultsOpts{BlockUploadsTo: in.BlockUploadsTo})
+	out := map[string]any{}
 	for _, p := range []*policy.Policy{priv, web} {
 		cur := 0
 		if d, err := a.Store.GetPolicy(c.tenant, p.Kind); err == nil {
@@ -435,6 +453,17 @@ func (a *API) safeDefaults(w http.ResponseWriter, r *http.Request, c ctxInfo) (a
 		}
 		out[string(p.Kind)] = v
 	}
+	warnings := []string{}
+	if in.Inspection {
+		ic, _ := a.Store.Inspection(c.tenant)
+		if err := a.Store.SetInspection(c.tenant, true, ic.Exempt); err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, "TLS inspection is now on, with the managed exemptions (GET /v1/inspection). Devices must trust the inspection CA (GET /v1/inspection/ca.pem) or HTTPS sites will show certificate errors there.")
+	} else if ic, _ := a.Store.Inspection(c.tenant); !ic.Enabled {
+		warnings = append(warnings, "TLS inspection is off, so the rules about uploads, downloads and file kinds in the web policy match nothing yet. Turn it on with PUT /v1/inspection, or run this again with {\"inspection\": true}, once your devices trust the inspection CA.")
+	}
+	out["inspection"], out["warnings"] = in.Inspection, warnings
 	a.log(c, "policy.safe-defaults", "all", nil, out)
 	return out, nil
 }
@@ -506,8 +535,25 @@ func (a *API) listAudit(w http.ResponseWriter, r *http.Request, c ctxInfo) (any,
 	return out, err
 }
 
-// SafeDefaults builds the shipped policy pack (DESIGN.md D2.4).
+// SafeDefaultsOpts are the choices of the shipped policy pack.
+type SafeDefaultsOpts struct {
+	// BlockUploadsTo names more file-sharing apps whose uploads are refused, besides the anonymous
+	// sharing services the pack always refuses (they must be in the app catalogue).
+	BlockUploadsTo []string
+}
+
+// AnonymousSharing are the services the pack refuses uploads and posts to without being asked: places to
+// drop a file or text for anyone, with no account of the organisation's.
+var AnonymousSharing = []string{"wetransfer", "pastebin", "github-gist"}
+
+// SafeDefaults builds the shipped policy pack (DESIGN.md D2.4) with its default choices.
 func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
+	return SafeDefaultsWith(segs, SafeDefaultsOpts{})
+}
+
+// SafeDefaultsWith builds the pack with the given choices. The file rules in the web policy need decrypted
+// traffic to see what is being sent: without TLS inspection they match nothing and do no harm.
+func SafeDefaultsWith(segs []broker.Segment, o SafeDefaultsOpts) (private, web *policy.Policy) {
 	tr := true
 	posture := &policy.PostureMatch{DiskEncrypted: &tr, FirewallOn: &tr, MaxAgeSeconds: 3600}
 	private = &policy.Policy{Kind: policy.Private, DefaultAction: policy.Deny}
@@ -545,6 +591,12 @@ func SafeDefaults(segs []broker.Segment) (private, web *policy.Policy) {
 			Match: policy.Match{Groups: []string{policy.RestrictedGroup}}},
 		{ID: "sd-bad", Priority: 10, Action: policy.Deny, Reason: "Known-bad categories",
 			Match: policy.Match{Categories: []string{"malware", "phishing", "command-and-control"}}},
+		{ID: "sd-no-adhoc-sharing", Priority: 12, Action: policy.Deny, Reason: "Anonymous file and text sharing services are not allowed",
+			Match: policy.Match{CloudApps: append(append([]string(nil), AnonymousSharing...), o.BlockUploadsTo...), CloudActions: []string{"upload", "post"}}},
+		{ID: "sd-no-exe-upload", Priority: 13, Action: policy.Deny, Reason: "Programs may not be sent out",
+			Match: policy.Match{UploadFileTypes: []string{"executable"}}},
+		{ID: "sd-no-disguised-download", Priority: 14, Action: policy.Deny, Reason: "A program disguised as another kind of file",
+			Match: policy.Match{DownloadFileTypes: []string{"disguised"}}},
 		{ID: "sd-warn", Priority: 20, Action: policy.Warn, Reason: "Risky categories",
 			Match: policy.Match{Categories: []string{"newly-registered", "file-sharing-unsanctioned"}}},
 	}}

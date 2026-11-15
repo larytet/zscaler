@@ -578,3 +578,77 @@ func TestInspectionEndpoints(t *testing.T) { // ZIA-040
 		t.Fatal("not audited")
 	}
 }
+
+func TestSafeDefaultsCoverTheWholeList(t *testing.T) { // AGT-034 (SMB-002)
+	segs := []broker.Segment{{ID: "erp", Class: "standard"}, {ID: "hr", Class: "sensitive"}}
+	_, web := SafeDefaultsWith(segs, SafeDefaultsOpts{BlockUploadsTo: []string{"dropbox"}})
+	if err := web.Compile(nil); err != nil {
+		t.Fatal(err)
+	}
+	if errs := policy.Validate(web, nil); len(errs) > 0 {
+		t.Fatal(errs)
+	}
+	ids := map[string]bool{}
+	for _, r := range web.Rules {
+		ids[r.ID] = true
+		if r.Reason == "" {
+			t.Errorf("rule %s has no reason for the block page", r.ID)
+		}
+	}
+	for _, want := range []string{"sd-restricted", "sd-bad", "sd-no-adhoc-sharing", "sd-no-exe-upload", "sd-no-disguised-download", "sd-warn"} {
+		if !ids[want] {
+			t.Errorf("the pack lacks %s", want)
+		}
+	}
+	u := policy.User{Email: "a@example.com", Groups: []string{"all-staff"}}
+	eval := func(mod func(*policy.Request)) policy.Decision {
+		r := policy.Request{Kind: policy.Web, Host: "x.example", Now: time.Now(), User: u, Inspected: true}
+		mod(&r)
+		return web.Evaluate(r)
+	}
+	cases := []struct {
+		name string
+		mod  func(*policy.Request)
+		want policy.Action
+		rule string
+	}{
+		{"an upload to an anonymous sharing service", func(r *policy.Request) {
+			r.CloudApps = []string{"wetransfer"}
+			r.CloudActions = []string{"wetransfer:upload"}
+		}, policy.Deny, "sd-no-adhoc-sharing"},
+		{"a post to a paste site", func(r *policy.Request) {
+			r.CloudApps = []string{"pastebin"}
+			r.CloudActions = []string{"pastebin:post"}
+		}, policy.Deny, "sd-no-adhoc-sharing"},
+		{"an upload to a service the admin added", func(r *policy.Request) {
+			r.CloudApps = []string{"dropbox"}
+			r.CloudActions = []string{"dropbox:upload"}
+		}, policy.Deny, "sd-no-adhoc-sharing"},
+		{"a download from dropbox is not touched", func(r *policy.Request) {
+			r.CloudApps = []string{"dropbox"}
+			r.CloudActions = []string{"dropbox:download"}
+		}, policy.Allow, ""},
+		{"an upload to google drive is not touched by default", func(r *policy.Request) {
+			r.CloudApps = []string{"google-drive"}
+			r.CloudActions = []string{"google-drive:upload"}
+		}, policy.Allow, ""},
+		{"a program going out", func(r *policy.Request) { r.UploadFiles = []string{"executable"} }, policy.Deny, "sd-no-exe-upload"},
+		{"a document going out", func(r *policy.Request) { r.UploadFiles = []string{"pdf"} }, policy.Allow, ""},
+		{"a known-bad site", func(r *policy.Request) { r.Categories = []string{"malware"} }, policy.Deny, "sd-bad"},
+		{"a risky category", func(r *policy.Request) { r.Categories = []string{"newly-registered"} }, policy.Warn, "sd-warn"},
+		{"an ordinary request", func(r *policy.Request) {}, policy.Allow, ""},
+	}
+	for _, c := range cases {
+		if d := eval(c.mod); d.Action != c.want || d.RuleID != c.rule {
+			t.Errorf("%s: got %s by %q, want %s by %q", c.name, d.Action, d.RuleID, c.want, c.rule)
+		}
+	}
+	// a program disguised as another file is refused coming down; this is a response-phase rule
+	d := web.EvaluateResponse(policy.Request{Kind: policy.Web, Host: "x.example", Now: time.Now(), User: u, Inspected: true, DownloadFiles: []string{"disguised", "executable"}})
+	if d.Action != policy.Deny || d.RuleID != "sd-no-disguised-download" {
+		t.Errorf("a disguised program must be refused: %+v", d)
+	}
+	if d := web.EvaluateResponse(policy.Request{Kind: policy.Web, Host: "x.example", Now: time.Now(), User: u, Inspected: true, DownloadFiles: []string{"executable"}}); d.Action != policy.Allow {
+		t.Errorf("a plain program download is the organisation's choice, not the pack's: %+v", d)
+	}
+}
