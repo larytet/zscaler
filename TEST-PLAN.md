@@ -1,6 +1,6 @@
 # Test Plan: SMB-ZTX Reference Build 1 (RB1)
 
-**Status:** Draft v0.2, 2026-11-15
+**Status:** Draft v1.0 (complete for RB1), 2026-11-15
 **Inputs:** [REQUIREMENTS.md](REQUIREMENTS.md) v0.4, [DESIGN.md](DESIGN.md) v1.0
 **Scope:** only what RB1 builds (DESIGN.md D1.2). Requirements outside RB1 are listed as *not tested* in section T6.
 
@@ -10,7 +10,7 @@ Written in parts, one subtask per commit:
 |---|---|---|
 | T1 | Strategy, levels, environments, policy and unit tests | done |
 | T2 | Data plane, agent and end-to-end tests | done |
-| T3 | Security, resilience, performance tests, traceability, exit criteria | pending |
+| T3 | Security, resilience, performance tests, traceability, exit criteria | done |
 
 ---
 
@@ -242,3 +242,121 @@ Design reference: D3, D4, D5.1. Rig: T1.3.
 | SCN-004 | P1 | **Bad posture.** Disk encryption turned off on a test device, access to a posture-protected segment ends, other segments unaffected, alert raised |
 | SCN-005 | P2 | **Site outage.** Both connectors of a site go down and come back, agents show a clear error then resume without re-login |
 | SCN-006 | P2 | **Contractor.** Group with access to one segment only, tries a second segment and a web category that is blocked |
+
+---
+
+## T3. Security, resilience, performance, traceability, exit criteria
+
+### T3.1 Security tests
+
+Design reference: D5.5 threat table.
+
+| ID | Level | Priority | Threat | Case | Expected |
+|---|---|---|---|---|---|
+| SEC-001 | L4 | P1 | Stolen device cert | Use a cert on a different machine without the key (handshake with the cert only) | Handshake fails |
+| SEC-002 | L4 | P1 | Stolen cert, still valid | Revoke, then connect | Refused, live sessions closed within 5 s |
+| SEC-003 | L4 | P1 | Cross-tenant | Device of tenant A requests a segment ID belonging to tenant B | Treated as unknown segment, no side effect |
+| SEC-004 | L4 | P1 | Rogue EN | Connector connects to a fake EN with a certificate from a different CA | Connector refuses to connect |
+| SEC-005 | L4 | P1 | Rogue connector | Client with an agent cert (not a connector cert) tries to register as a connector | Refused |
+| SEC-006 | L3 | P1 | Compromised EN | EN sends `OPEN` to an arbitrary internal host | Covered by PA-007, connector refuses |
+| SEC-007 | L4 | P1 | Policy tampering | Replay an old policy version, and a version signed by a different key | EN rejects both (version must increase, signature must verify) |
+| SEC-008 | L4 | P1 | Admin API auth | No token, wrong token, token of a deleted admin, token in URL | 401 in all cases, nothing logged in clear |
+| SEC-009 | L3 | P1 | Secrets in logs | Run the e2e suite with a log scanner for tokens, keys, refresh tokens, JWTs and cookies | Zero matches |
+| SEC-010 | L3 | P1 | Token storage | Inspect store files for enrolment and admin tokens | Only hashes present |
+| SEC-011 | L4 | P1 | TLS config | Scan each listener for protocol versions and ciphers | TLS 1.2 minimum (1.3 preferred), no weak ciphers, no renegotiation, correct SNI behaviour |
+| SEC-012 | L4 | P2 | DoS: connection flood | 5 000 new connections per second from one device identity | Per-device limit applies, other devices unaffected |
+| SEC-013 | L4 | P2 | DoS: stream flood | One connector session opens streams until the cap | Cap enforced, session survives, others unaffected |
+| SEC-014 | L4 | P2 | Log sink full | Fill the decision-log disk | EN refuses new sessions beyond the threshold, alerts, recovers when space returns |
+| SEC-015 | L3 | P1 | Path and injection | Fuzz API path and JSON fields with traversal strings, long strings, control characters | No crash, no file access outside the data directory |
+| SEC-016 | L3 | P1 | OAuth redirect | Callback listener bound to loopback only, rejects callbacks from other origins, one use only | Pass |
+| SEC-017 | L6 | P1 | Static analysis | `go vet`, `staticcheck`, `govulncheck` | No findings of severity high, no known vulnerable dependencies |
+| SEC-018 | L6 | P1 | Race detector | Full L1 to L4 with `-race` | Clean |
+| SEC-019 | L6 | P2 | Fuzz budget | 30 minutes per fuzz target (mux, policy loader, proxy request parser, JWT parser) nightly | No crash found, corpus saved |
+| SEC-020 | L4 | P2 | Hash-chained audit | Tamper with a stored audit record | Verification command reports the break |
+
+### T3.2 Resilience and failure injection
+
+| ID | Priority | Fault | Expected |
+|---|---|---|---|
+| RES-001 | P1 | Kill and restart the EN during 50 live sessions | Sessions drop, agents and connectors reconnect within 30 s, no stuck state |
+| RES-002 | P1 | Network delay of 200 ms and 2% loss between agent and EN | Sessions work, throughput degrades gracefully, no timeouts below 10 s |
+| RES-003 | P1 | Connection reset in the middle of a mux frame | The one session fails cleanly, no goroutine leak |
+| RES-004 | P2 | Disk full on the connector host | Connector keeps relaying (it writes nothing important), logs a warning |
+| RES-005 | P2 | Clock jump of plus and minus 10 minutes on the agent | Clear error (cert not yet valid or posture rejected), no crash, recovers after correction |
+| RES-006 | P2 | Corrupt `config.json` and `device.crt` on the agent | Agent starts, reports the problem, offers re-enrolment |
+| RES-007 | P1 | 24 hour soak with 200 sessions churning | Memory growth under 10%, no goroutine growth, no errors above baseline |
+
+### T3.3 Performance tests (design targets from D3.7)
+
+Run on a documented machine class (record CPU, RAM, kernel). Each is a target, not parity with Zscaler. A miss is recorded and reviewed, not hidden.
+
+| ID | Metric | Target | Method |
+|---|---|---|---|
+| PERF-001 | Private session setup latency (agent to echo app, loopback) | p95 under 20 ms | 10 000 sequential setups |
+| PERF-002 | Single-stream throughput through EN and connector on loopback | at least 500 Mbit/s | `iperf`-style transfer of 5 GB |
+| PERF-003 | 1 000 concurrent stitched sessions | EN memory under 300 MB, no errors | Load tool holding sessions open for 10 minutes |
+| PERF-004 | Connector idle memory | under 30 MB | Measure after 10 minutes idle |
+| PERF-005 | Policy evaluation | under 50 microseconds with 500 rules | Go benchmark (POL-028) |
+| PERF-006 | Policy push to 20 ENs | all applied within 5 s | Simulated ENs |
+| PERF-007 | Web proxy throughput | at least 1 000 requests per second for small objects on one core | Load tool |
+| PERF-008 | Decision-log write overhead | under 5% added latency at 1 000 decisions per second | A/B run with and without the sink |
+
+### T3.4 Usability checks (manual, SMB goals)
+
+| ID | Check | Pass criterion |
+|---|---|---|
+| USE-001 | A person with IT basics but no security background follows the wizard on a clean machine | First protected user in under 30 minutes (SMB-001). Record time and every point of confusion |
+| USE-002 | Admin reads five generated alerts | Each makes sense without documentation and offers a single action (SMB-003) |
+| USE-003 | A blocked end user sees the block page | Can tell what happened and who to contact |
+
+### T3.5 Traceability (RB1 scope)
+
+Requirements marked "subset" in DESIGN.md D1.2 are covered only for the behaviour the tests exercise. The gap column states what is not covered.
+
+| Requirement | Tests | Gap in RB1 |
+|---|---|---|
+| ARCH-001, 002, 003 | CP-007, CP-008, CP-009, WEB-012, PERF-006 | No multi-region, no active-active across regions |
+| ARCH-005, 006 | POL-009..012, PA-004, WEB-010, AG-005..007 | No risk score (ARCH-007) |
+| ARCH-020 | STO-001, CP-004, SEC-003 | One CA with tenant in subject (ARCH-021 not met) |
+| ZPA-010..012 | PA-006, PA-008..012, AG-014 | Single region, no PSE |
+| ZPA-020..026 | PA-001..005, PA-007, PA-016, PA-017, POL-xxx | No browser access, no PRA, no B2B |
+| ZIA-001..005, 010..014 | WEB-001..009, WEB-013, POL-021..025 | No TLS inspection, no URL path rules, no sandbox, no DLP, `warn` on HTTPS not displayable |
+| AGT-001, 002, 004 | AG-001, AG-005..010 | No tunnel driver, no installers, no auto-update (AGT-011 partial) |
+| AGT-006 | POS-001..004, PA-003, AG-013 | Self-reported posture only, no EDR |
+| INT-001, 002 | IDP-001..004, AG-001..004 | No SAML, no SCIM |
+| ADM-001, 003, 006 | CP-001..006, CP-011, CP-012 | No MSP console, no SIEM streaming, no Terraform |
+| SMB-001, 002, 003 | SCN-001, USE-001, USE-002, VAL-012, ALR-001..003 | Cyber-insurance export, exposure scan not built |
+| NFR-001..003 | PA-013, WEB-014, RES-001..007, PERF-001..008 | No SLA or capacity claims |
+| NFR-020..023 | AG-009, SEC-001..016, WEB-008, WEB-009 | No external penetration test |
+
+### T3.6 Not tested in RB1 (explicit)
+
+TLS inspection, DLP, CASB, sandbox, browser isolation, GenAI controls, digital experience monitoring, branch and cloud connectors, firewall (L3/L4 and DNS/IPS) beyond host rules, bandwidth control, B2B, privileged remote access, MSP multi-tenancy, data residency, compliance certification. These need their own plan when they enter scope.
+
+### T3.7 Defect handling and exit criteria
+
+Severity: **S1** security bypass, data exposure or wrong allow. **S2** wrong deny of legitimate traffic, crash, leak. **S3** incorrect message, cosmetic.
+
+RB1 exit requires:
+
+1. All P1 tests pass on three consecutive nightly runs.
+2. No open S1 or S2 defect.
+3. P2 failures each have an owner, a decision (fix or accept) and a note.
+4. Design-target misses in T3.3 are listed in the release notes.
+5. Traceability table has no requirement in RB1 scope without tests.
+6. `govulncheck` clean on the release commit, third-party dependency list reviewed.
+7. USE-001 done by at least two people who did not write the product.
+
+### T3.8 Test automation layout
+
+```
+internal/<pkg>/*_test.go     L1, L2, benchmarks
+test/testdata/               policy corpora, golden posture outputs, category lists
+test/idp/                    in-process OIDC test provider
+test/faults/                 fault-injecting TCP proxy
+test/e2e/                    L4 scenarios (build tag e2e)
+test/load/                   L5 load tool
+Makefile targets             test, test-race, test-e2e, fuzz, bench, vuln
+```
+
+CI stages: build, vet and staticcheck, L1 to L3 with race, L4 fast subset, then nightly: full L4, fuzz, soak, performance, vulnerability scan.
