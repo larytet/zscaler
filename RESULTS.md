@@ -1,24 +1,39 @@
 # Implementation results and target misses
 
-Running log for RB1 (see TEST-PLAN.md T3.7 item 4). Machine: Linux 6.8, 12 threads, Go 1.27.
+Running log for RB1 (TEST-PLAN.md T3.7 item 4). Machine: Linux 6.8, 12 threads, Go 1.27.4. Dated 2026-11-15.
 
-| Date | ID | Target | Measured | Status |
-|---|---|---|---|---|
-| 2026-11-15 | PERF-005 / POL-028 | under 50 us for 500 rules | about 59 us (worst case: matching rule is last, linear scan) | **Miss.** Fix when needed: index rules by group and app at compile time |
+## Performance targets (DESIGN.md D3.7)
 
-## Implementation subtasks
+All components of the private path run in one process on loopback unless noted, so these are optimistic for latency and pessimistic for throughput (agent, two TLS hops and the echo app share the CPU).
 
-| ID | Subtask | Status |
-|---|---|---|
-| I1 | Policy engine, validation, unit and fuzz tests | done |
-| I2 | PKI, posture, mux, audit packages | done |
-| I3 | Enforcement node: broker and connector | done |
-| I4 | Web proxy and classification | done |
-| I5 | Control plane (store, API, safe defaults), agent, IdP | pending |
-| I6 | End-to-end scenarios, alerts, README run instructions | pending |
+| ID | Target | Measured | Status |
+|---|---|---|---|
+| PERF-001 session setup | p95 under 20 ms | p50 0.93 ms, p95 1.4 ms, p99 1.8 ms | met |
+| PERF-002 single-stream throughput | at least 500 Mbit/s | 460 Mbit/s one way (was 362 before raising the mux frame size from 16 to 60 KiB) | **missed** |
+| PERF-003 1000 concurrent sessions | heap under 300 MB, no errors | 1000 held, 0 errors, heap +131 MB (whole stack in one process, so an upper bound for the EN) | met |
+| PERF-004 connector idle memory | under 30 MB | 9.9 MB resident after 10 s idle (real process) | met |
+| PERF-005 / POL-028 policy evaluation | under 50 us for 500 rules | about 59 us (worst case: the matching rule is last, linear scan) | **missed** |
+| PERF-006 policy push to 20 ENs | all within 5 s | not measured. ENs poll every 5 s by default, so the worst case is about 5 s plus transfer | untested |
+| PERF-007 web proxy throughput | 1000 requests/s per core | not measured | untested |
+| PERF-008 decision-log overhead | under 5% | not measured | untested |
+
+Reproduce: `go test -tags perf -v -run TestPerf ./internal/broker` and `go test -tags e2e -run TestPerf004 ./test/e2e`.
+
+Likely fixes for the misses: PERF-005 index rules by group and app at compile time. PERF-002 avoid the per-frame allocation and copy in the mux writer and reader, and try a larger stream window. Neither has been tried beyond the frame-size change.
+
+## Security checks
+
+| ID | Result |
+|---|---|
+| SEC-017 `govulncheck` | Clean on go1.27.4. On go1.27.2 it found two standard-library vulnerabilities (GO-2026-6859 `net/http` MaxBytesReader header race, GO-2026-6809), so `go.mod` pins `toolchain go1.27.4` |
+| SEC-018 race detector | All unit, component and end-to-end tests pass with `-race` |
+| SEC-019 fuzzing | 30 s each, no crash: policy loader, mux frames, posture verification. The 30-minute nightly budget in the plan has not been run |
+| `staticcheck` | Not run (not installed here) |
 
 ## Known gaps found while implementing
 
-- **Audit log tail truncation is not detectable** from the file alone (a shorter chain is still valid). Mitigation for later: store the head hash outside the log (CP database or signed checkpoint). Test `TestTamperDetected/truncate` documents the behaviour.
-- **mux accept queue** is now sized to `MaxStreams`. A burst above that is rejected `busy`, by design.
+- **Audit log tail truncation is not detectable** from the file alone (a shorter chain is still valid). Mitigation: store the head hash outside the log. `TestTamperDetected/truncate` documents the behaviour.
+- The mux accept queue is sized to `MaxStreams`. A burst above that is rejected `busy`, by design.
 - Probe parsers use inline samples. Golden files from real machines (POS-004) are still to be collected.
+- Certificate renewal uses the current certificate over mTLS instead of an IdP refresh token (DESIGN D4.2).
+- Enforcement nodes poll full snapshots instead of receiving pushes (DESIGN D2.6).

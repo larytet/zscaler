@@ -24,7 +24,7 @@ const (
 	tPong
 
 	MaxFrame      = 64 * 1024
-	chunk         = 16 * 1024
+	chunk         = 60 * 1024
 	InitialWindow = 256 * 1024
 )
 

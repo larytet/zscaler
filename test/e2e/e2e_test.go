@@ -468,3 +468,32 @@ func TestScn004BadPosture(t *testing.T) {
 		return code == 200 && strings.Contains(string(b), "posture-failed") && strings.Contains(string(b), "disk encryption is off")
 	})
 }
+
+// PERF-004: connector idle memory under 30 MB (resident set of the real process).
+func TestPerf004ConnectorIdleMemory(t *testing.T) {
+	s := newStack(t)
+	var pid int
+	for _, p := range s.procs {
+		if strings.HasSuffix(p.Path, "ztx-connector") {
+			pid = p.Process.Pid
+		}
+	}
+	if pid == 0 {
+		t.Fatal("connector process not found")
+	}
+	time.Sleep(10 * time.Second)
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		t.Skip("no /proc on this platform")
+	}
+	var kb int
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, "VmRSS:") {
+			fmt.Sscanf(strings.TrimPrefix(l, "VmRSS:"), "%d", &kb)
+		}
+	}
+	t.Logf("PERF-004 connector RSS after 10 s idle: %.1f MB (target < 30 MB)", float64(kb)/1024)
+	if kb > 30*1024 {
+		t.Errorf("PERF-004 missed: %d kB", kb)
+	}
+}
