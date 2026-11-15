@@ -28,4 +28,4 @@ RB1 proves the core loop: identity and posture, then policy, then a brokered pri
 
 Phases: **RB1** is the current build. **R2** makes it usable by a first design partner (inspection, isolation, installers). **R3** is breadth and scale.
 
-**Newly Must and not yet placed in a phase:** ZPA-028 and ADM-020 (policy simulation), ADM-009, OPS-004, OPS-005 (digest, guided investigation, rule suggestions). They are cheap and should land in R2 with the first design partner. ZIA-022b/c/d, ZIA-031, ZIA-034 (inspection add-ons) ride with TLS inspection in R2.
+**Built in simple form since this was written:** policy simulation (ZPA-028, ADM-020), weekly digest (ADM-009), guided investigation and rule suggestions (OPS-004, OPS-005), insurance evidence export (SMB-004), restricted group (ZPA-072), just-in-time approval (ZPA-027), a basic risk score (ARCH-007). Everything else in the table above is still unbuilt. Inspection add-ons (ZIA-022b/c, ZIA-031, ZIA-034) ride with TLS inspection in R2.
