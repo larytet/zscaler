@@ -1,3 +1,4 @@
 .doc/*/
 bin/
 .doc/PATENT-SEARCH.md
+test/real/last-run.log
