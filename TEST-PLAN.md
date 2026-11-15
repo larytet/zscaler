@@ -1,6 +1,6 @@
 # Test Plan: SMB-ZTX Reference Build 1 (RB1)
 
-**Status:** Draft v0.1, 2026-11-15
+**Status:** Draft v0.2, 2026-11-15
 **Inputs:** [REQUIREMENTS.md](REQUIREMENTS.md) v0.4, [DESIGN.md](DESIGN.md) v1.0
 **Scope:** only what RB1 builds (DESIGN.md D1.2). Requirements outside RB1 are listed as *not tested* in section T6.
 
@@ -8,8 +8,8 @@ Written in parts, one subtask per commit:
 
 | Part | Content | Status |
 |---|---|---|
-| T1 | Strategy, levels, environments, policy and unit tests | this commit |
-| T2 | Data plane, agent and end-to-end tests | pending |
+| T1 | Strategy, levels, environments, policy and unit tests | done |
+| T2 | Data plane, agent and end-to-end tests | done |
 | T3 | Security, resilience, performance tests, traceability, exit criteria | pending |
 
 ---
@@ -139,3 +139,106 @@ Design reference: D2.2, D2.3, D2.7. Requirements: ARCH-005, ARCH-006, ZPA-020..0
 | MUX-004 | `mux` | P1 | `RST` on one stream leaves the others working |
 | MUX-005 | `mux` | P1 | No `PONG` for 45 s closes the session (fake clock) |
 | MUX-006 | `mux` | P1 | Frame parser fuzz: oversize length, truncated frame, unknown type, stream ID reuse, never panics or allocates beyond the cap |
+
+---
+
+## T2. Data plane, agent and end-to-end tests
+
+Design reference: D3, D4, D5.1. Rig: T1.3.
+
+### T2.1 Private access (broker and connector)
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| PA-001 | L4 | P1 | Enrolled user in allowed group, compliant posture, opens segment, sends 1 MB random data to echo app | Data returns identical, decision log has `allow` and rule ID, close record has byte counts | ZPA-020, 022 |
+| PA-002 | L4 | P1 | Same user, not in group | `REJECT policy`, echo app saw **zero** connections, log has `deny` | ZPA-020 |
+| PA-003 | L4 | P1 | Posture says disk not encrypted | Denied, reason names posture rule in admin log, generic message to user | AGT-006 |
+| PA-004 | L4 | P1 | Posture goes from compliant to non-compliant mid-session | Session closed by the next re-evaluation, at most 5 minutes (test uses a shortened interval) | ARCH-006 |
+| PA-005 | L4 | P1 | Agent names a segment that does not exist | `REJECT unknown-app`, no connector contact | ZPA-021 |
+| PA-006 | L4 | P1 | Agent asks for a raw private IP instead of a segment name | Rejected, never forwarded to a connector | ZPA-010 |
+| PA-007 | L3 | P1 | Connector receives `OPEN` for host:port outside its target allow-list (EN sends it directly in a test) | Connector refuses, no dial attempted, event logged | ZPA-023 |
+| PA-008 | L4 | P1 | Port scan from outside against the app host's network: connector host has no inbound port opened by the product | No listening port belongs to the connector (checked with `ss`) | ZPA-010 |
+| PA-009 | L4 | P1 | Two connectors in a group, kill one during idle | New sessions succeed through the other | ZPA-012 |
+| PA-010 | L4 | P1 | Two connectors, kill the one serving a live session | That session closes, a new session works | ZPA-012 |
+| PA-011 | L4 | P1 | No connector connected | `REJECT unavailable` within 5 s, logged | ZPA-012 |
+| PA-012 | L4 | P2 | Connector reconnect after EN restart | Reconnects with backoff (observed delays within 0 to 30 s), becomes usable | ZPA-011 |
+| PA-013 | L4 | P2 | 100 sessions open and closed in a loop 100 times | No stream, goroutine or memory leak (checked by counters and `runtime` stats) | NFR-001 |
+| PA-014 | L4 | P2 | Half-close: client sends FIN and waits for reply data | Reply data still delivered | ZPA-022 |
+| PA-015 | L4 | P2 | Upstream app refuses connection | Agent sees a clear `unreachable` error, log has `connect-failed` | ZPA-022 |
+| PA-016 | L4 | P1 | Segment target changed by admin while connector connected | Connector's allow-list updates within 30 s, old target refused after that | ZPA-023 |
+| PA-017 | L4 | P2 | Multi-port segment, port outside the list | Denied | ZPA-020 |
+
+### T2.2 Web proxy
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| WEB-001 | L4 | P1 | HTTP GET to an allowed local test origin | Content returned unmodified, log has `allow` | ZIA-001 |
+| WEB-002 | L4 | P1 | `CONNECT` to an allowed HTTPS test origin, TLS handshake and request | Works end to end, proxy did not terminate TLS (certificate seen is the origin's) | ZIA-001 |
+| WEB-003 | L4 | P1 | Host in category `malware` | HTTP 403 block page with category and reference ID, origin not contacted | ZIA-010 |
+| WEB-004 | L4 | P1 | Host is a subdomain of a blocked domain | Blocked | ZIA-010 |
+| WEB-005 | L4 | P1 | Look-alike host (`notblocked.com` vs `blocked.com`) | Not blocked | ZIA-010 |
+| WEB-006 | L4 | P1 | `warn` category over plain HTTP | Interstitial page, continue link works once and expires after its lifetime, decision logged as `warn` then `allow` | ZIA-011 |
+| WEB-007 | L4 | P1 | `warn` category over HTTPS `CONNECT` | Behaves as allow, log has `warn-not-displayable` (documented limit) | ZIA-011 |
+| WEB-008 | L4 | P1 | SSRF: request to `127.0.0.1`, `169.254.169.254`, `10.0.0.1`, `[::1]` | Blocked, logged | NFR-023 |
+| WEB-009 | L4 | P1 | SSRF through DNS: test name resolving to a private address, and a name that changes between lookups (rebinding) | Blocked at dial time | NFR-023 |
+| WEB-010 | L4 | P1 | Client without a valid device certificate connects to proxy port | Handshake refused, no proxying | ARCH-005 |
+| WEB-011 | L4 | P2 | Header over 16 KiB, slow-loris style headers, idle connection for 70 s | Rejected or closed per limits | NFR-023 |
+| WEB-012 | L4 | P2 | Log inspection after a request with a query string and a request body | Neither appears in any log or on disk | ARCH-003 |
+| WEB-013 | L4 | P2 | Absolute-URI request, `Proxy-Connection`, chunked bodies, `Expect: 100-continue` | Correct behaviour per RFC 9110 and 9112 | ZIA-001 |
+| WEB-014 | L4 | P2 | 5 000 sequential requests to local origin | No errors, memory stable | NFR-001 |
+
+### T2.3 Agent, enrolment and identity
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| AG-001 | L4 | P1 | Full login against the test IdP, agent receives 12 h cert | Cert subject is `tenant/user/device`, key file mode 0600 and directory 0700 | INT-001 |
+| AG-002 | L4 | P1 | Login with each bad token from IDP-002 | Enrolment fails, no cert issued, failure audited | INT-001 |
+| AG-003 | L4 | P1 | OAuth `state` mismatch and missing PKCE verifier on callback | Rejected | INT-001 |
+| AG-004 | L4 | P1 | Group list in IdP changes, user logs in again | New groups apply to the next decision | INT-002 |
+| AG-005 | L4 | P1 | Admin disables the user | Live sessions close within 5 s, renewal fails, new sessions refused | AGT-004 |
+| AG-006 | L4 | P1 | Admin revokes the device | Same as AG-005 for that device, other devices of the user unaffected | AGT-004 |
+| AG-007 | L4 | P1 | Cert expiry (shortened to 20 s in test), agent renews before expiry with refresh token | Sessions keep working across renewal, no new login prompt | AGT-004 |
+| AG-008 | L4 | P2 | Refresh token invalid | Access ends at cert expiry, agent status says why | AGT-004 |
+| AG-009 | L3 | P1 | Local listeners bind to loopback only | Not reachable from a non-loopback address | NFR-020 |
+| AG-010 | L4 | P2 | PAC file routes `*.ztx` to SOCKS and others to HTTP proxy | Matches spec for a set of URLs | AGT-002 |
+| AG-011 | L4 | P2 | Agent below minimum version announced by the CP | Warns and refuses new sessions | AGT-011 |
+| AG-012 | L4 | P2 | EN list with first entry down | Agent uses the next, and returns to the first when it recovers | NFR-002 |
+| AG-013 | L4 | P2 | Posture report sent every 5 minutes and on change | Cadence observed, EN holds the latest | AGT-006 |
+| AG-014 | L4 | P1 | Connector enrolment: token used twice, token expired, token for another tenant | Only the first valid use succeeds | ZPA-011 |
+
+### T2.4 Control plane and admin API
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| CP-001 | L3 | P1 | Create tenant, set IdP, create segment, apply safe defaults, via API | 2xx, audit entries for each, policy version increments | ADM-001, SMB-001 |
+| CP-002 | L3 | P1 | Save an invalid policy (corpus from VAL tests) | 4xx with `code`, nothing stored, no version bump | D2.7 |
+| CP-003 | L3 | P1 | Concurrent saves with stale `If-Match` | One succeeds, the other gets 412 | D5.1 |
+| CP-004 | L3 | P1 | Tenant A admin token on tenant B objects (every endpoint) | 404 or 403, never data | ARCH-020 |
+| CP-005 | L3 | P1 | Viewer role attempts a write | 403 | ADM-003 |
+| CP-006 | L3 | P1 | Dry run of a draft policy for a sample request | Returns the decision and the rule, stores nothing | ADM-003 |
+| CP-007 | L4 | P1 | Policy change reaches the EN | New decisions use new version within 5 s, decision log shows the version | ARCH-001 |
+| CP-008 | L4 | P1 | Stop the CP while sessions are live and new sessions arrive | Sessions continue, new sessions still decided with cached policy | ARCH-002 |
+| CP-009 | L4 | P1 | CP down for 16 minutes (fake clock) | New sessions denied because revocation data is stale, then recover after the CP returns | D3.6 |
+| CP-010 | L3 | P1 | Policy stream message with a bad CP signature | EN ignores it, keeps the previous version, raises an error metric | D5.5 |
+| CP-011 | L3 | P2 | Pagination and filters on `/decisions` and `/audit` | Correct, stable cursor | ADM-006 |
+| CP-012 | L3 | P1 | Audit log after a series of admin changes | Complete and hash chain valid | ADM-006 |
+
+### T2.5 Alerts and plain-language summaries
+
+| ID | Level | Priority | Case | Expected | Req |
+|---|---|---|---|---|---|
+| ALR-001 | L3 | P2 | 10 denies for the same user and app in 10 minutes | One alert with the message and recommended action in D5.3, not ten | SMB-003 |
+| ALR-002 | L3 | P2 | Connector offline for 2 minutes then back | Alert opens and closes | SMB-003 |
+| ALR-003 | L3 | P2 | Posture goes from pass to fail | Alert names the failed check | SMB-003 |
+| ALR-004 | L3 | P3 | Email delivery to a test SMTP server | Message arrives with the text and a link | OPS-001 |
+
+### T2.6 Full scenarios (L4 acceptance flows)
+
+| ID | Priority | Scenario |
+|---|---|---|
+| SCN-001 | P1 | **Day one.** Create tenant, connect test IdP, create one segment, apply safe defaults, enrol a connector, enrol one user, reach the echo app, and be blocked from a malware-category host. Measure wall-clock time of the scripted flow, and record it against the SMB-001 goal of under 30 minutes (manual steps timed separately in a usability check) |
+| SCN-002 | P1 | **Leaver.** User in active session is disabled by admin. Session ends within 5 s, no new access, audit trail complete |
+| SCN-003 | P1 | **Lost laptop.** Device revoked while a transfer is in flight. Transfer stops, the user's second device still works |
+| SCN-004 | P1 | **Bad posture.** Disk encryption turned off on a test device, access to a posture-protected segment ends, other segments unaffected, alert raised |
+| SCN-005 | P2 | **Site outage.** Both connectors of a site go down and come back, agents show a clear error then resume without re-login |
+| SCN-006 | P2 | **Contractor.** Group with access to one segment only, tries a second segment and a web category that is blocked |
